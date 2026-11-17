@@ -5,6 +5,7 @@ import {
   isSkipReply,
   splitSegments,
   ulid,
+  type AiGlobalSettings,
   type Message,
   type MessageMeta,
   type SenderType,
@@ -60,7 +61,6 @@ type TurnOutcome = 'sent' | 'dispatched' | 'skipped' | 'failed' | 'no_provider'
 const CHAIN_GAP_MIN_MS = 1_000
 const CHAIN_GAP_MAX_MS = 3_000
 /** 本机密钥代跑：等这一轮落库（或明确跳过）再派发下一个角色，单轮最长等这么久 */
-const TURN_SETTLE_POLL_MS = 500
 const TURN_SETTLE_TIMEOUT_MS = 90_000
 
 interface GroupPersonaMember {
@@ -84,6 +84,8 @@ interface GroupTurnInput {
   logId: string
   mood: string
   energy: number
+  /** 主人的全局设置：调用方已经读过，传进来省得每轮再查一次 */
+  settings: AiGlobalSettings
   /** 插话时引用的触发消息，只有第一条分条会挂上 */
   replyToId: string | null
   trigger: { messageId: string; speaker: string; content: string; mustReply: boolean } | null
@@ -270,6 +272,8 @@ function finishLog(
     extra.reason ?? null,
     logId,
   )
+  // 派发出去的轮次在这里收尾；dispatched 只是刚出门，不算收尾
+  if (status !== 'dispatched') notifyTurnSettled(logId)
 }
 
 /** 决策落库后实时推给主人的在线客户端；客户端按 debugMode 决定是否显示 */
@@ -557,22 +561,23 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
   const provider = input.member.provider
   if (!provider) {
     finishLog(db, input.logId, 'skipped', { reason: 'no_provider' })
-    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
+    if (input.settings.debugMode) {
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
+    }
     return 'no_provider'
   }
 
-  // 服务端托管密钥时顺手补齐当天日程；本机密钥由客户端生成时自己注入
-  if (provider.key_location === 'server') {
-    await scheduleService.ensureScheduleQuietly(db, input.member.persona)
-  }
-  const prompt = buildTurnPrompt(db, input)
+  const debugDecisions = input.settings.debugMode
   const model = input.member.persona.model_override ?? provider.model
 
-  // 密钥在本机：服务端只负责派发，在线客户端生成后回传
+  // 密钥在本机：服务端只负责派发，在线客户端生成后回传。
+  // 提示词由客户端自己拼，提前返回，省掉 recentMessages / roster 那一串查询
   if (provider.key_location !== 'server') {
     if (!hub().isOnline(input.member.persona.owner_id)) {
       finishLog(db, input.logId, 'skipped', { reason: 'local_key_offline' })
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'local_key_offline', false)
+      if (debugDecisions) {
+        resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'local_key_offline', false)
+      }
       return 'skipped'
     }
     hub().sendToUser(input.member.persona.owner_id, 'ai.group.due', {
@@ -588,6 +593,10 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
     finishLog(db, input.logId, 'dispatched')
     return 'dispatched'
   }
+
+  // 服务端托管密钥时顺手补齐当天日程；本机密钥由客户端生成时自己注入
+  await scheduleService.ensureScheduleQuietly(db, input.member.persona)
+  const prompt = buildTurnPrompt(db, input)
 
   let reply: string
   try {
@@ -615,30 +624,37 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
   } catch (e) {
     const reason = e instanceof Error ? e.message.slice(0, 160) : 'generate_failed'
     finishLog(db, input.logId, 'failed', { reason })
-    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
+    if (debugDecisions) {
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
+    }
     return 'failed'
   }
 
   if (isSkipReply(reply)) {
     finishLog(db, input.logId, 'skipped', { reason: 'skip' })
-    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
+    if (debugDecisions) {
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
+    }
     return 'skipped'
   }
 
-  const settings = aiRepo.readGlobalSettings(db, input.member.persona.owner_id)
   const segments = splitSegments(reply, {
-    enabled: settings.segmentEnabled,
-    pattern: settings.segmentPattern,
+    enabled: input.settings.segmentEnabled,
+    pattern: input.settings.segmentPattern,
   }).slice(0, 3)
   if (segments.length === 0) {
     finishLog(db, input.logId, 'skipped', { reason: 'empty_reply' })
-    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
+    if (debugDecisions) {
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
+    }
     return 'skipped'
   }
 
   const firstId = appendSegments(db, input, segments, model)
   finishLog(db, input.logId, 'sent', { messageId: firstId })
-  resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
+  if (debugDecisions) {
+    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
+  }
   return 'sent'
 }
 
@@ -662,16 +678,38 @@ function isSettledStatus(status: string | undefined): boolean {
   return !status || status === 'sent' || status === 'skipped' || status === 'failed'
 }
 
-/** 等一个已派发的轮次收尾，超时则放行，避免卡死整条排队链 */
-async function waitForTurnSettled(db: DB, logId: string): Promise<void> {
-  const deadline = now() + TURN_SETTLE_TIMEOUT_MS
-  while (now() < deadline) {
+/** 等待本机密钥轮次收尾的 waiter：客户端回传（appendClientGroupSegment/skipClientGroupDue）收尾时直接叫醒 */
+const turnSettleWaiters = new Map<string, () => void>()
+
+/** 轮次收尾时叫醒等它的人；没人等就什么都不做 */
+function notifyTurnSettled(logId: string): void {
+  const waiter = turnSettleWaiters.get(logId)
+  if (waiter) {
+    turnSettleWaiters.delete(logId)
+    waiter()
+  }
+}
+
+/** 等一个已派发的轮次收尾；90 秒超时兜底放行，避免卡死整条排队链 */
+function waitForTurnSettled(db: DB, logId: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer)
+      turnSettleWaiters.delete(logId)
+      resolve()
+    }
+    const timer = setTimeout(done, TURN_SETTLE_TIMEOUT_MS)
+
+    // 先查一次库：派发到等待之间客户端可能已经回传完了
     const row = db
       .prepare('SELECT status FROM ai_group_log WHERE id = ?')
       .get(logId) as { status: string } | undefined
-    if (isSettledStatus(row?.status)) return
-    await delay(TURN_SETTLE_POLL_MS)
-  }
+    if (isSettledStatus(row?.status)) {
+      done()
+      return
+    }
+    turnSettleWaiters.set(logId, done)
+  })
 }
 
 /** 用户发了一条群消息：规则预筛后决定谁接话，多个角色按序排队接话 */
@@ -690,9 +728,20 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
   const dayKey = localDayKey(ts, TZ_OFFSET_MIN)
   let fired = 0
 
+  // 同一个群里的成员可能属于不同主人；设置按主人缓存，一条消息每个主人只读一次
+  const settingsByOwner = new Map<string, AiGlobalSettings>()
+  const settingsOf = (ownerId: string): AiGlobalSettings => {
+    let settings = settingsByOwner.get(ownerId)
+    if (!settings) {
+      settings = aiRepo.readGlobalSettings(db, ownerId)
+      settingsByOwner.set(ownerId, settings)
+    }
+    return settings
+  }
+
   for (const member of members) {
     const mapped = aiRepo.mapPersona(member.persona)
-    const settings = aiRepo.readGlobalSettings(db, member.persona.owner_id)
+    const settings = settingsOf(member.persona.owner_id)
     if (fired >= settings.groupRepliesPerMessage) break
 
     // 排队接话：已经有人说过话了，轮到下一个角色前先歇口气
@@ -723,9 +772,10 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       random: Math.random,
     })
 
-    // 调试模式的数据源：规则层没放行也记一条，让主人看到「谁为什么没接话」
+    // 调试模式的数据源：规则层没放行也记一条，让主人看到「谁为什么没接话」；
+    // 没开调试模式时这些记录没人看，不写
     if (!decision.fire) {
-      if (settings.groupEnabled) {
+      if (settings.debugMode && settings.groupEnabled) {
         pushDecision(db, member.persona.owner_id, {
           conversationId: trigger.conversationId,
           personaId: member.persona.id,
@@ -753,19 +803,21 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
     })
     if (!reserved) continue
 
-    pushDecision(db, member.persona.owner_id, {
-      conversationId: trigger.conversationId,
-      personaId: member.persona.id,
-      personaName: mapped.name,
-      triggerMessageId: trigger.messageId,
-      kind: 'reply',
-      fired: true,
-      stage: 'rules',
-      reason: decision.reason,
-      energy: reserved.energy,
-      mood: reserved.mood,
-      logId: reserved.logId,
-    })
+    if (settings.debugMode) {
+      pushDecision(db, member.persona.owner_id, {
+        conversationId: trigger.conversationId,
+        personaId: member.persona.id,
+        personaName: mapped.name,
+        triggerMessageId: trigger.messageId,
+        kind: 'reply',
+        fired: true,
+        stage: 'rules',
+        reason: decision.reason,
+        energy: reserved.energy,
+        mood: reserved.mood,
+        logId: reserved.logId,
+      })
+    }
 
     fired += 1
     let outcome: TurnOutcome = 'failed'
@@ -777,6 +829,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
         logId: reserved.logId,
         mood: reserved.mood,
         energy: reserved.energy,
+        settings,
         replyToId: trigger.messageId,
         trigger: {
           messageId: trigger.messageId,
@@ -926,10 +979,21 @@ export async function scanGroupAutonomyOnce(
 
   const spokenGroups = new Set<string>()
 
+  // 候选按主人分组读设置：一个主人可能有好几个角色，设置只读一次
+  const settingsByOwner = new Map<string, AiGlobalSettings>()
+  const settingsOf = (ownerId: string): AiGlobalSettings => {
+    let settings = settingsByOwner.get(ownerId)
+    if (!settings) {
+      settings = aiRepo.readGlobalSettings(db, ownerId)
+      settingsByOwner.set(ownerId, settings)
+    }
+    return settings
+  }
+
   for (const candidate of listAutonomyCandidates(db)) {
     if (spokenGroups.has(candidate.conversation_id)) continue
 
-    const settings = aiRepo.readGlobalSettings(db, candidate.persona.owner_id)
+    const settings = settingsOf(candidate.persona.owner_id)
     if (!settings.groupEnabled) continue
 
     const state = readState(db, candidate.conversation_id, candidate.persona.id)
@@ -946,19 +1010,21 @@ export async function scanGroupAutonomyOnce(
       random,
     })
     if (!decision.fire) {
-      // 规则层没放行也记一条：主人需要看到「谁为什么没主动开口」
-      pushDecision(db, candidate.persona.owner_id, {
-        conversationId: candidate.conversation_id,
-        personaId: candidate.persona.id,
-        personaName: candidate.persona.name,
-        triggerMessageId: null,
-        kind: 'autonomy',
-        fired: false,
-        stage: 'rules',
-        reason: decision.reason,
-        energy: state.energy,
-        mood: state.mood,
-      })
+      // 规则层没放行也记一条：主人需要看到「谁为什么没主动开口」；没开调试模式就不写
+      if (settings.debugMode) {
+        pushDecision(db, candidate.persona.owner_id, {
+          conversationId: candidate.conversation_id,
+          personaId: candidate.persona.id,
+          personaName: candidate.persona.name,
+          triggerMessageId: null,
+          kind: 'autonomy',
+          fired: false,
+          stage: 'rules',
+          reason: decision.reason,
+          energy: state.energy,
+          mood: state.mood,
+        })
+      }
       continue
     }
 
@@ -979,19 +1045,21 @@ export async function scanGroupAutonomyOnce(
     })
     if (!reserved) continue
 
-    pushDecision(db, candidate.persona.owner_id, {
-      conversationId: candidate.conversation_id,
-      personaId: candidate.persona.id,
-      personaName: candidate.persona.name,
-      triggerMessageId: null,
-      kind: 'autonomy',
-      fired: true,
-      stage: 'rules',
-      reason: decision.reason,
-      energy: reserved.energy,
-      mood: reserved.mood,
-      logId: reserved.logId,
-    })
+    if (settings.debugMode) {
+      pushDecision(db, candidate.persona.owner_id, {
+        conversationId: candidate.conversation_id,
+        personaId: candidate.persona.id,
+        personaName: candidate.persona.name,
+        triggerMessageId: null,
+        kind: 'autonomy',
+        fired: true,
+        stage: 'rules',
+        reason: decision.reason,
+        energy: reserved.energy,
+        mood: reserved.mood,
+        logId: reserved.logId,
+      })
+    }
 
     spokenGroups.add(candidate.conversation_id)
     try {
@@ -1002,6 +1070,7 @@ export async function scanGroupAutonomyOnce(
         logId: reserved.logId,
         mood: reserved.mood,
         energy: reserved.energy,
+        settings,
         replyToId: null,
         trigger: null,
       })

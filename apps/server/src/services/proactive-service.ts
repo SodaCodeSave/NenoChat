@@ -5,6 +5,7 @@ import type { DB } from '../db'
 import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
+import { buildMemoryDigest } from './ai-shared'
 import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
 import * as scheduleService from './schedule-service'
 import {
@@ -232,18 +233,6 @@ function recordChanceMiss(
   } catch {
     // 并发下另一个实例已经标记过本轮，忽略
   }
-}
-
-/** 记忆摘要 + 事实，作为「你记得的事」注入主动消息提示词 */
-function buildMemoryDigest(db: DB, conversationId: string): string {
-  const summary = aiRepo.latestSummary(db, conversationId)
-  const facts = aiRepo.listFacts(db, conversationId).map(aiRepo.mapFact)
-  return [
-    summary?.summary ?? '',
-    ...facts.map((fact) => `${fact.key}: ${fact.value}`),
-  ]
-    .filter((line) => line.length > 0)
-    .join('\n')
 }
 
 /** 服务端密钥：直接生成并落库（离线也能发） */

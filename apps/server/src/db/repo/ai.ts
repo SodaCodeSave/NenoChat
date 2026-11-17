@@ -940,3 +940,11 @@ export function finishGeneration(
     id,
   )
 }
+
+/** 延迟投递途中把已送达的分段先写进 message_ids：终态还没到，进程挂了也不丢进度 */
+export function trackGenerationMessages(db: DB, id: string, messageIds: string[]): void {
+  db.prepare('UPDATE ai_generations SET message_ids = ? WHERE id = ?').run(
+    JSON.stringify(messageIds),
+    id,
+  )
+}

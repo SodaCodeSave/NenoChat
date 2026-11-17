@@ -96,14 +96,18 @@ export function findUsageByRef(db: DB, refId: string): AiUsageEntry | null {
   return row ? mapUsage(row) : null
 }
 
-/** 按 refId 批量查：每个 ref 取最近一条 */
-export function findUsageByRefs(db: DB, refIds: string[]): Record<string, AiUsageEntry> {
+/** 按 refId 批量查：每个 ref 取最近一条。ownerId 是硬过滤，只返回主人自己的记录 */
+export function findUsageByRefs(
+  db: DB,
+  ownerId: string,
+  refIds: string[],
+): Record<string, AiUsageEntry> {
   const output: Record<string, AiUsageEntry> = {}
   const statement = db.prepare(
-    'SELECT * FROM ai_usage_log WHERE ref_id = ? ORDER BY created_at DESC LIMIT 1',
+    'SELECT * FROM ai_usage_log WHERE ref_id = ? AND owner_id = ? ORDER BY created_at DESC LIMIT 1',
   )
   for (const refId of refIds) {
-    const row = statement.get(refId) as UsageRow | undefined
+    const row = statement.get(refId, ownerId) as UsageRow | undefined
     if (row) output[refId] = mapUsage(row)
   }
   return output

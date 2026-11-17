@@ -837,13 +837,42 @@ export interface ServerGenerationResult {
   segments: number
 }
 
+/* 同一会话的生成互斥：两个并发请求会各自跑一整轮上游，分段 setTimeout 交错了 seq 就乱了 */
+const generationQueues = new Map<string, Promise<unknown>>()
+
+/**
+ * 后到的排队等前一个落地（成败都算），链排空了就删掉，免得 Map 无限膨胀。
+ * 只在 generateOnServer 顶层入队，任务内部绝不再对同一 key 入队，不会死锁。
+ */
+function enqueueGeneration<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
+  const previous = generationQueues.get(conversationId) ?? Promise.resolve()
+  const run = previous.then(task, task)
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  generationQueues.set(conversationId, settled)
+  void settled.then(() => {
+    if (generationQueues.get(conversationId) === settled) generationQueues.delete(conversationId)
+  })
+  return run
+}
+
 /**
  * 密钥托管在服务端时由服务端调用上游。
  * 开了流式或自动分段时走 SSE 流式上游：逐字推送 ai.delta，
  * 分段切好一段就落库一条，客户端靠 message.created 实时看到每一段；
  * 两个开关都关时保持旧行为，拿到完整回复后延迟逐条落库。
  */
-export async function generateOnServer(
+export function generateOnServer(
+  db: DB,
+  input: ServerGenerationInput,
+): Promise<ServerGenerationResult> {
+  // 同一会话串行生成：请求先排队，前一轮跑完（成败都算）才轮到下一轮
+  return enqueueGeneration(input.conversationId, () => runGenerationOnServer(db, input))
+}
+
+async function runGenerationOnServer(
   db: DB,
   input: ServerGenerationInput,
 ): Promise<ServerGenerationResult> {
@@ -1032,7 +1061,8 @@ export async function generateOnServer(
 
     // 逐条延迟投递，模拟真人打字节奏；第一条立即发出
     let delay = 0
-    const messageIds: string[] = []
+    const deliveredIds: string[] = []
+    let settled = false
     segments.forEach((segment, index) => {
       delay += index === 0 ? 0 : segmentDelay(segment)
       setTimeout(() => {
@@ -1046,26 +1076,45 @@ export async function generateOnServer(
             personaId: persona.id,
             connector: connector.actions,
           })
-          messageIds.push(message.id)
-          if (messageIds.length === segments.length) {
+          deliveredIds.push(message.id)
+          // 每送出一段就把进度落库：终态还没到，进程挂了也不丢已送达的分段
+          aiRepo.trackGenerationMessages(db, generationId, deliveredIds)
+          if (deliveredIds.length === segments.length) {
             aiRepo.finishGeneration(db, generationId, {
               status: 'done',
-              messageIds,
+              messageIds: deliveredIds,
               promptTokens: result.usage?.promptTokens ?? null,
               completionTokens: result.usage?.completionTokens ?? null,
             })
+            // 全部段落都落库了才收「生成中」状态，正文仍靠 message.created 逐条下发
+            emitAiDone(db, {
+              generationId,
+              conversationId: input.conversationId,
+              messageIds: deliveredIds,
+              model,
+            })
           }
         } catch (e) {
-          aiRepo.finishGeneration(db, generationId, {
-            status: 'error',
-            error: e instanceof Error ? e.message : '落库失败',
-          })
+          // 单段落库失败：生成标记失败但保留已送达的分段 id，不让错误覆盖前面的消息
+          if (!settled) {
+            settled = true
+            const message = e instanceof Error ? e.message : '落库失败'
+            aiRepo.finishGeneration(db, generationId, {
+              status: 'error',
+              error: message,
+              messageIds: deliveredIds,
+            })
+            emitAiError(db, {
+              generationId,
+              conversationId: input.conversationId,
+              code: 'UPSTREAM_AI_ERROR',
+              message,
+            })
+          }
         }
       }, delay)
     })
 
-    // 让客户端把「生成中」状态收掉；正文仍靠 message.created 逐条下发
-    emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds: [], model })
     return { generationId, segments: segments.length }
   }
 
@@ -2040,13 +2089,13 @@ export function reportClientUsage(
   })
 }
 
-/** 按 refId 批量查最近一次 usage（消息内联调试条用） */
+/** 按 refId 批量查最近一次 usage（消息内联调试条用），只查自己的记录 */
 export function usageByRefs(
   db: DB,
   userId: string,
   refIds: string[],
 ): Record<string, AiUsageEntry> {
-  return debugRepo.findUsageByRefs(db, refIds.slice(0, 200))
+  return debugRepo.findUsageByRefs(db, userId, refIds.slice(0, 200))
 }
 
 /** 会话最近的群聊决策记录 */

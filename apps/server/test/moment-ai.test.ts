@@ -160,8 +160,11 @@ describe('角色在动态广场的自动互动', () => {
     )
     expect(settings.json.settings.momentsEnabled).toBe(true)
 
-    // random 恒为 0：所有概率判定都通过，pick 也稳定落在第一个候选
-    await scanMomentsOnce(db, silentLog, { random: () => 0 })
+    // random 恒为 0：所有概率判定都通过，pick 也稳定落在第一个候选。
+    // 发动态只在本地 9~23 点的活跃时段进行；把扫描固定在中午，避免深夜跑测试时发帖被时段挡掉
+    const noon = new Date()
+    noon.setHours(12, 0, 0, 0)
+    await scanMomentsOnce(db, silentLog, { random: () => 0, now: noon.getTime() })
 
     const kinds = db
       .prepare('SELECT kind, status FROM ai_moment_actions ORDER BY kind')

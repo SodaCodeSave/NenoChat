@@ -13,6 +13,7 @@ import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as momentRepo from '../db/repo/moment-ai'
 import * as postsRepo from '../db/repo/posts'
+import { buildMemoryDigest } from './ai-shared'
 import { callUpstream, resolveServerApiKey } from './ai-service'
 import { createComment, createPost } from './post-service'
 import {
@@ -63,16 +64,11 @@ function resolveProvider(db: DB, persona: aiRepo.PersonaRow): aiRepo.ProviderRow
   return aiRepo.defaultProvider(db, persona.owner_id)
 }
 
-/** 记忆摘要 + 事实，让角色发动态时记得最近聊过什么 */
-function buildMemoryDigest(db: DB, personaId: string): string {
+/** 记忆摘要放在角色的专属会话里；还没开过会话就当没有记忆 */
+function buildPersonaMemoryDigest(db: DB, personaId: string): string {
   const conversation = conversationsRepo.findByPersonaId(db, personaId)
   if (!conversation) return ''
-
-  const summary = aiRepo.latestSummary(db, conversation.id)
-  const facts = aiRepo.listFacts(db, conversation.id).map(aiRepo.mapFact)
-  return [summary?.summary ?? '', ...facts.map((fact) => `${fact.key}: ${fact.value}`)]
-    .filter((line) => line.length > 0)
-    .join('\n')
+  return buildMemoryDigest(db, conversation.id)
 }
 
 /** 模型偶尔会带上引号或换行，落库前统一收敛成一句话 */
@@ -96,15 +92,12 @@ function broadcastLike(postId: string, personaId: string, likeCount: number): vo
 }
 
 /** 点赞不需要模型，服务端可以直接做，因此不受密钥存放位置影响 */
-function likeSomething(db: DB, ctx: PersonaContext): void {
-  const { userId, persona, settings, dayKey, now, random } = ctx
+function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.AiPostCandidate[]): void {
+  const { userId, persona, settings, dayKey, random } = ctx
   if (settings.momentsLikesPerDay <= 0) return
   if (momentRepo.countToday(db, persona.id, 'like', dayKey) >= settings.momentsLikesPerDay) return
   if (random() >= LIKE_CHANCE) return
 
-  const candidates = postsRepo
-    .listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 24)
-    .filter((post) => post.persona_id !== persona.id)
   const target = pick(candidates, random)
   if (!target) return
 
@@ -272,7 +265,7 @@ async function publishMoment(
         maxTokens: 200,
         messages: buildMomentPostPrompt({
           persona: mapped,
-          memoryDigest: buildMemoryDigest(db, persona.id),
+          memoryDigest: buildPersonaMemoryDigest(db, persona.id),
           recentMoments,
           localTime: formatLocalTime(now, TZ_OFFSET_MIN),
         }),
@@ -310,16 +303,18 @@ async function publishMoment(
 async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): Promise<void> {
   const { persona, settings, dayKey, now, random } = ctx
 
-  likeSomething(db, ctx)
+  // 点赞与评论看的是同一份候选动态，一轮扫描查一次就够
+  const candidates = postsRepo
+    .listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 24)
+    .filter((post) => post.persona_id !== persona.id)
+
+  likeSomething(db, ctx, candidates)
 
   if (
     settings.momentsCommentsPerDay > 0 &&
     momentRepo.countToday(db, persona.id, 'comment', dayKey) < settings.momentsCommentsPerDay &&
     random() < COMMENT_CHANCE
   ) {
-    const candidates = postsRepo
-      .listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 24)
-      .filter((post) => post.persona_id !== persona.id)
     const done = momentRepo.commentedPostIds(
       db,
       persona.id,
@@ -344,13 +339,13 @@ async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): 
   }
 }
 
-/** 跑一轮扫描。导出以便测试与手动触发。 */
+/** 跑一轮扫描。导出以便测试与手动触发；now 可注入，测试用它停在活跃时段里。 */
 export async function scanMomentsOnce(
   db: DB,
   log: FastifyBaseLogger,
-  options: { random?: () => number } = {},
+  options: { random?: () => number; now?: number } = {},
 ): Promise<void> {
-  const now = Date.now()
+  const now = options.now ?? Date.now()
   const dayKey = localDayKey(now, TZ_OFFSET_MIN)
   const random = options.random ?? Math.random
 
