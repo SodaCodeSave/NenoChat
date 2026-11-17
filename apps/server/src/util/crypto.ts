@@ -29,9 +29,16 @@ export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString('base64url')
 }
 
-/** 由 SECRET_KEY 派生的 32 字节密钥，用于加密服务端托管的 AI key */
+/** 由 SECRET_KEY 派生的 32 字节密钥，用于加密服务端托管的 AI key。
+ * scrypt 单次派生要 50-100ms，而每次加解密都会调用；env 在模块加载时
+ * 校验冻结成常量、运行时不可变，派生结果缓存一次即可。 */
+let cachedKey: Buffer | null = null
+
 function deriveKey(): Buffer {
-  return scryptSync(env.SECRET_KEY, 'nenochat-secret-v1', 32)
+  if (!cachedKey) {
+    cachedKey = scryptSync(env.SECRET_KEY, 'nenochat-secret-v1', 32)
+  }
+  return cachedKey
 }
 
 /** AES-256-GCM 加密，输出 base64url(iv).base64url(tag).base64url(cipher) */

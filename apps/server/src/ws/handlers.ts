@@ -162,8 +162,13 @@ export async function handleRequest(
 }
 
 /** 认证成功后统一走这里：先追平，再补发 pending，最后置为 live */
-export function completeHandshake(conn: Conn, db: DB): void {
-  catchUp(conn, db)
+export async function completeHandshake(conn: Conn, db: DB): Promise<void> {
+  try {
+    await catchUp(conn, db)
+  } catch (e) {
+    // 追平失败不能把连接永久卡在 catchingUp（pending 会持续积压），降级放行实时事件
+    console.error('[ws] catchUp 失败', e)
+  }
 
   const pending = [...conn.pending].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
   conn.pending = []

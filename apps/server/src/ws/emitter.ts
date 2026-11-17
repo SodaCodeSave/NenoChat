@@ -10,11 +10,29 @@ import type {
 } from '@nenochat/shared'
 import type { DB } from '../db'
 import * as membersRepo from '../db/repo/members'
+import { now } from '../util/clock'
 import { hub } from './hub'
 
 /** 会话成员的 userId 列表，广播的唯一收件人来源 */
 export function memberIds(db: DB, conversationId: string): string[] {
   return membersRepo.listActive(db, conversationId).map((m) => m.user_id)
+}
+
+/** typing / 已读回执这类高频事件的成员名单短缓存：5 秒内复用一次查询结果 */
+const MEMBER_IDS_TTL_MS = 5000
+const memberIdsCache = new Map<string, { ids: string[]; expiresAt: number }>()
+
+/**
+ * 仅限 typing / 已读回执扇出使用的缓存版本；成员变化最多延迟 5 秒生效。
+ * 消息广播等权限关键路径必须继续走 memberIds 实时查询，不走这里。
+ */
+function memberIdsCached(db: DB, conversationId: string): string[] {
+  const cached = memberIdsCache.get(conversationId)
+  const ts = now()
+  if (cached && cached.expiresAt > ts) return cached.ids
+  const ids = memberIds(db, conversationId)
+  memberIdsCache.set(conversationId, { ids, expiresAt: ts + MEMBER_IDS_TTL_MS })
+  return ids
 }
 
 export function emitMessageCreated(db: DB, message: Message, tempId: string | null): void {
@@ -58,8 +76,9 @@ export function emitTyping(
   db: DB,
   input: { conversationId: string; userId: string; state: 'start' | 'stop'; expiresAt: number },
 ): void {
+  // typing 频率极高，成员名单走短缓存；名单只决定发给谁，不涉及权限判定
   hub().sendToUsers(
-    memberIds(db, input.conversationId),
+    memberIdsCached(db, input.conversationId),
     'typing',
     input,
   )
@@ -75,7 +94,7 @@ export function emitReadReceipt(
     at: number
   },
 ): void {
-  hub().sendToUsers(memberIds(db, input.conversationId), 'receipt.updated', input)
+  hub().sendToUsers(memberIdsCached(db, input.conversationId), 'receipt.updated', input)
 }
 
 export function emitPostCreated(userIds: string[], post: Post): void {

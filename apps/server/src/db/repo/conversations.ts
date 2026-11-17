@@ -172,6 +172,7 @@ export interface ConversationListRow extends ConversationRow {
 /**
  * 我参与的会话列表，带上未读数、成员数与私聊对方资料。
  * 私聊没有会话名，直接用对方的昵称与头像渲染，避免客户端再发一轮请求。
+ * mention_count 从 message_mentions 写穿表计数，不再对 messages.meta 做 LIKE 全扫。
  */
 export function listForUser(db: DB, userId: string): ConversationListRow[] {
   return db
@@ -187,12 +188,13 @@ export function listForUser(db: DB, userId: string): ConversationListRow[] {
                   AND msg.seq > COALESCE(rc.last_read_seq, 0)
                   AND msg.deleted_at IS NULL
                   AND COALESCE(msg.sender_id, '') <> ?) AS unread_count,
-              (SELECT COUNT(*) FROM messages msg
-                WHERE msg.conversation_id = c.id
+              (SELECT COUNT(*) FROM message_mentions mm
+                JOIN messages msg ON msg.id = mm.message_id
+                WHERE mm.conversation_id = c.id
+                  AND mm.user_id = ?
                   AND msg.seq > COALESCE(rc.last_read_seq, 0)
                   AND msg.deleted_at IS NULL
-                  AND msg.meta LIKE '%"mentions":%'
-                  AND msg.meta LIKE ?) AS mention_count,
+                  AND COALESCE(msg.sender_id, '') <> ?) AS mention_count,
               (SELECT p.id FROM conversation_members m3 JOIN users p ON p.id = m3.user_id
                 WHERE m3.conversation_id = c.id AND m3.left_at IS NULL AND m3.user_id <> ?
                 LIMIT 1) AS partner_id,
@@ -208,5 +210,5 @@ export function listForUser(db: DB, userId: string): ConversationListRow[] {
        WHERE c.deleted_at IS NULL
        ORDER BY (cm.pinned_at IS NOT NULL) DESC, cm.pinned_at DESC, c.updated_at DESC`,
     )
-    .all(userId, `%${userId}%`, userId, userId, userId, userId, userId) as ConversationListRow[]
+    .all(userId, userId, userId, userId, userId, userId, userId, userId) as ConversationListRow[]
 }

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { DB } from '../db'
 import { dataDir } from '../db'
@@ -35,26 +36,26 @@ export interface AttachmentGcResult {
   freedBytes: number
 }
 
-/** 递归列出 files 根目录下的所有文件，忽略目录本身 */
-export function listStoredFiles(root: string): StoredFile[] {
+/** 递归列出 files 根目录下的所有文件，忽略目录本身（异步版，不阻塞事件循环） */
+export async function listStoredFiles(root: string): Promise<StoredFile[]> {
   const files: StoredFile[] = []
 
-  function walk(dir: string): void {
+  async function walk(dir: string): Promise<void> {
     let entries: fs.Dirent[]
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
+      entries = await fsp.readdir(dir, { withFileTypes: true })
     } catch {
       return
     }
     for (const entry of entries) {
       const absolute = path.join(dir, entry.name)
       if (entry.isDirectory()) {
-        walk(absolute)
+        await walk(absolute)
         continue
       }
       if (!entry.isFile()) continue
       try {
-        const stat = fs.statSync(absolute)
+        const stat = await fsp.stat(absolute)
         files.push({
           storageKey: path.relative(root, absolute).split(path.sep).join('/'),
           size: stat.size,
@@ -66,7 +67,7 @@ export function listStoredFiles(root: string): StoredFile[] {
     }
   }
 
-  walk(root)
+  await walk(root)
   return files
 }
 
@@ -121,16 +122,36 @@ function addKey(keys: Set<string>, value: unknown): void {
   if (key) keys.add(key)
 }
 
-/** 汇总数据库里所有仍然被引用的 storage_key */
-export function collectReferencedKeys(db: DB): Set<string> {
+/** 每处理这么多行让出一次事件循环；行数多的扫描不再阻塞收发 */
+const DB_SCAN_CHUNK = 500
+
+async function yieldEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+/**
+ * 汇总数据库里所有仍然被引用的 storage_key。
+ * 消息 meta 逐行 JSON.parse 很重，按 rowid 分批取、批间让出事件循环；
+ * 不用 stmt.iterate() 跨 await 复用——迭代器挂着时连接处于 busy，并发请求会报错。
+ */
+export async function collectReferencedKeys(db: DB): Promise<Set<string>> {
   const keys = new Set<string>()
 
   // 消息附件：attachments 行本身没有 message_id，只能以 meta 里的 URL 为准
-  const messages = db
-    .prepare("SELECT meta FROM messages WHERE meta LIKE '%\"attachments\"%'")
-    .all() as Array<{ meta: string | null }>
-  for (const row of messages) {
-    for (const key of extractMessageAttachmentKeys(row.meta)) keys.add(key)
+  const metaStmt = db
+    .prepare(
+      "SELECT rowid AS rid, meta FROM messages WHERE rowid > ? AND meta LIKE '%\"attachments\"%' ORDER BY rowid LIMIT ?",
+    )
+  let cursor = 0
+  for (;;) {
+    const rows = metaStmt.all(cursor, DB_SCAN_CHUNK) as Array<{ rid: number; meta: string | null }>
+    if (rows.length === 0) break
+    cursor = rows[rows.length - 1]!.rid
+    for (const row of rows) {
+      for (const key of extractMessageAttachmentKeys(row.meta)) keys.add(key)
+    }
+    if (rows.length < DB_SCAN_CHUNK) break
+    await yieldEventLoop()
   }
 
   // 头像与角色卡直接存 URL
@@ -168,32 +189,32 @@ export function collectReferencedKeys(db: DB): Set<string> {
   return keys
 }
 
-function removeEmptyDirs(root: string): void {
-  function walk(dir: string): boolean {
+async function removeEmptyDirs(root: string): Promise<void> {
+  async function walk(dir: string): Promise<boolean> {
     let entries: fs.Dirent[]
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
+      entries = await fsp.readdir(dir, { withFileTypes: true })
     } catch {
       return false
     }
     let empty = true
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        if (!walk(path.join(dir, entry.name))) empty = false
+        if (!(await walk(path.join(dir, entry.name)))) empty = false
       } else {
         empty = false
       }
     }
     if (empty && dir !== root) {
       try {
-        fs.rmdirSync(dir)
+        await fsp.rmdir(dir)
       } catch {
         return false
       }
     }
     return empty
   }
-  walk(root)
+  await walk(root)
 }
 
 export interface ReclaimOptions {
@@ -208,28 +229,43 @@ export interface ReclaimOptions {
  * 1. 删除长时间无人引用、且非最近创建的附件行；
  * 2. 删除磁盘上没有任何附件行指向、且超过宽限期的文件。
  */
-export function reclaimAttachments(db: DB, options: ReclaimOptions = {}): AttachmentGcResult {
+export async function reclaimAttachments(
+  db: DB,
+  options: ReclaimOptions = {},
+): Promise<AttachmentGcResult> {
   const root = options.filesRoot ?? path.join(dataDir(), 'files')
   const now = options.now ?? Date.now()
   const minAgeMs = options.minAgeMs ?? ATTACHMENT_GC_DEFAULTS.minAgeMs
 
-  const referenced = collectReferencedKeys(db)
+  const referenced = await collectReferencedKeys(db)
   let removedRows = 0
 
-  // 只删「确实没人引用」的附件行；创建时间在宽限期内的一律保留
-  const rows = db
-    .prepare(
-      'SELECT id, storage_key, thumb_key, created_at FROM attachments WHERE deleted_at IS NULL',
-    )
-    .all() as Array<{ id: string; storage_key: string; thumb_key: string | null; created_at: number }>
-
+  // 只删「确实没人引用」的附件行；创建时间在宽限期内的一律保留。
+  // 附件行可能很多，按 rowid 分批取、批间让出事件循环；删除不影响 keyset 推进。
+  const rowStmt = db.prepare(
+    'SELECT rowid AS rid, id, storage_key, thumb_key, created_at FROM attachments WHERE rowid > ? AND deleted_at IS NULL ORDER BY rowid LIMIT ?',
+  )
   const deleteRow = db.prepare('DELETE FROM attachments WHERE id = ?')
-  for (const row of rows) {
-    if (referenced.has(row.storage_key)) continue
-    if (row.thumb_key && referenced.has(row.thumb_key)) continue
-    if (now - row.created_at < minAgeMs) continue
-    deleteRow.run(row.id)
-    removedRows += 1
+  let cursor = 0
+  for (;;) {
+    const rows = rowStmt.all(cursor, DB_SCAN_CHUNK) as Array<{
+      rid: number
+      id: string
+      storage_key: string
+      thumb_key: string | null
+      created_at: number
+    }>
+    if (rows.length === 0) break
+    cursor = rows[rows.length - 1]!.rid
+    for (const row of rows) {
+      if (referenced.has(row.storage_key)) continue
+      if (row.thumb_key && referenced.has(row.thumb_key)) continue
+      if (now - row.created_at < minAgeMs) continue
+      deleteRow.run(row.id)
+      removedRows += 1
+    }
+    if (rows.length < DB_SCAN_CHUNK) break
+    await yieldEventLoop()
   }
 
   // 删除附件行之后重新收集，共享同一 storage_key 的行仍能保护文件
@@ -243,22 +279,23 @@ export function reclaimAttachments(db: DB, options: ReclaimOptions = {}): Attach
     if (row.thumb_key) surviving.add(row.thumb_key)
   }
 
-  const files = listStoredFiles(root)
+  const files = await listStoredFiles(root)
   const orphans = findOrphanFiles(files, surviving, { now, minAgeMs })
   let removedFiles = 0
   let freedBytes = 0
 
   for (const file of orphans) {
     try {
-      fs.unlinkSync(path.join(root, file.storageKey))
+      await fsp.unlink(path.join(root, file.storageKey))
       removedFiles += 1
       freedBytes += file.size
     } catch {
       /* 已被其它进程删除或权限不足，跳过 */
     }
+    if (removedFiles % DB_SCAN_CHUNK === 0) await yieldEventLoop()
   }
 
-  if (removedFiles > 0) removeEmptyDirs(root)
+  if (removedFiles > 0) await removeEmptyDirs(root)
 
   return {
     scannedFiles: files.length,
@@ -278,16 +315,17 @@ export function startAttachmentReclaimer(
   } = {},
 ): () => void {
   const run = (): void => {
-    try {
-      const result = reclaimAttachments(db, options)
-      if (result.removedRows > 0 || result.removedFiles > 0) {
-        console.log(
-          `[attachment-gc] 回收 ${result.removedRows} 行、${result.removedFiles} 个文件，释放 ${result.freedBytes} 字节`,
-        )
-      }
-    } catch (e) {
-      console.error('[attachment-gc] 回收失败', e)
-    }
+    void reclaimAttachments(db, options)
+      .then((result) => {
+        if (result.removedRows > 0 || result.removedFiles > 0) {
+          console.log(
+            `[attachment-gc] 回收 ${result.removedRows} 行、${result.removedFiles} 个文件，释放 ${result.freedBytes} 字节`,
+          )
+        }
+      })
+      .catch((e) => {
+        console.error('[attachment-gc] 回收失败', e)
+      })
   }
 
   const initial = setTimeout(run, options.initialDelayMs ?? ATTACHMENT_GC_DEFAULTS.initialDelayMs)

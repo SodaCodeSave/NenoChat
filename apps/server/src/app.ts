@@ -29,6 +29,7 @@ import { startProactiveScheduler } from './services/proactive-service'
 import { startMomentsScheduler } from './services/moment-ai-service'
 import { startGroupAiScheduler } from './services/group-ai-service'
 import { startAttachmentReclaimer } from './services/attachment-gc'
+import { startHousekeepingCron } from './services/housekeeping'
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -118,11 +119,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   const stopGroupAi = startGroupAiScheduler(app, getDb())
   // 无人引用的附件与磁盘孤儿文件，定时回收
   const stopAttachmentGc = startAttachmentReclaimer(getDb())
+  // 过期变更日志 / 令牌 / 群决策与卡死生成的例行清理
+  const stopHousekeeping = startHousekeepingCron(getDb())
   app.addHook('onClose', async () => {
     stopProactive()
     stopMoments()
     stopGroupAi()
     stopAttachmentGc()
+    stopHousekeeping()
   })
 
   return app

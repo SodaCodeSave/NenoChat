@@ -191,7 +191,7 @@ describe('附件回收', () => {
     fs.writeFileSync(path.join(filesRoot, youngKey), pngBuffer(9))
 
     const { reclaimAttachments } = await import('../src/services/attachment-gc')
-    const result = reclaimAttachments(db, { filesRoot, now, minAgeMs: DAY })
+    const result = await reclaimAttachments(db, { filesRoot, now, minAgeMs: DAY })
 
     expect(result.removedRows).toBe(1)
     expect(fileExists(avatar.storageKey)).toBe(true)
@@ -208,8 +208,8 @@ describe('附件回收', () => {
 
   it('没有孤儿时重复执行是幂等的', async () => {
     const { reclaimAttachments } = await import('../src/services/attachment-gc')
-    const first = reclaimAttachments(db, { filesRoot })
-    const second = reclaimAttachments(db, { filesRoot })
+    const first = await reclaimAttachments(db, { filesRoot })
+    const second = await reclaimAttachments(db, { filesRoot })
     expect(first.removedRows).toBe(0)
     expect(first.removedFiles).toBe(0)
     expect(second.removedRows).toBe(0)

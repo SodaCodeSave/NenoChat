@@ -57,6 +57,10 @@ function searchMessages(
         .all(userId, ftsQuery(keyword), ...scopeParams, limit) as MessageHitRow[]
     }
 
+    // 短词回退 LIKE 是全内容扫描，只允许限定会话使用；全局短词直接返回空，
+    // 避免小词（如单字）在大库上无索引扫全表
+    if (!conversationId) return []
+
     const like = `%${keyword.replace(/[%_]/g, '')}%`
     const sql = select
       .replace('%FROM%', 'messages m')

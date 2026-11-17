@@ -72,6 +72,13 @@ function mergeReplyMeta(
   return { meta: { ...(meta ?? {}), replyTo: preview }, matched: true }
 }
 
+/** 提及去重：meta.mentions 是用户 id 字符串数组（shared 的 MessageMetaSchema 校验过） */
+function extractMentionIds(meta: MessageMeta | null): string[] {
+  const raw = meta?.mentions
+  if (!raw || raw.length === 0) return []
+  return [...new Set(raw.filter((id) => typeof id === 'string' && id.length > 0))]
+}
+
 /**
  * 发消息的唯一写路径。
  * 权限校验、幂等、seq 分配、会话冗余字段、变更日志全部在同一个事务内完成，
@@ -117,6 +124,12 @@ export function send(db: DB, input: SendMessageInput): SendMessageResult {
     })
 
     conversationsRepo.touchLastMessage(db, input.conversationId, row.id, ts)
+
+    // 提及写穿进 message_mentions，会话列表的 mention_count 才能免扫 meta
+    const mentionIds = extractMentionIds(meta)
+    if (mentionIds.length > 0) {
+      messagesRepo.insertMentions(db, row, mentionIds)
+    }
 
     const message = messagesRepo.mapMessage(row)
     writeChange(db, {
@@ -178,6 +191,11 @@ export function appendSystemMessage(
       createdAt: ts,
     })
     conversationsRepo.touchLastMessage(db, input.conversationId, row.id, ts)
+    // AI/系统消息同样写穿提及，保持 mention_count 统计口径一致
+    const systemMentionIds = extractMentionIds(meta)
+    if (systemMentionIds.length > 0) {
+      messagesRepo.insertMentions(db, row, systemMentionIds)
+    }
     const mapped = messagesRepo.mapMessage(row)
     writeChange(db, {
       entity: 'message',

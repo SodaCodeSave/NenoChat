@@ -8,6 +8,9 @@ import { listChanges } from '../services/sync-service'
 
 export type ConnState = 'unauth' | 'catchingUp' | 'live'
 
+/** catchUp 期间 pending 缓冲上限：超出后丢弃最旧事件，客户端靠 seq 游标走 sync.pull 兜底补拉 */
+export const WS_PENDING_LIMIT = 5000
+
 export interface Conn {
   id: string
   socket: import('ws').WebSocket
@@ -68,6 +71,10 @@ class RealtimeHubImpl implements RealtimeHub {
 
   private deliver(conn: Conn, event: ServerEventName, payload: unknown, seq?: number): void {
     if (conn.state === 'catchingUp') {
+      // 背压上限：追平期间实时事件可能持续涌入，超出即丢最旧的，防止 pending 无限增长
+      if (conn.pending.length >= WS_PENDING_LIMIT) {
+        conn.pending.splice(0, conn.pending.length - WS_PENDING_LIMIT + 1)
+      }
       conn.pending.push({ event, payload, seq })
       return
     }
@@ -138,8 +145,9 @@ export function getHub(db: DB): RealtimeHubImpl {
 /**
  * 追平阶段：分批下发变更直到追平，再按 seq 排序补发期间产生的实时事件。
  * 只有全部应用完成才把连接置为 live，保证客户端不会先看到实时事件、后看到历史。
+ * 批与批之间让出事件循环：大批量追平不再阻塞其它连接的收发（背压）。
  */
-export function catchUp(conn: Conn, db: DB): { cursor: number; hasMore: boolean } {
+export async function catchUp(conn: Conn, db: DB): Promise<{ cursor: number; hasMore: boolean }> {
   if (!conn.userId) return { cursor: conn.cursor, hasMore: false }
 
   let cursor = conn.cursor
@@ -154,6 +162,7 @@ export function catchUp(conn: Conn, db: DB): { cursor: number; hasMore: boolean 
     })
     cursor = batch.nextCursor
     hasMore = batch.hasMore
+    if (hasMore) await new Promise<void>((resolve) => setImmediate(resolve))
   }
 
   conn.cursor = cursor

@@ -214,13 +214,22 @@ describe('全局搜索', () => {
     expect([...seqs].sort((a, b) => a - b)).toEqual(seqs)
   })
 
-  it('短词回退 LIKE 也能命中', async () => {
+  it('短词回退 LIKE 限定会话后也能命中', async () => {
+    const res = await api<{ messages: Array<{ message: { content: string } }> }>(
+      'GET',
+      `/search?q=${encodeURIComponent('牛奶')}&conversationId=${conversationId}`,
+      { token: bob },
+    )
+    expect(res.json.messages.length).toBeGreaterThan(0)
+  })
+
+  it('全局短词不再回退 LIKE，返回空结果', async () => {
     const res = await api<{ messages: Array<{ message: { content: string } }> }>(
       'GET',
       `/search?q=${encodeURIComponent('牛奶')}`,
       { token: bob },
     )
-    expect(res.json.messages.length).toBeGreaterThan(0)
+    expect(res.json.messages).toHaveLength(0)
   })
 
   it('非成员搜不到别人的私聊', async () => {

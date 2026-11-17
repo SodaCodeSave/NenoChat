@@ -140,6 +140,16 @@ export function insert(db: DB, input: InsertMessageInput): MessageRow {
   return row
 }
 
+/** 提及写穿：@ 到谁就写一行，会话列表的 mention_count 从 message_mentions 计数 */
+export function insertMentions(db: DB, row: MessageRow, mentionUserIds: string[]): void {
+  const stmt = db.prepare(
+    'INSERT OR IGNORE INTO message_mentions (conversation_id, message_id, user_id, seq) VALUES (?, ?, ?, ?)',
+  )
+  for (const userId of mentionUserIds) {
+    stmt.run(row.conversation_id, row.id, userId, row.seq)
+  }
+}
+
 /* --------------------------- 全文索引维护 --------------------------- */
 
 /**
