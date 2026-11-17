@@ -10,6 +10,7 @@ import AppearanceSettings from '@/components/settings/sections/AppearanceSetting
 import ServerSettings from '@/components/settings/sections/ServerSettings.vue'
 import AboutSettings from '@/components/settings/sections/AboutSettings.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
+import ConnectorSettings from '@/components/settings/ConnectorSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
 import StorageSettings from '@/components/settings/StorageSettings.vue'
@@ -22,6 +23,7 @@ type SectionKey =
   | 'notification'
   | 'server'
   | 'ai'
+  | 'connectors'
   | 'stickers'
   | 'storage'
   | 'about'
@@ -101,6 +103,15 @@ const sections: SettingsSection[] = [
     ],
   },
   {
+    key: 'connectors',
+    label: '连接器',
+    icon: 'globe',
+    description: '连接第三方数据源，让 AI 能搜索网页、总结视频',
+    anchors: [
+      { id: 'connectors', label: '连接器', keywords: '搜索 b站 bilibili deepseek 第三方 数据源 网页' },
+    ],
+  },
+  {
     key: 'stickers',
     label: '表情包',
     icon: 'smile',
@@ -134,7 +145,7 @@ const sections: SettingsSection[] = [
 
 const groups: { label: string; keys: SectionKey[] }[] = [
   { label: '通用', keys: ['account', 'appearance', 'notification', 'server'] },
-  { label: '智能', keys: ['ai', 'stickers'] },
+  { label: '智能', keys: ['ai', 'connectors', 'stickers'] },
   { label: '系统', keys: ['storage', 'about'] },
 ]
 
@@ -144,6 +155,7 @@ const sectionComponents = {
   notification: NotificationSettings,
   server: ServerSettings,
   ai: AiSettings,
+  connectors: ConnectorSettings,
   stickers: StickerSettings,
   storage: StorageSettings,
   about: AboutSettings,
