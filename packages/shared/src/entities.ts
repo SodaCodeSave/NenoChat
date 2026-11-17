@@ -102,6 +102,8 @@ export interface AttachmentRef {
   height?: number | null
   url: string
   thumbUrl?: string | null
+  /** 识图模型生成的图片描述，仅图片附件且被识图后才有 */
+  description?: string | null
 }
 
 /** AI 相关元信息，仅 AI 会话的消息携带 */
@@ -277,6 +279,8 @@ export interface AiProvider {
   apiKeyMasked?: string | null
   keyLocation: KeyLocation
   model: string
+  /** 识图模型名：把聊天图片转成文字描述，让不支持多模态的主模型也能看懂图片 */
+  visionModel?: string | null
   temperature: number
   maxTokens: number
   isDefault: boolean
@@ -288,10 +292,22 @@ export interface AiProvider {
   updatedAt: number
 }
 
+/** 主动消息的触发方式：idle = 空闲几小时后；chance = 按固定间隔掷概率找话题 */
+export type ProactiveTriggerMode = 'idle' | 'chance'
+
 export interface ProactiveConfig {
   enabled: boolean
+  /** 触发方式，缺省按 idle 处理（兼容旧配置） */
+  triggerMode?: ProactiveTriggerMode
   minIdleHours: number
+  /** 每天最多几条；-1 表示无上限，0 表示不发 */
   maxPerDay: number
+  /** chance 模式：掷骰间隔单位（每分钟 / 每小时） */
+  chanceUnit?: 'minute' | 'hour'
+  /** chance 模式：每次掷骰的触发概率（0-1） */
+  chanceProbability?: number
+  /** chance 模式：两次主动消息之间的最小冷却（分钟） */
+  chanceCooldownMinutes?: number
   windowStart?: string
   windowEnd?: string
 }
@@ -336,7 +352,12 @@ export interface AiPersona {
 export interface AiGlobalSettings {
   proactiveEnabled: boolean
   minIdleHours: number
+  /** 每天最多几条；-1 表示无上限，0 表示不发 */
   maxPerDay: number
+  triggerMode?: ProactiveTriggerMode
+  chanceUnit?: 'minute' | 'hour'
+  chanceProbability?: number
+  chanceCooldownMinutes?: number
   windowStart?: string | null
   windowEnd?: string | null
   /** 动态互动总开关：自动发动态、自动评论、随机点赞都由它控制 */

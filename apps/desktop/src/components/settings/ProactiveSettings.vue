@@ -24,6 +24,10 @@ const DEFAULTS: Editable = {
   proactiveEnabled: false,
   minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
   maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
+  triggerMode: PROACTIVE_DEFAULTS.triggerMode,
+  chanceUnit: PROACTIVE_DEFAULTS.chanceUnit,
+  chanceProbability: PROACTIVE_DEFAULTS.chanceProbability,
+  chanceCooldownMinutes: PROACTIVE_DEFAULTS.chanceCooldownMinutes,
   windowStart: null,
   windowEnd: null,
   momentsEnabled: false,
@@ -88,6 +92,27 @@ function onTime(key: 'windowStart' | 'windowEnd', event: Event): void {
   void commit({ [key]: value || null })
 }
 
+function onSelect(key: 'triggerMode' | 'chanceUnit', event: Event): void {
+  const value = (event.target as HTMLSelectElement).value as 'idle' | 'chance' | 'minute' | 'hour'
+  form[key] = value as never
+  void commit({ [key]: value })
+}
+
+/** 概率用百分比展示，内部存 0-1 */
+function onChanceProbability(event: Event): void {
+  const raw = Number((event.target as HTMLInputElement).value)
+  const percent = Number.isFinite(raw) ? Math.min(100, Math.max(0, raw)) : PROACTIVE_DEFAULTS.chanceProbability * 100
+  form.chanceProbability = Math.round(percent) / 100
+  void commit({ chanceProbability: form.chanceProbability })
+}
+
+/** 勾上无上限后配额存 -1，取消则回到默认值 */
+function toggleUnlimited(event: Event): void {
+  const unlimited = (event.target as HTMLInputElement).checked
+  form.maxPerDay = unlimited ? -1 : PROACTIVE_DEFAULTS.maxPerDay
+  void commit({ maxPerDay: form.maxPerDay })
+}
+
 /** 一键把所有角色切回跟随全局，省得逐个进角色编辑器 */
 async function followAll(): Promise<void> {
   const targets = ai.personas.filter((persona) => persona.proactiveMode !== 'global')
@@ -137,34 +162,96 @@ async function followAll(): Promise<void> {
         <span class="min-w-0">
           <span class="block text-[12.5px] font-medium text-text-strong">允许角色主动找我</span>
           <span class="block text-[11px] leading-relaxed text-muted">
-            空闲够久后由角色先开口；密钥托管在服务端时，你没开客户端也会发。
+            空闲够久后由角色先开口，或按固定间隔随机找话题；密钥托管在服务端时，你没开客户端也会发。
           </span>
         </span>
       </label>
 
       <div v-if="form.proactiveEnabled" class="grid grid-cols-2 gap-2 pl-[22px]">
         <label class="block">
-          <span class="mb-0.5 block text-[11px] text-muted">空闲多久后找（小时）</span>
-          <input
-            :value="form.minIdleHours"
-            type="number"
-            min="0"
-            max="720"
+          <span class="mb-0.5 block text-[11px] text-muted">触发方式</span>
+          <select
+            :value="form.triggerMode ?? 'idle'"
             class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
-            @change="onNumber('minIdleHours', $event, 0, 720)"
-          />
+            @change="onSelect('triggerMode', $event)"
+          >
+            <option value="idle">空闲几小时后找</option>
+            <option value="chance">定时随机找话题</option>
+          </select>
         </label>
         <label class="block">
           <span class="mb-0.5 block text-[11px] text-muted">每个角色每天最多几条</span>
-          <input
-            :value="form.maxPerDay"
-            type="number"
-            min="0"
-            max="20"
-            class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
-            @change="onNumber('maxPerDay', $event, 0, 20)"
-          />
+          <div class="flex items-center gap-1.5">
+            <input
+              :value="form.maxPerDay"
+              type="number"
+              min="0"
+              max="998"
+              :disabled="form.maxPerDay < 0"
+              class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent disabled:opacity-40"
+              @change="onNumber('maxPerDay', $event, 0, 998)"
+            />
+            <label class="flex shrink-0 items-center gap-1 text-[11px] text-muted">
+              <input
+                type="checkbox"
+                :checked="form.maxPerDay < 0"
+                class="h-3 w-3 accent-[var(--color-accent)]"
+                @change="toggleUnlimited"
+              />
+              无上限
+            </label>
+          </div>
         </label>
+
+        <template v-if="(form.triggerMode ?? 'idle') === 'idle'">
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">空闲多久后找（小时）</span>
+            <input
+              :value="form.minIdleHours"
+              type="number"
+              min="0"
+              max="720"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+              @change="onNumber('minIdleHours', $event, 0, 720)"
+            />
+          </label>
+        </template>
+        <template v-else>
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">掷骰间隔</span>
+            <select
+              :value="form.chanceUnit ?? 'hour'"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+              @change="onSelect('chanceUnit', $event)"
+            >
+              <option value="minute">每分钟</option>
+              <option value="hour">每小时</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">每次触发概率（%）</span>
+            <input
+              :value="Math.round((form.chanceProbability ?? 0.1) * 100)"
+              type="number"
+              min="0"
+              max="100"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+              @change="onChanceProbability"
+            />
+          </label>
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">两条之间最少隔（分钟）</span>
+            <input
+              :value="form.chanceCooldownMinutes"
+              type="number"
+              min="0"
+              max="1440"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
+              @change="onNumber('chanceCooldownMinutes', $event, 0, 1440)"
+            />
+          </label>
+        </template>
+
         <label class="block">
           <span class="mb-0.5 block text-[11px] text-muted">免打扰开始（可跨零点）</span>
           <input

@@ -1,4 +1,4 @@
-import type { ProactiveConfig } from '@nenochat/shared'
+import { PROACTIVE_DEFAULTS, type ProactiveConfig } from '@nenochat/shared'
 
 /**
  * 主动消息的「要不要发」判定。
@@ -68,12 +68,16 @@ export interface ProactiveDecisionInput {
   /** 最后一条「用户」消息时间，没有则 null */
   lastUserMessageAt: number | null
   lastProactiveAt: number | null
+  /** 最近一条主动消息日志（含失败/占位）的时间，chance 模式用它控制掷骰间隔 */
+  lastRollAt?: number | null
   sentToday: number
   config: ProactiveConfig
   tzOffsetMinutes: number
   /** 服务商密钥是否托管在服务端（否则服务端无法离线生成） */
   serverCanRun: boolean
   ownerOnline: boolean
+  /** 随机源，测试可注入；chance 模式用它掷概率 */
+  random?: () => number
 }
 
 export interface ProactiveDecision {
@@ -84,27 +88,47 @@ export interface ProactiveDecision {
 
 /**
  * 判定顺序很重要：配额与免打扰优先，避免「已经很累了还在算空闲」。
- * 空闲时长以「最后一条用户消息」为基准 —— 以最后一条消息为基准的话，
+ * idle 模式的空闲时长以「最后一条用户消息」为基准 —— 以最后一条消息为基准的话，
  * AI 自己发的主动消息会把计时清零，从此再也不会主动找你。
  */
 export function decideProactiveFire(input: ProactiveDecisionInput): ProactiveDecision {
   const config = input.config
   const idleBase = input.lastUserMessageAt ?? input.conversationCreatedAt
   const idleHours = Math.max(0, Math.floor((input.now - idleBase) / HOUR_MS))
+  const random = input.random ?? Math.random
 
   if (!config.enabled) return { fire: false, idleHours, reason: 'disabled' }
-  if (config.maxPerDay <= 0) return { fire: false, idleHours, reason: 'quota_zero' }
-  if (input.sentToday >= config.maxPerDay) return { fire: false, idleHours, reason: 'quota_exhausted' }
+  // maxPerDay：0 = 不发，-1 = 无上限
+  if (config.maxPerDay === 0) return { fire: false, idleHours, reason: 'quota_zero' }
+  if (config.maxPerDay > 0 && input.sentToday >= config.maxPerDay) {
+    return { fire: false, idleHours, reason: 'quota_exhausted' }
+  }
   if (inQuietWindow(input.now, config.windowStart, config.windowEnd, input.tzOffsetMinutes)) {
     return { fire: false, idleHours, reason: 'quiet_window' }
   }
+  if (!input.serverCanRun && !input.ownerOnline) {
+    return { fire: false, idleHours, reason: 'local_key_offline' }
+  }
+
+  if ((config.triggerMode ?? 'idle') === 'chance') {
+    const cooldownMs = (config.chanceCooldownMinutes ?? 0) * MINUTE_MS
+    if (input.lastProactiveAt !== null && input.now - input.lastProactiveAt < cooldownMs) {
+      return { fire: false, idleHours, reason: 'cooldown' }
+    }
+    const intervalMs = config.chanceUnit === 'minute' ? MINUTE_MS : HOUR_MS
+    const rollBase = input.lastRollAt ?? input.lastProactiveAt
+    if (rollBase !== null && rollBase !== undefined && input.now - rollBase < intervalMs) {
+      return { fire: false, idleHours, reason: 'chance_interval' }
+    }
+    const probability = config.chanceProbability ?? PROACTIVE_DEFAULTS.chanceProbability
+    const fire = random() < probability
+    return { fire, idleHours, reason: fire ? 'ok' : 'chance_miss' }
+  }
+
   if (input.lastUserMessageAt === null) return { fire: false, idleHours, reason: 'no_user_message' }
   if (idleHours < config.minIdleHours) return { fire: false, idleHours, reason: 'not_idle_enough' }
   if (input.lastProactiveAt !== null && input.now - input.lastProactiveAt < config.minIdleHours * HOUR_MS) {
     return { fire: false, idleHours, reason: 'cooldown' }
-  }
-  if (!input.serverCanRun && !input.ownerOnline) {
-    return { fire: false, idleHours, reason: 'local_key_offline' }
   }
   return { fire: true, idleHours, reason: 'ok' }
 }

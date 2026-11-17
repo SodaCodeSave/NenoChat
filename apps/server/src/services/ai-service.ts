@@ -11,21 +11,28 @@ import {
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type ChatMessage,
   type Conversation,
   type Message,
   type MessageMeta,
   type ReplyStyle,
   type SegmentRule,
   type SenderType,
+  type TurnImage,
 } from '@nenochat/shared'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { DB } from '../db'
+import { dataDir } from '../db'
 import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
+import * as attachmentsRepo from '../db/repo/attachments'
 import * as contactsRepo from '../db/repo/contacts'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
 import * as usersRepo from '../db/repo/users'
+import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
 import { err } from '../util/errors'
 import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
@@ -67,6 +74,7 @@ export interface ProviderPayload {
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
+  visionModel?: string | null
 }
 
 export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
@@ -81,6 +89,7 @@ export function createProvider(db: DB, ownerId: string, input: ProviderPayload):
       apiKeyEnc,
       keyLocation: input.keyLocation,
       model: input.model,
+      visionModel: input.visionModel,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
       isDefault: input.isDefault,
@@ -105,6 +114,7 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
       name: input.name,
       baseUrl: input.baseUrl,
       model: input.model,
+      visionModel: input.visionModel,
       keyLocation: input.keyLocation,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
@@ -780,6 +790,9 @@ export async function generateOnServer(
     | { display_name: string }
     | undefined
 
+  // 图片上下文：配了识图模型就先转文字描述，没配就转成 data URL 直传主模型
+  const imageInput = await prepareImageInput(db, provider, apiKey, userRow, recent)
+
   const chatMessages = buildChatMessages({
     persona: aiRepo.mapPersona(persona),
     facts,
@@ -788,6 +801,8 @@ export async function generateOnServer(
     userInput: input.content,
     userName: owner?.display_name ?? '用户',
     quoted,
+    userImages: imageInput.userImages,
+    includeImages: imageInput.includeImages,
   })
 
   const settings = aiRepo.readGlobalSettings(db, input.userId)
@@ -1026,6 +1041,171 @@ function loadRecentMessages(db: DB, conversationId: string, limit: number): Mess
   return rows.reverse().map(messagesRepo.mapMessage)
 }
 
+/* ------------------------------- 图片识图 ------------------------------- */
+
+const VISION_PROMPT =
+  '请客观描述这张图片的内容：主体、场景、画面里的文字等关键信息。' +
+  '不超过 120 字，这段描述会交给另一个无法看图的 AI 用于回复用户。' +
+  '直接输出描述正文，不要任何开场白或解释。'
+
+/** 把落盘的附件读成 base64 data URL，供识图模型或多模态主模型直接消费 */
+function imageDataUrl(row: attachmentsRepo.AttachmentRow): string | null {
+  try {
+    const buffer = fs.readFileSync(path.join(dataDir(), 'files', row.storage_key))
+    return `data:${row.mime};base64,${buffer.toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
+/** 用识图模型描述一张图片；结果按 sha256 缓存，同图不重复调用上游 */
+async function describeAttachment(
+  db: DB,
+  provider: aiRepo.ProviderRow,
+  apiKey: string,
+  attachmentId: string,
+): Promise<string | null> {
+  if (!provider.vision_model) return null
+  const row = attachmentsRepo.findById(db, attachmentId)
+  if (!row || !IMAGE_MIME.has(row.mime)) return null
+
+  const cached = aiRepo.findImageDescription(db, row.sha256)
+  if (cached) return cached
+
+  const dataUrl = imageDataUrl(row)
+  if (!dataUrl) return null
+
+  const description = (
+    await callUpstream({
+      baseUrl: provider.base_url,
+      apiKey,
+      model: provider.vision_model,
+      temperature: 0.2,
+      maxTokens: 400,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: VISION_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+    })
+  )
+    .trim()
+    .slice(0, 1000)
+  if (!description) return null
+
+  aiRepo.saveImageDescription(db, row.sha256, description, provider.vision_model)
+  return description
+}
+
+/** 把描述写回消息 meta 的 attachments，其他设备通过同步拿到同一份 */
+function writeAttachmentDescriptions(
+  db: DB,
+  message: Message,
+  descriptions: Record<string, string>,
+): void {
+  const attachments = message.meta?.attachments
+  if (!attachments) return
+  let changed = false
+  for (const attachment of attachments) {
+    const description = descriptions[attachment.id]
+    if (description && attachment.description !== description) {
+      attachment.description = description
+      changed = true
+    }
+  }
+  if (!changed) return
+  db.prepare('UPDATE messages SET meta = ? WHERE id = ?').run(JSON.stringify(message.meta), message.id)
+  writeChange(db, {
+    entity: 'message',
+    entityId: message.id,
+    op: 'upsert',
+    conversationId: message.conversationId,
+    payload: message,
+  })
+}
+
+function imageRefsOf(message: Message | null | undefined): string[] {
+  return (message?.meta?.attachments ?? [])
+    .filter((a) => a.kind === 'image')
+    .map((a) => a.id)
+}
+
+/**
+ * 组装本次输入的图片上下文。
+ * 配了识图模型：当前与最近消息里的图片全部补齐描述（缓存命中不再调上游），
+ * 描述以文字注记进入提示词；没配：把本次的图片转成 data URL 直传主模型。
+ */
+async function prepareImageInput(
+  db: DB,
+  provider: aiRepo.ProviderRow,
+  apiKey: string,
+  userRow: messagesRepo.MessageRow | null | undefined,
+  recent: Message[],
+): Promise<{ userImages: TurnImage[]; includeImages: boolean }> {
+  const userMessage = userRow ? messagesRepo.mapMessage(userRow) : null
+
+  if (provider.vision_model) {
+    // 待识图的图片：当前消息优先，其次近窗历史里还没有描述的
+    const pending = new Map<string, { message: Message; attachmentId: string }>()
+    for (const message of [userMessage, ...recent]) {
+      if (!message) continue
+      for (const attachmentId of imageRefsOf(message)) {
+        const ref = message.meta?.attachments?.find((a) => a.id === attachmentId)
+        if (ref?.description?.trim()) continue
+        pending.set(attachmentId, { message, attachmentId })
+      }
+    }
+    for (const { message, attachmentId } of pending.values()) {
+      const description = await describeAttachment(db, provider, apiKey, attachmentId).catch(
+        () => null,
+      )
+      if (!description) continue
+      const ref = message.meta?.attachments?.find((a) => a.id === attachmentId)
+      if (ref) ref.description = description
+      writeAttachmentDescriptions(db, message, { [attachmentId]: description })
+    }
+
+    const userImages = imageRefsOf(userMessage).map((attachmentId) => ({
+      dataUrl: '',
+      description:
+        userMessage?.meta?.attachments?.find((a) => a.id === attachmentId)?.description ?? null,
+    }))
+    return { userImages, includeImages: false }
+  }
+
+  // 没配识图模型：本次图片转 data URL 直传，主模型不支持多模态时会自己报错
+  const userImages: TurnImage[] = []
+  for (const attachmentId of imageRefsOf(userMessage)) {
+    const row = attachmentsRepo.findById(db, attachmentId)
+    const dataUrl = row ? imageDataUrl(row) : null
+    if (dataUrl) userImages.push({ dataUrl, description: null })
+  }
+  return { userImages, includeImages: true }
+}
+
+/** 本机识图完成后由客户端回写：落缓存 + 更新消息 meta */
+export function saveImageDescriptionToMessage(
+  db: DB,
+  userId: string,
+  input: { messageId: string; attachmentId: string; description: string; model?: string | null },
+): void {
+  const row = messagesRepo.findById(db, input.messageId)
+  if (!row || row.deleted_at) throw err.notFound('消息不存在')
+  if (row.sender_id !== userId) throw err.forbidden('只能补自己发出去的图片描述')
+
+  const attachment = attachmentsRepo.findById(db, input.attachmentId)
+  if (!attachment) throw err.notFound('附件不存在')
+
+  aiRepo.saveImageDescription(db, attachment.sha256, input.description, input.model ?? null)
+
+  const message = messagesRepo.mapMessage(row)
+  writeAttachmentDescriptions(db, message, { [input.attachmentId]: input.description })
+}
+
 /** 非流式调用一次 OpenAI 兼容端点。主动消息等场景也复用它。 */
 export async function callUpstream(input: {
   baseUrl: string
@@ -1033,7 +1213,7 @@ export async function callUpstream(input: {
   model: string
   temperature: number
   maxTokens: number
-  messages: Array<{ role: string; content: string }>
+  messages: ChatMessage[]
 }): Promise<string> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
@@ -1086,7 +1266,7 @@ export async function callUpstreamStream(input: {
   model: string
   temperature: number
   maxTokens: number
-  messages: Array<{ role: string; content: string }>
+  messages: ChatMessage[]
   onDelta: (delta: string) => void
 }): Promise<string> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')

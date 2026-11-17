@@ -76,6 +76,16 @@ afterAll(async () => {
 
 const CONFIG: ProactiveConfig = { enabled: true, minIdleHours: 6, maxPerDay: 2 }
 
+const CHANCE_CONFIG: ProactiveConfig = {
+  enabled: true,
+  minIdleHours: 6,
+  maxPerDay: 2,
+  triggerMode: 'chance',
+  chanceUnit: 'hour',
+  chanceProbability: 0.5,
+  chanceCooldownMinutes: 60,
+}
+
 function baseInput(overrides: Partial<Parameters<typeof decideProactiveFire>[0]> = {}) {
   const now = Date.UTC(2026, 10, 16, 4, 0) // +08:00 → 12:00
   return {
@@ -186,6 +196,104 @@ describe('decideProactiveFire', () => {
   })
 })
 
+describe('decideProactiveFire 概率模式', () => {
+  it('间隔到了且掷中就发，从未聊过也允许', () => {
+    const decision = decideProactiveFire(
+      baseInput({
+        config: CHANCE_CONFIG,
+        lastUserMessageAt: null,
+        lastRollAt: null,
+        random: () => 0.1,
+      }),
+    )
+    expect(decision.fire).toBe(true)
+    expect(decision.reason).toBe('ok')
+  })
+
+  it('掷骰间隔内不重掷', () => {
+    const now = baseInput().now
+    const decision = decideProactiveFire(
+      baseInput({
+        config: CHANCE_CONFIG,
+        lastUserMessageAt: null,
+        lastRollAt: now - 30 * 60_000,
+        random: () => 0.1,
+      }),
+    )
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('chance_interval')
+  })
+
+  it('掷骰未中不发', () => {
+    const now = baseInput().now
+    const decision = decideProactiveFire(
+      baseInput({
+        config: CHANCE_CONFIG,
+        lastUserMessageAt: null,
+        lastRollAt: now - 2 * 3_600_000,
+        random: () => 0.9,
+      }),
+    )
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('chance_miss')
+  })
+
+  it('冷却期内不发', () => {
+    const now = baseInput().now
+    const decision = decideProactiveFire(
+      baseInput({
+        config: CHANCE_CONFIG,
+        lastUserMessageAt: null,
+        lastProactiveAt: now - 10 * 60_000,
+        lastRollAt: now - 10 * 60_000,
+        random: () => 0.1,
+      }),
+    )
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('cooldown')
+  })
+
+  it('每分钟掷骰时一分钟前掷过就算间隔已到', () => {
+    const now = baseInput().now
+    const decision = decideProactiveFire(
+      baseInput({
+        config: { ...CHANCE_CONFIG, chanceUnit: 'minute' },
+        lastUserMessageAt: null,
+        lastRollAt: now - 90_000,
+        random: () => 0.1,
+      }),
+    )
+    expect(decision.fire).toBe(true)
+  })
+
+  it('免打扰与配额优先于概率', () => {
+    const now = Date.UTC(2026, 10, 16, 16, 0) // 东八区 00:00
+    const decision = decideProactiveFire(
+      baseInput({
+        now,
+        config: { ...CHANCE_CONFIG, windowStart: '23:00', windowEnd: '08:00' },
+        lastUserMessageAt: null,
+        random: () => 0.1,
+      }),
+    )
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('quiet_window')
+  })
+})
+
+describe('decideProactiveFire 无上限配额', () => {
+  it('maxPerDay = -1 时发了很多条也继续发', () => {
+    const decision = decideProactiveFire(baseInput({ config: { ...CONFIG, maxPerDay: -1 }, sentToday: 500 }))
+    expect(decision.fire).toBe(true)
+  })
+
+  it('maxPerDay = 0 仍然不发', () => {
+    const decision = decideProactiveFire(baseInput({ config: { ...CONFIG, maxPerDay: 0 } }))
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('quota_zero')
+  })
+})
+
 describe('reserveSlot 配额占位', () => {
   it('同日同会话按 maxPerDay 顺序占位，用尽后返回 null', async () => {
     const { getDb } = await import('../src/db')
@@ -211,5 +319,66 @@ describe('reserveSlot 配额占位', () => {
     expect(reserveSlot(db, args)).toBe(0)
     expect(reserveSlot(db, args)).toBe(1)
     expect(reserveSlot(db, args)).toBeNull()
+  })
+
+  it('maxPerDay 为负数时无上限，slot 一直递增', async () => {
+    const { getDb } = await import('../src/db')
+    const { reserveSlot } = await import('../src/services/proactive-service')
+    const db = getDb() as unknown as import('better-sqlite3').Database
+
+    const userId = (
+      db.prepare('SELECT id FROM users WHERE username = ?').get('proactive_user') as { id: string }
+    ).id
+    const personaId = (
+      db.prepare('SELECT id FROM ai_personas ORDER BY created_at LIMIT 1').get() as { id: string }
+    ).id
+
+    const args = {
+      conversationId,
+      userId,
+      personaId,
+      dayKey: '2026-11-17',
+      maxPerDay: -1,
+      now: Date.now(),
+    }
+
+    for (let i = 0; i < 5; i++) {
+      expect(reserveSlot(db, args)).toBe(i)
+    }
+  })
+
+  it('chance 掷骰标记复用 slot，不影响真实消息占位', async () => {
+    const { getDb } = await import('../src/db')
+    const { reserveSlot } = await import('../src/services/proactive-service')
+    const db = getDb() as unknown as import('better-sqlite3').Database
+
+    const userId = (
+      db.prepare('SELECT id FROM users WHERE username = ?').get('proactive_user') as { id: string }
+    ).id
+    const personaId = (
+      db.prepare('SELECT id FROM ai_personas ORDER BY created_at LIMIT 1').get() as { id: string }
+    ).id
+
+    const dayKey = '2026-11-18'
+    // 先留两条掷骰未中的标记（slot 0）
+    for (let i = 0; i < 2; i++) {
+      db.prepare(
+        `INSERT INTO ai_proactive_log
+           (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
+         VALUES (?, ?, ?, ?, ?, 0, ?, 'skipped', NULL, 'chance_miss')`,
+      ).run(`miss-${dayKey}-${i}`, conversationId, userId, personaId, dayKey, Date.now())
+    }
+
+    // 真实消息仍然从 slot 0 开始占位，不受标记影响
+    const reserveArgs = {
+      conversationId,
+      userId,
+      personaId,
+      dayKey,
+      maxPerDay: 1,
+      now: Date.now(),
+    }
+    expect(reserveSlot(db, reserveArgs)).toBe(0)
+    expect(reserveSlot(db, reserveArgs)).toBeNull()
   })
 })

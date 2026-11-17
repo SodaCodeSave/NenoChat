@@ -5,6 +5,7 @@ import AvatarUploader from './AvatarUploader.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { aiApi, type PersonaInput } from '@/api/ai'
 import { uploadFile } from '@/api/files'
+import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
 import { useAiStore } from '@/stores/ai'
 
 const props = defineProps<{
@@ -21,6 +22,16 @@ const ai = useAiStore()
 
 const MAX_INTERESTS = 20
 const MAX_CARD_BYTES = 1024 * 1024
+
+const EMPTY_PROACTIVE = {
+  enabled: false,
+  triggerMode: PROACTIVE_DEFAULTS.triggerMode as 'idle' | 'chance',
+  minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
+  maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
+  chanceUnit: PROACTIVE_DEFAULTS.chanceUnit as 'minute' | 'hour',
+  chanceProbability: PROACTIVE_DEFAULTS.chanceProbability,
+  chanceCooldownMinutes: PROACTIVE_DEFAULTS.chanceCooldownMinutes,
+}
 
 const form = ref<PersonaInput>(emptyForm())
 const saving = ref(false)
@@ -47,7 +58,7 @@ function emptyForm(): PersonaInput {
     replyStyle: 'chatty',
     greeting: null,
     proactiveMode: 'global',
-    proactive: { enabled: false, minIdleHours: 6, maxPerDay: 1 },
+    proactive: { ...EMPTY_PROACTIVE },
   }
 }
 
@@ -69,8 +80,13 @@ function fromPersona(persona: AiPersona | null | undefined): PersonaInput {
     proactiveMode: persona.proactiveMode ?? 'global',
     proactive: {
       enabled: persona.proactive.enabled,
+      triggerMode: persona.proactive.triggerMode ?? PROACTIVE_DEFAULTS.triggerMode,
       minIdleHours: persona.proactive.minIdleHours,
       maxPerDay: persona.proactive.maxPerDay,
+      chanceUnit: persona.proactive.chanceUnit ?? PROACTIVE_DEFAULTS.chanceUnit,
+      chanceProbability: persona.proactive.chanceProbability ?? PROACTIVE_DEFAULTS.chanceProbability,
+      chanceCooldownMinutes:
+        persona.proactive.chanceCooldownMinutes ?? PROACTIVE_DEFAULTS.chanceCooldownMinutes,
       windowStart: persona.proactive.windowStart,
       windowEnd: persona.proactive.windowEnd,
     },
@@ -88,7 +104,8 @@ watch(
 )
 
 const interests = computed(() => form.value.interests ?? [])
-const proactive = computed(() => form.value.proactive ?? { enabled: false, minIdleHours: 6, maxPerDay: 1 })
+const proactive = computed(() => form.value.proactive ?? { ...EMPTY_PROACTIVE })
+const chanceMode = computed(() => (proactive.value.triggerMode ?? 'idle') === 'chance')
 const followsGlobal = computed(() => (form.value.proactiveMode ?? 'global') === 'global')
 
 /** 跟随全局时把总设置摊开给用户看，免得「为什么它不发」 */
@@ -96,9 +113,12 @@ const globalSummary = computed(() => {
   const settings = ai.globalSettings
   if (!settings) return '还没读到全局设置'
   if (!settings.proactiveEnabled && !settings.momentsEnabled) return '全局关掉了自动互动，这个角色不会主动发消息或发动态'
+  const quota = settings.maxPerDay < 0 ? '不限条数' : `每天最多 ${settings.maxPerDay} 条`
   const parts = [
     settings.proactiveEnabled
-      ? `空闲 ${settings.minIdleHours} 小时后主动找我，每天最多 ${settings.maxPerDay} 条`
+      ? settings.triggerMode === 'chance'
+        ? `每${settings.chanceUnit === 'minute' ? '分钟' : '小时'}按概率主动找我，${quota}`
+        : `空闲 ${settings.minIdleHours} 小时后主动找我，${quota}`
       : '不主动找我',
     settings.momentsEnabled
       ? `动态：每天 ${settings.momentsPostsPerDay} 条动态 / ${settings.momentsCommentsPerDay} 条评论 / ${settings.momentsLikesPerDay} 个赞`
@@ -397,42 +417,158 @@ async function save(): Promise<void> {
 
         <div v-if="proactive.enabled" class="mt-2 grid grid-cols-2 gap-2">
           <label class="block">
-            <span class="mb-0.5 block text-[11px] text-muted">空闲多久后找（小时）</span>
-            <input
-              v-model.number="proactive.minIdleHours"
-              type="number"
-              min="0"
-              max="720"
+            <span class="mb-0.5 block text-[11px] text-muted">触发方式</span>
+            <select
+              :value="proactive.triggerMode ?? 'idle'"
               class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-            />
+              @change="
+                form.proactive = {
+                  ...proactive,
+                  triggerMode: ($event.target as HTMLSelectElement).value as 'idle' | 'chance',
+                }
+              "
+            >
+              <option value="idle">空闲几小时后找</option>
+              <option value="chance">定时随机找话题</option>
+            </select>
           </label>
           <label class="block">
             <span class="mb-0.5 block text-[11px] text-muted">每天最多几条</span>
-            <input
-              v-model.number="proactive.maxPerDay"
-              type="number"
-              min="0"
-              max="20"
-              class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-            />
+            <div class="flex items-center gap-1.5">
+              <input
+                :value="proactive.maxPerDay"
+                type="number"
+                min="0"
+                max="998"
+                :disabled="proactive.maxPerDay < 0"
+                class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface px-2 text-[12px] outline-none disabled:opacity-40"
+                @change="
+                  form.proactive = {
+                    ...proactive,
+                    maxPerDay: Math.max(0, Math.min(998, Math.round(Number(($event.target as HTMLInputElement).value)))),
+                  }
+                "
+              />
+              <label class="flex shrink-0 items-center gap-1 text-[11px] text-muted">
+                <input
+                  type="checkbox"
+                  :checked="proactive.maxPerDay < 0"
+                  class="h-3 w-3 accent-[var(--color-accent)]"
+                  @change="
+                    form.proactive = {
+                      ...proactive,
+                      maxPerDay: ($event.target as HTMLInputElement).checked ? -1 : 1,
+                    }
+                  "
+                />
+                无上限
+              </label>
+            </div>
           </label>
+
+          <template v-if="(proactive.triggerMode ?? 'idle') === 'idle'">
+            <label class="block">
+              <span class="mb-0.5 block text-[11px] text-muted">空闲多久后找（小时）</span>
+              <input
+                :value="proactive.minIdleHours"
+                type="number"
+                min="0"
+                max="720"
+                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+                @change="
+                  form.proactive = {
+                    ...proactive,
+                    minIdleHours: Math.max(0, Math.min(720, Math.round(Number(($event.target as HTMLInputElement).value)))),
+                  }
+                "
+              />
+            </label>
+          </template>
+          <template v-else>
+            <label class="block">
+              <span class="mb-0.5 block text-[11px] text-muted">掷骰间隔</span>
+              <select
+                :value="proactive.chanceUnit ?? 'hour'"
+                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+                @change="
+                  form.proactive = {
+                    ...proactive,
+                    chanceUnit: ($event.target as HTMLSelectElement).value as 'minute' | 'hour',
+                  }
+                "
+              >
+                <option value="minute">每分钟</option>
+                <option value="hour">每小时</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="mb-0.5 block text-[11px] text-muted">每次触发概率（%）</span>
+              <input
+                :value="Math.round((proactive.chanceProbability ?? 0.1) * 100)"
+                type="number"
+                min="0"
+                max="100"
+                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+                @change="
+                  form.proactive = {
+                    ...proactive,
+                    chanceProbability:
+                      Math.round(Math.max(0, Math.min(100, Number(($event.target as HTMLInputElement).value) || 0))) / 100,
+                  }
+                "
+              />
+            </label>
+            <label class="block">
+              <span class="mb-0.5 block text-[11px] text-muted">两条之间最少隔（分钟）</span>
+              <input
+                :value="proactive.chanceCooldownMinutes"
+                type="number"
+                min="0"
+                max="1440"
+                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+                @change="
+                  form.proactive = {
+                    ...proactive,
+                    chanceCooldownMinutes: Math.max(0, Math.min(1440, Math.round(Number(($event.target as HTMLInputElement).value)))),
+                  }
+                "
+              />
+            </label>
+          </template>
+
           <label class="block">
             <span class="mb-0.5 block text-[11px] text-muted">免打扰开始（可跨零点）</span>
             <input
-              v-model="proactive.windowStart"
+              :value="proactive.windowStart"
               type="time"
               class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+              @change="
+                form.proactive = {
+                  ...proactive,
+                  windowStart: ($event.target as HTMLInputElement).value,
+                }
+              "
             />
           </label>
           <label class="block">
             <span class="mb-0.5 block text-[11px] text-muted">免打扰结束</span>
             <input
-              v-model="proactive.windowEnd"
+              :value="proactive.windowEnd"
               type="time"
               class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+              @change="
+                form.proactive = {
+                  ...proactive,
+                  windowEnd: ($event.target as HTMLInputElement).value,
+                }
+              "
             />
           </label>
         </div>
+
+        <p v-if="proactive.enabled && chanceMode" class="mt-2 text-[11px] leading-relaxed text-muted">
+          每个间隔掷一次骰子，中了就主动找话题；实际频次还受每日上限与免打扰约束。
+        </p>
 
         <p class="mt-2 text-[11px] leading-relaxed text-muted">
           密钥存在服务端时，即使你没开客户端也会按兴趣与角色卡主动发消息；密钥存在本机时，仅在客户端在线时触发。

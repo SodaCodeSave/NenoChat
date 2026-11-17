@@ -180,6 +180,7 @@ const turnBusy = ref(false)
 async function handleSend(
   content: string,
   mentions?: { userIds: string[]; mentionAll: boolean },
+  attachments?: AttachmentRef[],
 ): Promise<void> {
   const id = conversationId.value
   if (editing.value) {
@@ -195,7 +196,7 @@ async function handleSend(
     replyTo.value = null
     turnBusy.value = true
     try {
-      await ai.sendTurn(id, content, target)
+      await ai.sendTurn(id, content, target, attachments ?? [])
     } catch (e) {
       aiError.value = e instanceof Error ? e.message : 'AI 生成失败'
     } finally {

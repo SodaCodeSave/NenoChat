@@ -44,6 +44,8 @@ interface CandidateRow {
   conversation_created_at: number
   last_user_message_at: number | null
   last_proactive_at: number | null
+  /** 最近一条日志（含失败/占位）的时间，chance 模式用它控制掷骰间隔 */
+  last_log_at: number | null
   sent_today: number
   key_location: string | null
 }
@@ -59,8 +61,12 @@ function parsePersonaConfig(row: CandidateRow): ProactiveConfig {
     const parsed = JSON.parse(row.proactive_config) as Partial<ProactiveConfig>
     return {
       enabled: parsed.enabled ?? fallback.enabled,
+      triggerMode: parsed.triggerMode,
       minIdleHours: parsed.minIdleHours ?? fallback.minIdleHours,
       maxPerDay: parsed.maxPerDay ?? fallback.maxPerDay,
+      chanceUnit: parsed.chanceUnit,
+      chanceProbability: parsed.chanceProbability,
+      chanceCooldownMinutes: parsed.chanceCooldownMinutes,
       windowStart: parsed.windowStart,
       windowEnd: parsed.windowEnd,
     }
@@ -80,8 +86,12 @@ function parseGlobalConfig(row: CandidateRow): ProactiveConfig {
     const parsed = JSON.parse(row.global_config) as Partial<ProactiveConfig>
     return {
       enabled: fallback.enabled,
+      triggerMode: parsed.triggerMode,
       minIdleHours: parsed.minIdleHours ?? fallback.minIdleHours,
       maxPerDay: parsed.maxPerDay ?? fallback.maxPerDay,
+      chanceUnit: parsed.chanceUnit,
+      chanceProbability: parsed.chanceProbability,
+      chanceCooldownMinutes: parsed.chanceCooldownMinutes,
       windowStart: parsed.windowStart,
       windowEnd: parsed.windowEnd,
     }
@@ -115,6 +125,8 @@ function listCandidates(db: DB, dayKey: string): CandidateRow[] {
               (SELECT MAX(l.fired_at) FROM ai_proactive_log l
                 WHERE l.conversation_id = c.id
                   AND l.status IN ('sent', 'dispatched'))                 AS last_proactive_at,
+              (SELECT MAX(l.fired_at) FROM ai_proactive_log l
+                WHERE l.conversation_id = c.id)                            AS last_log_at,
               (SELECT COUNT(*) FROM ai_proactive_log l2
                 WHERE l2.conversation_id = c.id
                   AND l2.day_key = ?
@@ -160,7 +172,8 @@ export function reserveSlot(
       )
       .get(input.conversationId, input.dayKey) as { c: number }
 
-    if (used.c >= input.maxPerDay) return null
+    // maxPerDay < 0 表示无上限，只受唯一索引约束
+    if (input.maxPerDay >= 0 && used.c >= input.maxPerDay) return null
     const slot = used.c
 
     try {
@@ -199,6 +212,25 @@ function finishSlot(
     input.dayKey,
     input.slot,
   )
+}
+
+/**
+ * chance 模式掷骰未中：留一条 skipped 标记推进掷骰间隔，不占每日配额。
+ * 标记只保留两天，太旧的在扫描时清掉。
+ */
+function recordChanceMiss(
+  db: DB,
+  input: { conversationId: string; userId: string; personaId: string; dayKey: string; now: number },
+): void {
+  try {
+    db.prepare(
+      `INSERT INTO ai_proactive_log
+         (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
+       VALUES (?, ?, ?, ?, ?, 0, ?, 'skipped', NULL, 'chance_miss')`,
+    ).run(ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, input.now)
+  } catch {
+    // 并发下另一个实例已经标记过本轮，忽略
+  }
 }
 
 /** 记忆摘要 + 事实，作为「你记得的事」注入主动消息提示词 */
@@ -375,6 +407,12 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
      WHERE status = 'pending' AND fired_at < ?`,
   ).run(now - STALE_PENDING_MS)
 
+  // 掷骰标记只用来推进间隔，两天前的可以直接清掉
+  db.prepare(
+    `DELETE FROM ai_proactive_log
+     WHERE status = 'skipped' AND reason = 'chance_miss' AND fired_at < ?`,
+  ).run(now - 2 * 24 * 60 * 60_000)
+
   const candidates = listCandidates(db, dayKey)
   if (candidates.length === 0) return
 
@@ -391,6 +429,7 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
       conversationCreatedAt: candidate.conversation_created_at,
       lastUserMessageAt: candidate.last_user_message_at,
       lastProactiveAt: candidate.last_proactive_at,
+      lastRollAt: candidate.last_log_at,
       sentToday: candidate.sent_today,
       config,
       tzOffsetMinutes: TZ_OFFSET_MIN,
@@ -398,7 +437,19 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
       ownerOnline,
     })
 
-    if (!decision.fire) continue
+    if (!decision.fire) {
+      // 掷骰未中也要留痕，否则下一轮扫描会立刻重掷，概率语义就变了
+      if (decision.reason === 'chance_miss') {
+        recordChanceMiss(db, {
+          conversationId: candidate.conversation_id,
+          userId: candidate.owner_id,
+          personaId: candidate.persona_id,
+          dayKey,
+          now,
+        })
+      }
+      continue
+    }
 
     try {
       if (serverCanRun) {
@@ -426,7 +477,7 @@ export function startProactiveScheduler(app: FastifyInstance, db: DB): () => voi
     })
   })
 
-  // 刚启动时不必等下一个 5 分钟窗口
+  // 刚启动时不必等下一个扫描窗口
   const kickoff = setTimeout(() => {
     void scanOnce(db, app.log).catch(() => undefined)
   }, KICKOFF_DELAY_MS)
@@ -458,6 +509,7 @@ export function evaluateCandidate(
     conversationCreatedAt: row.conversation_created_at,
     lastUserMessageAt: row.last_user_message_at,
     lastProactiveAt: row.last_proactive_at,
+    lastRollAt: row.last_log_at,
     sentToday: row.sent_today,
     config,
     tzOffsetMinutes: TZ_OFFSET_MIN,

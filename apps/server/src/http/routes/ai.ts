@@ -4,6 +4,7 @@ import {
   AppendAiSegmentSchema,
   AppendGroupSegmentSchema,
   GroupAiSkipSchema,
+  ImageDescriptionSchema,
   MemoryWriteSchema,
   OpenAiConversationSchema,
   PersonaPatchSchema,
@@ -142,6 +143,14 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       providerId: input.providerId,
     })
     return { generation: result }
+  })
+
+  /** 本机识图完成后把图片描述交回服务端：落缓存并写进消息 meta */
+  app.post('/ai/image-descriptions', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(ImageDescriptionSchema, request.body)
+    aiService.saveImageDescriptionToMessage(db, userId, input)
+    return { ok: true }
   })
 
   /* ------------------------------ 群聊 AI ------------------------------ */

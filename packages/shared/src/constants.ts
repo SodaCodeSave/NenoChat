@@ -59,7 +59,16 @@ export const MEMORY_COMPACT = {
 export const PROACTIVE_DEFAULTS = {
   minIdleHours: 6,
   maxPerDay: 1,
-  scanIntervalCron: '*/5 * * * *',
+  /** 触发方式：idle = 空闲几小时后；chance = 按固定间隔掷概率找话题 */
+  triggerMode: 'idle',
+  /** chance 模式的掷骰间隔单位 */
+  chanceUnit: 'hour',
+  /** chance 模式每次掷骰的触发概率 */
+  chanceProbability: 0.1,
+  /** chance 模式两次主动消息之间的最小冷却（分钟） */
+  chanceCooldownMinutes: 60,
+  /** 主动消息按分钟扫描，chance 模式的最小间隔就是一分钟 */
+  scanIntervalCron: '* * * * *',
 } as const
 
 /** 动态互动的默认配额与节流参数 */

@@ -1,4 +1,5 @@
 import type { AiPersona, ReplyStyle } from '@nenochat/shared'
+import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
 import { dbExecute, dbSelect } from '@/platform/db'
 
 /**
@@ -44,8 +45,12 @@ function parseProactive(row: PersonaRow): AiPersona['proactive'] {
       const parsed = JSON.parse(row.proactive) as Partial<AiPersona['proactive']>
       return {
         enabled: parsed.enabled ?? row.proactive_enabled === 1,
-        minIdleHours: parsed.minIdleHours ?? 6,
-        maxPerDay: parsed.maxPerDay ?? 1,
+        triggerMode: parsed.triggerMode,
+        minIdleHours: parsed.minIdleHours ?? PROACTIVE_DEFAULTS.minIdleHours,
+        maxPerDay: parsed.maxPerDay ?? PROACTIVE_DEFAULTS.maxPerDay,
+        chanceUnit: parsed.chanceUnit,
+        chanceProbability: parsed.chanceProbability,
+        chanceCooldownMinutes: parsed.chanceCooldownMinutes,
         windowStart: parsed.windowStart,
         windowEnd: parsed.windowEnd,
       }
@@ -55,8 +60,8 @@ function parseProactive(row: PersonaRow): AiPersona['proactive'] {
   }
   return {
     enabled: row.proactive_enabled === 1,
-    minIdleHours: 6,
-    maxPerDay: 1,
+    minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
+    maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
   }
 }
 

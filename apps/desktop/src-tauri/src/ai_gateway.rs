@@ -11,10 +11,12 @@ const EVENT_DELTA: &str = "ai://delta";
 const EVENT_DONE: &str = "ai://done";
 const EVENT_ERROR: &str = "ai://error";
 
+/// 一条对话消息。content 可能是纯文本，也可能是多模态分片数组
+/// （text / image_url），交给 serde_json::Value 原样透传上游。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]

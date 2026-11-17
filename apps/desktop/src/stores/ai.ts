@@ -21,11 +21,14 @@ import {
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type AttachmentRef,
   type ChatMessage,
   type Message,
   type SegmentRule,
+  type TurnImage,
 } from '@nenochat/shared'
 import { aiApi } from '@/api/ai'
+import { resolveFileUrl } from '@/api/http'
 import { conversationApi, messageApi } from '@/api/endpoints'
 import { postApi } from '@/api/posts'
 import { listPersonas, upsertPersona as upsertPersonaRow } from '@/db/dao/ai'
@@ -55,6 +58,12 @@ interface StreamError {
 }
 
 const MEMORY_COMPACT_THRESHOLD = 20
+
+/** 识图提示词：描述结果会作为文字注记进入主模型提示词 */
+const VISION_PROMPT =
+  '请客观描述这张图片的内容：主体、场景、画面里的文字等关键信息。' +
+  '不超过 120 字，这段描述会交给另一个无法看图的 AI 用于回复用户。' +
+  '直接输出描述正文，不要任何开场白或解释。'
 
 /**
  * AI 会话编排。
@@ -182,6 +191,8 @@ export const useAiStore = defineStore('ai', () => {
     userInput: string,
     currentMessageId?: string,
     quoted?: string | null,
+    images?: TurnImage[],
+    includeImages?: boolean,
   ): Promise<{ chat: ChatMessage[]; memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } }> {
     let memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } = { summaries: [], facts: [] }
     try {
@@ -204,9 +215,103 @@ export const useAiStore = defineStore('ai', () => {
       userInput,
       userName: auth.user?.displayName ?? '用户',
       quoted: quoted ?? null,
+      userImages: images,
+      includeImages,
     })
 
     return { chat, memories }
+  }
+
+  /* ------------------------------- 图片识图 ------------------------------- */
+
+  /** 把服务端的相对文件地址读成 base64 data URL，供识图模型或多模态主模型消费 */
+  async function fetchImageDataUrl(url: string): Promise<string | null> {
+    const absolute = resolveFileUrl(url)
+    if (!absolute) return null
+    try {
+      const response = await fetch(absolute)
+      if (!response.ok) return null
+      const blob = await response.blob()
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+        reader.onerror = () => resolve(null)
+        reader.readAsDataURL(blob)
+      })
+    } catch {
+      return null
+    }
+  }
+
+  /** 把描述写回本地消息 meta，后续轮次的上下文就能直接读到 */
+  function patchLocalDescription(
+    conversationId: string,
+    messageId: string,
+    attachmentId: string,
+    description: string,
+  ): void {
+    const target = messages.messagesOf(conversationId).find((m) => m.id === messageId)
+    const ref = target?.meta?.attachments?.find((a) => a.id === attachmentId)
+    if (ref) ref.description = description
+  }
+
+  /** 本机识图：当前这轮的每张图调用一次识图模型，描述回写服务端缓存 */
+  async function describeImagesLocally(
+    conversationId: string,
+    provider: AiProvider,
+    apiKey: string,
+    messageId: string,
+    attachments: AttachmentRef[],
+  ): Promise<TurnImage[]> {
+    const images: TurnImage[] = []
+    for (const attachment of attachments) {
+      const dataUrl = await fetchImageDataUrl(attachment.url)
+      if (!dataUrl) continue
+      try {
+        const raw = await invoke<string>('ai_complete', {
+          baseUrl: provider.baseUrl,
+          apiKey,
+          model: provider.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: VISION_PROMPT },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          temperature: 0.2,
+          maxTokens: 400,
+          jsonMode: false,
+        })
+        const description = raw.trim().slice(0, 1000)
+        if (!description) continue
+        await aiApi
+          .saveImageDescription({
+            messageId,
+            attachmentId: attachment.id,
+            description,
+            model: provider.visionModel,
+          })
+          .catch(() => undefined)
+        patchLocalDescription(conversationId, messageId, attachment.id, description)
+        images.push({ dataUrl: '', description })
+      } catch {
+        // 识图失败不阻断对话，图片按占位注记处理
+      }
+    }
+    return images
+  }
+
+  /** 直传模式：图片转 data URL 交给支持多模态的主模型 */
+  async function toDataUrlImages(attachments: AttachmentRef[]): Promise<TurnImage[]> {
+    const images: TurnImage[] = []
+    for (const attachment of attachments) {
+      const dataUrl = await fetchImageDataUrl(attachment.url)
+      if (dataUrl) images.push({ dataUrl, description: null })
+    }
+    return images
   }
 
   /** 本地密钥模式：Rust 流式生成 → 分条 → 逐条落库 */
@@ -217,14 +322,37 @@ export const useAiStore = defineStore('ai', () => {
     userInput: string,
     currentMessageId?: string,
     quoted?: string | null,
+    imageAttachments: AttachmentRef[] = [],
   ): Promise<void> {
     if (!isTauri()) throw new Error('本机密钥模式需要桌面客户端，网页版请使用服务端托管密钥')
 
     const apiKey = await loadProviderKey(provider.id)
     if (!apiKey) throw new Error('本机没有找到该服务商的密钥，请到设置里重新填写')
 
+    // 配了识图模型就先把图转成文字描述，没配就把图转成 data URL 直传主模型
+    let turnImages: TurnImage[] = []
+    if (imageAttachments.length > 0 && currentMessageId) {
+      turnImages = provider.visionModel
+        ? await describeImagesLocally(
+            conversationId,
+            provider,
+            apiKey,
+            currentMessageId,
+            imageAttachments,
+          )
+        : await toDataUrlImages(imageAttachments)
+    }
+
     const generationId = ulid()
-    const { chat } = await collectContext(conversationId, persona, userInput, currentMessageId, quoted)
+    const { chat } = await collectContext(
+      conversationId,
+      persona,
+      userInput,
+      currentMessageId,
+      quoted,
+      turnImages,
+      !provider.visionModel,
+    )
 
     streaming.value[conversationId] = { generationId, text: '' }
     generating.value[conversationId] = true
@@ -408,11 +536,13 @@ export const useAiStore = defineStore('ai', () => {
    * 发送一轮 AI 对话：先把用户消息按普通消息发出（保证立刻可见），
    * 再根据密钥位置决定由谁生成。
    * replyTo 让「引用某条消息再提问」成立：消息带上 replyToId，提示词里也带上被引原文。
+   * attachments 是随本轮一起发出的图片，识图后交给模型。
    */
   async function sendTurn(
     conversationId: string,
     content: string,
     replyTo?: Message | null,
+    attachments: AttachmentRef[] = [],
   ): Promise<void> {
     const now = Date.now()
     const last = recentTurns.get(conversationId)
@@ -425,6 +555,7 @@ export const useAiStore = defineStore('ai', () => {
     const provider = providerOf(persona)
     if (!provider) throw new Error('还没有配置 AI 服务商')
 
+    const images = attachments.filter((a) => a.kind === 'image')
     const nonce = ulid()
     // clientNonce 必须与下面 generation 用的完全一致：
     // 服务端按 (sender, nonce) 做幂等，两个不同的值会插出第二条同样的用户消息
@@ -432,17 +563,20 @@ export const useAiStore = defineStore('ai', () => {
       conversationId,
       content,
       clientNonce: nonce,
-      meta: { clientNonce: nonce },
+      // 图片消息类型让气泡正常渲染图片；纯文字部分会显示在图下方
+      type: images.length > 0 ? 'image' : 'text',
+      meta: { clientNonce: nonce, ...(attachments.length > 0 ? { attachments } : {}) },
       replyToId: replyTo?.id ?? null,
     })
 
     if (provider.keyLocation === 'server') {
+      // 密钥在服务端：识图也由服务端在生成前完成
       await generateOnServer(conversationId, persona, provider, content, nonce)
       return
     }
 
     try {
-      await generateLocally(conversationId, persona, provider, content, sent.id, quotedOf(replyTo))
+      await generateLocally(conversationId, persona, provider, content, sent.id, quotedOf(replyTo), images)
     } catch (e) {
       lastError.value = e instanceof Error ? e.message : '生成失败'
       throw e

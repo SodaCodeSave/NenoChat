@@ -10,6 +10,8 @@ export const ProviderSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().min(64).max(32000).optional(),
   isDefault: z.boolean().optional(),
+  /** 识图模型：留空表示未配置，发图时直接把图传给主模型 */
+  visionModel: z.string().trim().max(128).nullable().optional(),
 })
 
 export const ProviderPatchSchema = ProviderSchema.partial()
@@ -43,8 +45,12 @@ export const PersonaSchema = z.object({
   proactive: z
     .object({
       enabled: z.boolean(),
+      triggerMode: z.enum(['idle', 'chance']).optional(),
       minIdleHours: z.number().min(0).max(720),
-      maxPerDay: z.number().int().min(0).max(20),
+      maxPerDay: z.number().int().min(-1).max(998),
+      chanceUnit: z.enum(['minute', 'hour']).optional(),
+      chanceProbability: z.number().min(0).max(1).optional(),
+      chanceCooldownMinutes: z.number().int().min(0).max(1440).optional(),
       windowStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       windowEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
     })
@@ -59,7 +65,12 @@ const HHMM = /^\d{2}:\d{2}$/
 export const AiGlobalSettingsSchema = z.object({
   proactiveEnabled: z.boolean(),
   minIdleHours: z.number().min(0).max(720),
-  maxPerDay: z.number().int().min(0).max(20),
+  /** -1 表示无上限 */
+  maxPerDay: z.number().int().min(-1).max(998),
+  triggerMode: z.enum(['idle', 'chance']).optional(),
+  chanceUnit: z.enum(['minute', 'hour']).optional(),
+  chanceProbability: z.number().min(0).max(1).optional(),
+  chanceCooldownMinutes: z.number().int().min(0).max(1440).optional(),
   windowStart: z.string().regex(HHMM).nullable().optional(),
   windowEnd: z.string().regex(HHMM).nullable().optional(),
   momentsEnabled: z.boolean(),
@@ -114,9 +125,18 @@ export const GroupAiSkipSchema = z.object({
 
 export const StartGenerationSchema = z.object({
   conversationId: z.string().min(1),
-  content: z.string().min(1).max(8000),
+  /** 允许为空：只发图片不带文字时，正文由图片描述补位 */
+  content: z.string().max(8000),
   clientNonce: z.string().min(1).max(64),
   providerId: z.string().min(1).optional(),
+})
+
+/** 本机识图后把描述交回服务端缓存并写进消息 meta */
+export const ImageDescriptionSchema = z.object({
+  messageId: z.string().min(1),
+  attachmentId: z.string().min(1),
+  description: z.string().trim().min(1).max(1000),
+  model: z.string().max(128).nullable().optional(),
 })
 
 export const MemoryWriteSchema = z.object({

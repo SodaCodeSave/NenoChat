@@ -20,6 +20,8 @@ export interface ProviderInput {
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
+  /** 识图模型：把聊天图片转成文字描述，留空则发图时直接传给主模型 */
+  visionModel?: string | null
 }
 
 export interface PersonaInput {
@@ -39,8 +41,12 @@ export interface PersonaInput {
   proactiveMode?: 'global' | 'custom'
   proactive?: {
     enabled: boolean
+    triggerMode?: 'idle' | 'chance'
     minIdleHours: number
     maxPerDay: number
+    chanceUnit?: 'minute' | 'hour'
+    chanceProbability?: number
+    chanceCooldownMinutes?: number
     windowStart?: string
     windowEnd?: string
   }
@@ -100,6 +106,14 @@ export const aiApi = {
     providerId: string
   }) => http.post<{ generation: { generationId: string; segments: number } }>(p('/ai/generations'), body),
   cancelGeneration: (id: string) => http.post<{ ok: boolean }>(p(`/ai/generations/${id}/cancel`)),
+
+  /** 本机识图后把图片描述交回服务端缓存并写进消息 meta */
+  saveImageDescription: (body: {
+    messageId: string
+    attachmentId: string
+    description: string
+    model?: string | null
+  }) => http.post<{ ok: boolean }>(p('/ai/image-descriptions'), body),
 
   /** 群聊：本机密钥生成后把分段交回服务端落库 */
   appendGroupMessage: (body: {

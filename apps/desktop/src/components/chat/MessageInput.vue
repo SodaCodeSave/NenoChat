@@ -18,7 +18,7 @@ const props = defineProps<{
   editing?: Message | null
   disabled?: boolean
   placeholder?: string
-  /** AI 会话里上传附件意义不大，隐藏附件按钮 */
+  /** AI 会话模式：附件先缓冲在输入框，随正文一起发送；仅支持图片 */
   aiMode?: boolean
   /** 群聊才显示「全体成员」提及项 */
   mentionAllEnabled?: boolean
@@ -31,7 +31,7 @@ export interface MentionSummary {
 }
 
 const emit = defineEmits<{
-  (e: 'send', content: string, mentions?: MentionSummary): void
+  (e: 'send', content: string, mentions?: MentionSummary, attachments?: AttachmentRef[]): void
   (e: 'typing'): void
   (e: 'cancel-reply'): void
   (e: 'cancel-edit'): void
@@ -58,7 +58,9 @@ const QUICK_EMOJI = [
   '❤️', '🔥', '🎉', '✨', '🌙', '☕', '🍜', '🐱',
 ]
 
-const canSend = computed(() => text.value.trim().length > 0 && !props.disabled)
+const canSend = computed(
+  () => (text.value.trim().length > 0 || pendingAttachments.value.length > 0) && !props.disabled,
+)
 
 const activePack = computed(
   () => stickers.packs.find((entry) => entry.pack.id === panelTab.value) ?? null,
@@ -206,8 +208,10 @@ function submit(): void {
   const now = Date.now()
   if (now - lastSubmitAt < 300) return
   lastSubmitAt = now
-  emit('send', text.value.trim(), collectMentions() ?? undefined)
+  const attachments = props.aiMode ? [...pendingAttachments.value] : undefined
+  emit('send', text.value.trim(), collectMentions() ?? undefined, attachments)
   text.value = ''
+  if (props.aiMode) pendingAttachments.value = []
   closeMention()
   void nextTick(autoGrow)
 }
@@ -283,9 +287,55 @@ function sendSticker(sticker: Sticker): void {
 
 /* --------------------------- 附件上传 --------------------------- */
 
+/** AI 会话模式下先缓冲的图片，发送时随正文一起交出去 */
+const pendingAttachments = ref<AttachmentRef[]>([])
+
+function removePending(id: string): void {
+  pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
+}
+
 async function handleFiles(files: File[]): Promise<void> {
   if (files.length === 0) return
   uploadError.value = null
+
+  // AI 会话：只收图片，先缓冲在输入框里，随正文一起发送
+  if (props.aiMode) {
+    const images = files.filter((file) => file.type.startsWith('image/'))
+    if (images.length === 0) {
+      uploadError.value = 'AI 会话暂只支持发送图片'
+      return
+    }
+    for (const file of images.slice(0, 9 - pendingAttachments.value.length)) {
+      uploading.value = { name: file.name, percent: 0 }
+      try {
+        const attachment = await uploadFile(file, {
+          kind: 'file',
+          onProgress: (percent) => {
+            if (uploading.value) uploading.value.percent = percent
+          },
+        })
+        pendingAttachments.value = [
+          ...pendingAttachments.value,
+          {
+            id: attachment.id,
+            kind: 'image',
+            filename: attachment.filename,
+            mime: attachment.mime,
+            size: attachment.size,
+            width: attachment.width,
+            height: attachment.height,
+            url: attachment.url,
+            thumbUrl: attachment.thumbUrl,
+          },
+        ]
+      } catch (e) {
+        uploadError.value = e instanceof Error ? e.message : '上传失败'
+      } finally {
+        uploading.value = null
+      }
+    }
+    return
+  }
 
   for (const file of files.slice(0, 9)) {
     uploading.value = { name: file.name, percent: 0 }
@@ -360,6 +410,7 @@ watch(
   () => props.conversationId,
   () => {
     closeMention()
+    pendingAttachments.value = []
   },
 )
 
@@ -408,6 +459,28 @@ onMounted(() => {
 
     <p v-if="uploadError" class="mb-1.5 text-[11.5px] text-danger">{{ uploadError }}</p>
 
+    <!-- AI 会话：待发送的图片，随正文一起发出 -->
+    <div v-if="aiMode && pendingAttachments.length > 0" class="mb-1.5 flex flex-wrap gap-1.5">
+      <div
+        v-for="attachment in pendingAttachments"
+        :key="attachment.id"
+        class="group relative h-12 w-12"
+      >
+        <img
+          :src="resolveFileUrl(attachment.thumbUrl ?? attachment.url) ?? attachment.url"
+          :alt="attachment.filename"
+          class="h-12 w-12 rounded-lg border border-line object-cover"
+        />
+        <button
+          type="button"
+          class="absolute -right-1.5 -top-1.5 hidden h-[18px] w-[18px] items-center justify-center rounded-full bg-surface-3 text-muted hover:text-danger group-hover:flex"
+          @click="removePending(attachment.id)"
+        >
+          <Icon name="close" :size="10" />
+        </button>
+      </div>
+    </div>
+
     <div class="relative rounded-xl border border-line bg-surface-2 focus-within:border-accent">
       <textarea
         ref="textarea"
@@ -425,17 +498,16 @@ onMounted(() => {
       <div class="flex items-center gap-0.5 px-1.5 pb-1.5">
         <IconButton icon="smile" label="表情" :size="17" @click="openPanel" />
         <input
-          v-if="!aiMode"
           ref="fileInput"
           type="file"
           multiple
+          :accept="aiMode ? 'image/*' : undefined"
           class="hidden"
           @change="onPickFiles"
         />
         <IconButton
-          v-if="!aiMode"
           icon="paperclip"
-          label="发送图片或文件"
+          :label="aiMode ? '发送图片（AI 可识别）' : '发送图片或文件'"
           :size="17"
           @click="fileInput?.click()"
         />

@@ -18,6 +18,7 @@ export const MessageMetaSchema = z
           height: z.number().nullable().optional(),
           url: z.string(),
           thumbUrl: z.string().nullable().optional(),
+          description: z.string().max(1000).nullable().optional(),
         }),
       )
       .max(9)

@@ -1,10 +1,21 @@
 import { AI_CONTEXT_BUDGET, AI_SKIP_TOKEN } from '../constants'
-import type { AiMemoryFact, AiMemorySummary, AiPersona, Message } from '../entities'
+import type { AiMemoryFact, AiMemorySummary, AiPersona, AttachmentRef, Message } from '../entities'
 import { estimateTokens } from './tokens'
+
+/** OpenAI 兼容的多模态 content 分片 */
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
-  content: string
+  content: string | ChatContentPart[]
+}
+
+/** 本次输入携带的一张图片：识图后有 description，直传模式有 dataUrl */
+export interface TurnImage {
+  dataUrl: string
+  description?: string | null
 }
 
 export interface BuildContextInput {
@@ -17,6 +28,10 @@ export interface BuildContextInput {
   userName: string
   /** 引用回复时带上的原文 */
   quoted?: string | null
+  /** 本次输入携带的图片 */
+  userImages?: TurnImage[]
+  /** 直传模式：没有识图模型时把图片以 image_url 分片交给主模型 */
+  includeImages?: boolean
   now?: number
 }
 
@@ -45,6 +60,27 @@ function formatTime(ts: number): string {
   const date = new Date(ts)
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** 消息里的图片附件 */
+function imagesOf(message: Message): AttachmentRef[] {
+  return (message.meta?.attachments ?? []).filter((a) => a.kind === 'image')
+}
+
+/**
+ * 历史消息里的图片转成一行文字注记。
+ * 有识图描述就给描述，否则只告诉模型「这里有一张图」，让它不要装作看见了。
+ */
+function historyImageNote(message: Message): string | null {
+  const images = imagesOf(message)
+  if (images.length === 0) return null
+  const descriptions = images
+    .map((a) => a.description?.trim())
+    .filter((text): text is string => Boolean(text))
+  if (descriptions.length === 0) {
+    return images.length > 1 ? `（发了 ${images.length} 张图片）` : '（发送了一张图片）'
+  }
+  return `（这条消息带了图片：${descriptions.join('；')}）`
 }
 
 /**
@@ -122,10 +158,6 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     recentLines.unshift(message)
   }
 
-  const userContent = input.quoted
-    ? `（引用了一条消息：${input.quoted}）\n${input.userInput}`
-    : input.userInput
-
   /**
    * 历史里可能残留「同一句话、两个 nonce」的重复行（旧版本客户端造成）。
    * 这不影响展示，但会让模型以为用户在刷屏，拼 prompt 时按 3 秒窗口折叠掉。
@@ -145,7 +177,9 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
 
   for (const message of recentLines) {
     const role: ChatMessage['role'] = message.senderType === 'ai' ? 'assistant' : 'user'
-    messages.push({ role, content: message.content })
+    const note = historyImageNote(message)
+    const text = note ? (message.content ? `${message.content}\n${note}` : note) : message.content
+    messages.push({ role, content: text })
   }
 
   // recent 里通常已经包含刚发出的这条用户消息（调用方先落库再拼上下文），
@@ -155,9 +189,37 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     !input.quoted &&
     last !== undefined &&
     last.senderType !== 'ai' &&
+    last.content.trim().length > 0 &&
     last.content.trim() === input.userInput.trim()
 
   if (!alreadyIncluded) {
+    const userImages = input.userImages ?? []
+    let userContent = input.quoted
+      ? `（引用了一条消息：${input.quoted}）\n${input.userInput}`
+      : input.userInput
+
+    if (userImages.length > 0 && input.includeImages) {
+      // 直传模式：图片以 image_url 分片交给支持多模态的主模型
+      const parts: ChatContentPart[] = []
+      if (userContent.trim()) parts.push({ type: 'text', text: userContent })
+      for (const image of userImages) {
+        if (!image.dataUrl) continue
+        parts.push({ type: 'image_url', image_url: { url: image.dataUrl } })
+      }
+      if (parts.length === 0) parts.push({ type: 'text', text: '（发送了一张图片）' })
+      messages.push({ role: 'user', content: parts })
+      return messages
+    }
+
+    if (userImages.length > 0) {
+      const descriptions = userImages
+        .map((image) => image.description?.trim())
+        .filter((text): text is string => Boolean(text))
+      const note =
+        descriptions.length > 0 ? `（随消息发来了图片：${descriptions.join('；')}）` : '（发送了一张图片）'
+      userContent = userContent ? `${userContent}\n${note}` : note
+    }
+
     messages.push({ role: 'user', content: userContent })
   }
   return messages

@@ -33,6 +33,7 @@ const providerForm = ref<ProviderInput>({
   model: 'gpt-4o-mini',
   apiKey: '',
   keyLocation: 'local',
+  visionModel: '',
 })
 
 /** 角色列表以 ai store 为准，通讯录与消息分区读的是同一份 */
@@ -156,7 +157,8 @@ async function testConnection(): Promise<void> {
 async function addProvider(): Promise<void> {
   error.value = null
   try {
-    const created = await aiApi.createProvider(providerForm.value)
+    const form = { ...providerForm.value, visionModel: providerForm.value.visionModel?.trim() || null }
+    const created = await aiApi.createProvider(form)
     // key 存本地钥匙串，服务端只保存「存哪里」这个标记
     if (providerForm.value.keyLocation === 'local' && providerForm.value.apiKey) {
       await saveProviderKey(created.provider.id, providerForm.value.apiKey)
@@ -178,6 +180,7 @@ function resetProviderForm(): void {
     model: 'gpt-4o-mini',
     apiKey: '',
     keyLocation: 'local',
+    visionModel: '',
   }
 }
 
@@ -242,6 +245,21 @@ async function removeProvider(provider: AiProvider): Promise<void> {
   await aiApi.deleteProvider(provider.id)
   await clearProviderKey(provider.id)
   await load()
+}
+
+/** 识图模型即时保存：留空表示清掉，发图时改走直传 */
+async function saveVisionModel(provider: AiProvider, value: string): Promise<void> {
+  const visionModel = value.trim() || null
+  if ((provider.visionModel ?? null) === visionModel) return
+  try {
+    const result = await aiApi.updateProvider(provider.id, { visionModel })
+    const updated = result.provider
+    providers.value = providers.value.map((p) => (p.id === updated.id ? updated : p))
+    ai.providers = ai.providers.map((p) => (p.id === updated.id ? updated : p))
+    notice.value = visionModel ? `识图模型已设为 ${visionModel}` : '已清除识图模型'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存识图模型失败'
+  }
 }
 
 function startCreate(): void {
@@ -389,6 +407,11 @@ onMounted(() => {
           placeholder="API Key"
           class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
         />
+        <input
+          v-model="providerForm.visionModel"
+          placeholder="识图模型（可选，如 gpt-4o-mini / qwen-vl-plus，用于看懂聊天图片）"
+          class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
+        />
         <div class="flex items-center gap-2">
           <select
             v-model="providerForm.keyLocation"
@@ -450,6 +473,13 @@ onMounted(() => {
           </p>
           <p class="truncate text-[11px] text-muted">{{ provider.model }} · {{ provider.baseUrl }}</p>
         </div>
+        <input
+          class="h-7 w-36 shrink-0 rounded-md border border-line bg-surface-2 px-2 text-[11px] outline-none focus:border-accent"
+          :value="provider.visionModel ?? ''"
+          placeholder="识图模型（可选）"
+          title="填一个多模态模型名，AI 就能看懂图片；留空则直接把图传给主模型"
+          @change="saveVisionModel(provider, ($event.target as HTMLInputElement).value)"
+        />
         <button
           type="button"
           class="rounded-md p-1 text-muted hover:bg-surface-3 hover:text-text disabled:opacity-50"

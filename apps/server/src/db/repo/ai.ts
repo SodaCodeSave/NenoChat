@@ -23,6 +23,7 @@ export interface ProviderRow {
   api_key_enc: string | null
   key_location: string
   model: string
+  vision_model: string | null
   temperature: number
   max_tokens: number
   extra_headers: string | null
@@ -44,6 +45,7 @@ export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null
     apiKeyMasked,
     keyLocation: row.key_location as AiProvider['keyLocation'],
     model: row.model,
+    visionModel: row.vision_model,
     temperature: row.temperature,
     maxTokens: row.max_tokens,
     isDefault: row.is_default === 1,
@@ -74,6 +76,7 @@ export interface CreateProviderInput {
   apiKeyEnc: string | null
   keyLocation: 'local' | 'server'
   model: string
+  visionModel?: string | null
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
@@ -84,9 +87,9 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
   const id = ulid()
   db.prepare(
     `INSERT INTO ai_providers
-       (id, owner_id, name, base_url, api_key_enc, key_location, model, temperature, max_tokens,
-        extra_headers, is_default, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+       (id, owner_id, name, base_url, api_key_enc, key_location, model, vision_model, temperature,
+        max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
   ).run(
     id,
     input.ownerId,
@@ -95,6 +98,7 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
     input.apiKeyEnc,
     input.keyLocation,
     input.model,
+    input.visionModel ?? null,
     input.temperature ?? 0.8,
     input.maxTokens ?? 2048,
     input.isDefault ? 1 : 0,
@@ -112,8 +116,8 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
 
   db.prepare(
     `UPDATE ai_providers
-     SET name = ?, base_url = ?, api_key_enc = ?, key_location = ?, model = ?, temperature = ?,
-         max_tokens = ?, is_default = ?, updated_at = ?
+     SET name = ?, base_url = ?, api_key_enc = ?, key_location = ?, model = ?, vision_model = ?,
+         temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     patch.name ?? current.name,
@@ -121,6 +125,7 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
     patch.apiKeyEnc === undefined ? current.api_key_enc : patch.apiKeyEnc,
     patch.keyLocation ?? current.key_location,
     patch.model ?? current.model,
+    patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
     patch.temperature ?? current.temperature,
     patch.maxTokens ?? current.max_tokens,
     patch.isDefault === undefined ? current.is_default : patch.isDefault ? 1 : 0,
@@ -145,6 +150,30 @@ export function saveProviderBalance(
   db.prepare(
     'UPDATE ai_providers SET balance = ?, balance_currency = ?, balance_checked_at = ? WHERE id = ?',
   ).run(balance?.amount ?? null, balance?.currency ?? null, now(), id)
+}
+
+/* ----------------------------- 图片描述缓存 ----------------------------- */
+
+/** 同一张图（sha256 相同）只识图一次，命中直接返回缓存的描述 */
+export function findImageDescription(db: DB, sha256: string): string | null {
+  const row = db
+    .prepare('SELECT description FROM ai_image_descriptions WHERE sha256 = ?')
+    .get(sha256) as { description: string } | undefined
+  return row?.description ?? null
+}
+
+export function saveImageDescription(
+  db: DB,
+  sha256: string,
+  description: string,
+  model: string | null,
+): void {
+  const ts = now()
+  db.prepare(
+    `INSERT INTO ai_image_descriptions (sha256, description, model, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(sha256) DO UPDATE SET description = excluded.description, updated_at = excluded.updated_at`,
+  ).run(sha256, description, model, ts, ts)
 }
 
 export function defaultProvider(db: DB, ownerId: string): ProviderRow | undefined {
@@ -203,8 +232,12 @@ function parseProactive(row: PersonaRow): ProactiveConfig {
       const parsed = JSON.parse(row.proactive_config) as Partial<ProactiveConfig>
       return {
         enabled: parsed.enabled ?? row.proactive_enabled === 1,
+        triggerMode: parsed.triggerMode,
         minIdleHours: parsed.minIdleHours ?? PROACTIVE_DEFAULTS.minIdleHours,
         maxPerDay: parsed.maxPerDay ?? PROACTIVE_DEFAULTS.maxPerDay,
+        chanceUnit: parsed.chanceUnit,
+        chanceProbability: parsed.chanceProbability,
+        chanceCooldownMinutes: parsed.chanceCooldownMinutes,
         windowStart: parsed.windowStart,
         windowEnd: parsed.windowEnd,
       }
@@ -281,8 +314,12 @@ export function createPersona(db: DB, input: CreatePersonaInput): PersonaRow {
   const id = ulid()
   const proactive: ProactiveConfig = {
     enabled: input.proactive?.enabled ?? false,
+    triggerMode: input.proactive?.triggerMode,
     minIdleHours: input.proactive?.minIdleHours ?? PROACTIVE_DEFAULTS.minIdleHours,
     maxPerDay: input.proactive?.maxPerDay ?? PROACTIVE_DEFAULTS.maxPerDay,
+    chanceUnit: input.proactive?.chanceUnit,
+    chanceProbability: input.proactive?.chanceProbability,
+    chanceCooldownMinutes: input.proactive?.chanceCooldownMinutes,
     windowStart: input.proactive?.windowStart,
     windowEnd: input.proactive?.windowEnd,
   }
@@ -441,6 +478,10 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     proactiveEnabled: false,
     minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
     maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
+    triggerMode: PROACTIVE_DEFAULTS.triggerMode,
+    chanceUnit: PROACTIVE_DEFAULTS.chanceUnit,
+    chanceProbability: PROACTIVE_DEFAULTS.chanceProbability,
+    chanceCooldownMinutes: PROACTIVE_DEFAULTS.chanceCooldownMinutes,
     windowStart: null,
     windowEnd: null,
     momentsEnabled: false,
@@ -468,6 +509,10 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     proactiveEnabled: row.proactive_enabled === 1,
     minIdleHours: proactive.minIdleHours ?? fallback.minIdleHours,
     maxPerDay: proactive.maxPerDay ?? fallback.maxPerDay,
+    triggerMode: proactive.triggerMode ?? fallback.triggerMode,
+    chanceUnit: proactive.chanceUnit ?? fallback.chanceUnit,
+    chanceProbability: proactive.chanceProbability ?? fallback.chanceProbability,
+    chanceCooldownMinutes: proactive.chanceCooldownMinutes ?? fallback.chanceCooldownMinutes,
     windowStart: proactive.windowStart ?? null,
     windowEnd: proactive.windowEnd ?? null,
     momentsEnabled: row.moments_enabled === 1,
@@ -519,6 +564,10 @@ export function writeGlobalSettings(
     JSON.stringify({
       minIdleHours: next.minIdleHours,
       maxPerDay: next.maxPerDay,
+      triggerMode: next.triggerMode,
+      chanceUnit: next.chanceUnit,
+      chanceProbability: next.chanceProbability,
+      chanceCooldownMinutes: next.chanceCooldownMinutes,
       windowStart: next.windowStart ?? undefined,
       windowEnd: next.windowEnd ?? undefined,
     }),
