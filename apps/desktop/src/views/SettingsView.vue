@@ -478,7 +478,6 @@ onBeforeUnmount(() => {
             <h2 class="text-[19px] font-semibold tracking-tight text-text-strong">
               {{ currentMeta.label }}
             </h2>
-            <p class="mt-0.5 text-[12px] text-muted">{{ currentMeta.description }}</p>
           </div>
 
           <component :is="currentComponent" :key="activeSection" />

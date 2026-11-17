@@ -134,22 +134,13 @@ async function logout(): Promise<void> {
       </SettingRow>
     </SettingsCard>
 
-    <SettingsCard
-      id="danger"
-      title="危险操作"
-      description="以下操作会结束当前会话，请确认后再执行"
-      icon="logout"
-      tone="danger"
-    >
-      <SettingRow
-        label="退出登录"
-        description="退出后需要重新输入账号密码，本地数据不会被删除"
-        danger
-      >
+    <SettingsCard id="danger" title="危险操作" icon="logout" tone="danger">
+      <div class="flex items-center justify-between gap-3">
+        <p class="min-w-0 text-[12px] text-muted">退出后需要重新登录，本地数据不会被删除</p>
         <Button variant="danger-ghost" size="sm" icon="logout" @click="confirmLogout = true">
           退出登录
         </Button>
-      </SettingRow>
+      </div>
 
       <ConfirmDialog
         v-model:open="confirmLogout"

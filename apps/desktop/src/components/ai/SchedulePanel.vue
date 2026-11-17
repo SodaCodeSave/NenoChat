@@ -286,7 +286,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
         </p>
 
         <p v-if="allItems.length === 0" class="text-[12px] text-muted">
-          今天还没有日程，点右上角的 ✦ 生成一份。
+          今天还没有日程，点右上角的按钮生成一份。
         </p>
         <p v-else-if="visibleItems.length === 0" class="text-[12px] text-muted">
           今天还没有已经发生的安排。

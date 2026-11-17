@@ -411,8 +411,8 @@ watch(keyword, (value) => {
                 @keydown.enter.prevent="commitRename(contact)"
                 @keydown.esc.prevent="editingId = null"
               />
-              <p v-else class="truncate text-[11.5px] text-muted">
-                {{ subtitleOf(contact) || '点击开始聊天' }}
+              <p v-else-if="subtitleOf(contact)" class="truncate text-[11.5px] text-muted">
+                {{ subtitleOf(contact) }}
               </p>
             </button>
             <div
