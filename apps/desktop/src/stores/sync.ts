@@ -1,16 +1,16 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { AiPersona, ChangeRecord, Message, PublicUser } from '@nenochat/shared'
+import type { AiPersona, ChangeRecord, Conversation, Member, Message, PublicUser } from '@nenochat/shared'
 import { getCursor, setCursor } from '@/db/dao/sync'
 import {
-  markConversationDeleted,
-  upsertConversation,
-  upsertMember,
-  markMemberLeft,
+  markConversationsDeleted,
+  markMembersLeft,
+  upsertConversationsBatched,
+  upsertMembersBatched,
 } from '@/db/dao/conversations'
 import * as aiDao from '@/db/dao/ai'
 import { upsertUser } from '@/db/dao/users'
-import { upsertMessage } from '@/db/dao/messages'
+import { upsertMessagesBatched } from '@/db/dao/messages'
 import { hasLocalDb } from '@/platform/db'
 import { wsClient, type ConnStatus } from '@/realtime/ws-client'
 import { useServersStore } from './servers'
@@ -47,7 +47,14 @@ export const useSyncStore = defineStore('sync', () => {
     return cursor.value
   }
 
-  /** 逐条应用变更；每条都是幂等 upsert，重复应用不会出问题 */
+  /**
+   * 批量应用变更。大追批（离线几天再上线）一次可能推来上千条记录，
+   * 逐条 await 会有成千上万次串行 IPC 往返；这里分两遍：
+   * 第一遍按原始顺序做纯内存更新（轻量、同步），同时按实体聚合；
+   * 第二遍把高流量实体（消息/会话/成员）合并成少量多行语句一次落库。
+   * 每条变更都是幂等 upsert；同类实体在同一批里重复出现时以最后一条为准，
+   * 最终状态与原来的逐条顺序应用完全一致。
+   */
   async function applyChanges(changes: ChangeRecord[]): Promise<void> {
     const sid = serverId.value
     // 注意：这里不判断 hasLocalDb —— DAO 自身在无本地库时静默跳过，
@@ -60,6 +67,16 @@ export const useSyncStore = defineStore('sync', () => {
     const ai = useAiStore()
     const contacts = useContactsStore()
 
+    /* -------- 第一遍：内存更新 + 按实体聚合 -------- */
+    const userRows = new Map<string, PublicUser>()
+    const conversationRows = new Map<string, Conversation>()
+    const conversationDeletes = new Set<string>()
+    const memberRows = new Map<string, Member>()
+    const memberDeletes = new Map<string, { conversationId: string; userId: string }>()
+    const messageRows = new Map<string, Message>()
+    const personaRows = new Map<string, AiPersona>()
+    const personaDeletes = new Set<string>()
+
     for (const change of changes) {
       const payload = change.payload as Record<string, unknown> | null
       if (!payload) continue
@@ -68,44 +85,54 @@ export const useSyncStore = defineStore('sync', () => {
         case 'contact':
           contacts.upsert(payload as never)
           break
-        case 'user':
-          await upsertUser(sid, payload as unknown as PublicUser)
+        case 'user': {
+          const user = payload as unknown as PublicUser
+          userRows.set(user.id, user)
           break
+        }
         case 'conversation': {
-          const conversation = payload as unknown as Parameters<typeof upsertConversation>[1]
+          const conversation = payload as unknown as Conversation
           if (change.op === 'delete') {
-            await markConversationDeleted(sid, conversation.id)
             conversations.remove(conversation.id)
+            conversationRows.delete(conversation.id)
+            conversationDeletes.add(conversation.id)
           } else {
-            await upsertConversation(sid, conversation)
-            await conversations.upsert(conversation as never)
+            conversations.upsertLocal(conversation as never)
+            conversationRows.set(conversation.id, conversation)
+            conversationDeletes.delete(conversation.id)
           }
           break
         }
         case 'member': {
-          const member = payload as unknown as Parameters<typeof upsertMember>[1]
+          const member = payload as unknown as Member
+          const key = `${member.conversationId}:${member.userId}`
           if (change.op === 'delete') {
-            await markMemberLeft(sid, member.conversationId, member.userId)
-            await members.applyRemoved(member.conversationId, member.userId)
+            members.removeLocal(member.conversationId, member.userId)
+            memberRows.delete(key)
+            memberDeletes.set(key, { conversationId: member.conversationId, userId: member.userId })
           } else {
-            await upsertMember(sid, member)
+            members.upsertLocal(member)
+            memberRows.set(key, member)
+            memberDeletes.delete(key)
           }
           break
         }
         case 'message': {
           const message = payload as unknown as Message
-          await upsertMessage(sid, { ...message, localStatus: 'synced' })
-          await messages.applyUpdated(message)
+          messages.mergeUpdated(message)
+          messageRows.set(message.id, { ...message, localStatus: 'synced' })
           break
         }
         case 'ai_persona': {
           const persona = payload as unknown as AiPersona
           if (change.op === 'delete') {
-            await aiDao.deletePersona(sid, persona.id)
             ai.removeLocal(persona.id)
+            personaRows.delete(persona.id)
+            personaDeletes.add(persona.id)
           } else {
-            await aiDao.upsertPersona(sid, persona)
             ai.upsertLocal(persona)
+            personaRows.set(persona.id, persona)
+            personaDeletes.delete(persona.id)
           }
           break
         }
@@ -113,6 +140,22 @@ export const useSyncStore = defineStore('sync', () => {
           // 其余实体（动态、表情、AI 记忆等）在各自模块接入时再补
           break
       }
+    }
+
+    /* -------- 第二遍：按实体类型落库。消息/会话/成员是多行语句批量写；用户与角色量级小，保持逐条 -------- */
+    if (messageRows.size > 0) await upsertMessagesBatched(sid, [...messageRows.values()])
+    if (conversationRows.size > 0) await upsertConversationsBatched(sid, [...conversationRows.values()])
+    if (conversationDeletes.size > 0) await markConversationsDeleted(sid, [...conversationDeletes])
+    if (memberRows.size > 0) await upsertMembersBatched(sid, [...memberRows.values()])
+    if (memberDeletes.size > 0) await markMembersLeft(sid, [...memberDeletes.values()])
+    for (const user of userRows.values()) {
+      await upsertUser(sid, user)
+    }
+    for (const persona of personaRows.values()) {
+      await aiDao.upsertPersona(sid, persona)
+    }
+    for (const personaId of personaDeletes) {
+      await aiDao.deletePersona(sid, personaId)
     }
   }
 
@@ -279,13 +322,15 @@ export const useSyncStore = defineStore('sync', () => {
     if (!servers.current) return
 
     registerHandlers()
-    const startCursor = await loadCursor()
+    await loadCursor()
 
     wsClient.configure({
       url: servers.effective?.wsUrl ?? servers.current.wsUrl,
       deviceId: auth.devicePayload().id,
       getToken: async () => auth.accessToken,
-      getCursor: async () => startCursor,
+      // 游标必须每次重连实时取：handleBatch 会持续推进它，
+      // 若固定在启动时的值，长会话每次断线重连都会重放全部增量
+      getCursor: async () => cursor.value,
       onStatus: (next) => {
         status.value = next
       },

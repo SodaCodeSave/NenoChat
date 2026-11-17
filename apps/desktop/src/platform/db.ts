@@ -74,3 +74,18 @@ export async function dbExecuteMany(statements: Array<{ sql: string; params: unk
     return false
   }
 }
+
+/**
+ * 生成多行 VALUES 的占位符：参数编号在同一语句内全局递增
+ * （2 列 3 行 → "($1,$2),($3,$4),($5,$6)"），供 DAO 层拼批量 upsert 语句。
+ */
+export function rowPlaceholders(rows: number, columns: number, offset = 0): string {
+  const parts: string[] = []
+  for (let row = 0; row < rows; row++) {
+    const base = offset + row * columns
+    const slots: string[] = []
+    for (let i = 1; i <= columns; i++) slots.push(`$${base + i}`)
+    parts.push(`(${slots.join(',')})`)
+  }
+  return parts.join(',')
+}

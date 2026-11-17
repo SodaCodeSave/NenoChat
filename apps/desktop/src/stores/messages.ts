@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import {
   MessageType,
   ulid,
@@ -15,6 +15,7 @@ import {
   listMessages,
   markFailed,
   upsertMessage,
+  upsertMessagesBatched,
 } from '@/db/dao/messages'
 import { mergeMessages, sortAndTrim } from '@/composables/message-merge'
 import { hasLocalDb } from '@/platform/db'
@@ -32,6 +33,9 @@ interface ConversationMessages {
 function emptyBucket(): ConversationMessages {
   return { messages: [], hasMoreOlder: false, loading: false, loaded: false }
 }
+
+/** 启动预载的并发度：一组 3 个会话并行拉取，冷启动几十个会话也不会挤爆网络与 IPC */
+const PRELOAD_CONCURRENCY = 3
 
 export interface SendOptions {
   conversationId: string
@@ -52,20 +56,24 @@ export interface SendOptions {
  * 写：先乐观插入带 local_status='pending'，由服务端回执转正。
  */
 export const useMessagesStore = defineStore('messages', () => {
-  const buckets = ref<Record<string, ConversationMessages>>({})
+  /**
+   * 消息桶用 shallowRef：消息对象在合并时都是整体替换、从不原地修改，
+   * 深层 proxy 只会让 300 条消息的窗口白付一遍代理开销。
+   * 因此所有写入必须通过 patchBucket 整体替换桶对象——只改桶内属性不会触发更新。
+   */
+  const buckets = shallowRef<Record<string, ConversationMessages>>({})
   const sending = ref(false)
 
   const serverId = computed(() => useServersStore().currentId ?? '')
   const myId = computed(() => useAuthStore().user?.id ?? '')
 
-  function bucket(conversationId: string): ConversationMessages {
-    let existing = buckets.value[conversationId]
-    if (!existing) {
-      buckets.value[conversationId] = emptyBucket()
-      // 必须回读代理而不是沿用新建的原始对象，否则后续赋值不触发响应式更新
-      existing = buckets.value[conversationId]!
-    }
-    return existing
+  /** 整体替换式写入：以当前桶内容为基算出新桶，引用变化才触发订阅方刷新 */
+  function patchBucket(conversationId: string, patch: (current: ConversationMessages) => ConversationMessages): void {
+    const current = buckets.value[conversationId] ?? emptyBucket()
+    const next = patch(current)
+    // 内容没变就不动引用，避免无谓的重渲染
+    if (next === current) return
+    buckets.value = { ...buckets.value, [conversationId]: next }
   }
 
   function messagesOf(conversationId: string): Message[] {
@@ -83,9 +91,8 @@ export const useMessagesStore = defineStore('messages', () => {
 
   /** 首次进入会话：本地镜像立即可用，网络结果回来后再合并 */
   async function loadInitial(conversationId: string, options: { force?: boolean } = {}): Promise<void> {
-    const target = bucket(conversationId)
-    if (target.loaded && !options.force) return
-    target.loading = true
+    if (buckets.value[conversationId]?.loaded && !options.force) return
+    patchBucket(conversationId, (bucket) => ({ ...bucket, loading: true }))
 
     try {
       if (hasLocalDb() && serverId.value) {
@@ -94,73 +101,76 @@ export const useMessagesStore = defineStore('messages', () => {
           limit: 50,
         })
         if (local.messages.length > 0) {
-          target.messages = merge(target.messages, local.messages)
-          target.hasMoreOlder = local.hasMore
+          patchBucket(conversationId, (bucket) => ({
+            ...bucket,
+            messages: merge(bucket.messages, local.messages),
+            hasMoreOlder: local.hasMore,
+          }))
         }
       }
 
       const remote = await messageApi.page(conversationId, { limit: 50 })
-      target.messages = merge(target.messages, remote.messages)
-      target.hasMoreOlder = remote.hasMore
-      target.loaded = true
+      patchBucket(conversationId, (bucket) => ({
+        ...bucket,
+        messages: merge(bucket.messages, remote.messages),
+        hasMoreOlder: remote.hasMore,
+        loaded: true,
+      }))
 
       if (hasLocalDb() && serverId.value) {
-        for (const message of remote.messages) {
-          await upsertMessage(serverId.value, message)
-        }
+        // 一页 50 条合并成 3 条语句写入，不再逐条 2-3 次 IPC
+        await upsertMessagesBatched(serverId.value, remote.messages)
       }
     } finally {
-      target.loading = false
+      patchBucket(conversationId, (bucket) => ({ ...bucket, loading: false }))
     }
   }
 
-  /** 启动后逐个会话预载最近一页消息，点开会话时直接用内存数据渲染 */
+  /** 启动后逐批预载最近一页消息，点开会话时直接用内存数据渲染；单个会话失败不影响其余 */
   async function preload(conversationIds: string[]): Promise<void> {
-    for (const id of conversationIds) {
-      if (buckets.value[id]?.loaded) continue
-      try {
-        await loadInitial(id)
-      } catch {
-        // 单个会话预载失败不影响其余会话，点开时会按需重试
-      }
+    const pending = conversationIds.filter((id) => !buckets.value[id]?.loaded)
+    for (let start = 0; start < pending.length; start += PRELOAD_CONCURRENCY) {
+      const chunk = pending.slice(start, start + PRELOAD_CONCURRENCY)
+      await Promise.allSettled(chunk.map((id) => loadInitial(id)))
     }
   }
 
   async function loadOlder(conversationId: string): Promise<void> {
-    const target = bucket(conversationId)
-    if (target.loading || !target.hasMoreOlder) return
+    const target = buckets.value[conversationId]
+    if (!target || target.loading || !target.hasMoreOlder) return
     const oldest = target.messages.find((m) => m.seq > 0)
     if (!oldest) return
 
-    target.loading = true
+    patchBucket(conversationId, (bucket) => ({ ...bucket, loading: true }))
     try {
       const remote = await messageApi.page(conversationId, {
         before: oldest.seq,
         limit: 50,
       })
-      target.messages = merge(remote.messages, target.messages)
-      target.hasMoreOlder = remote.hasMore
+      patchBucket(conversationId, (bucket) => ({
+        ...bucket,
+        messages: merge(remote.messages, bucket.messages),
+        hasMoreOlder: remote.hasMore,
+      }))
       if (hasLocalDb() && serverId.value) {
-        for (const message of remote.messages) {
-          await upsertMessage(serverId.value, message)
-        }
+        await upsertMessagesBatched(serverId.value, remote.messages)
       }
     } finally {
-      target.loading = false
+      patchBucket(conversationId, (bucket) => ({ ...bucket, loading: false }))
     }
   }
 
   /** 搜索跳转：把目标消息所在的一段历史补进内存 */
   async function loadAround(conversationId: string, messageId: string): Promise<void> {
-    const target = bucket(conversationId)
-    if (target.messages.some((message) => message.id === messageId)) return
+    if (messagesOf(conversationId).some((message) => message.id === messageId)) return
 
     const result = await messageApi.around(conversationId, messageId)
-    target.messages = merge(target.messages, result.messages)
+    patchBucket(conversationId, (bucket) => ({
+      ...bucket,
+      messages: merge(bucket.messages, result.messages),
+    }))
     if (hasLocalDb() && serverId.value) {
-      for (const message of result.messages) {
-        await upsertMessage(serverId.value, message)
-      }
+      await upsertMessagesBatched(serverId.value, result.messages)
     }
   }
 
@@ -188,12 +198,11 @@ export const useMessagesStore = defineStore('messages', () => {
       localStatus: 'pending',
     }
 
-    const target = bucket(conversationId)
-    // 同 nonce 的残留行（上次重试失败留下的）先清掉，避免一次显示两条
-    target.messages = sortAndTrim([
-      ...target.messages.filter((m) => m.clientNonce !== nonce),
-      optimistic,
-    ])
+    patchBucket(conversationId, (bucket) => ({
+      ...bucket,
+      // 同 nonce 的残留行（上次重试失败留下的）先清掉，避免一次显示两条
+      messages: sortAndTrim([...bucket.messages.filter((m) => m.clientNonce !== nonce), optimistic]),
+    }))
 
     if (hasLocalDb() && serverId.value) {
       await deleteByNonce(serverId.value, nonce)
@@ -220,8 +229,13 @@ export const useMessagesStore = defineStore('messages', () => {
       return confirmed
     } catch (e) {
       const reason = e instanceof Error ? e.message : '发送失败'
-      optimistic.localStatus = 'failed'
-      optimistic.localError = reason
+      // shallowRef 下原地改乐观行属性不会触发更新，整体替换成失败态
+      patchBucket(conversationId, (bucket) => ({
+        ...bucket,
+        messages: bucket.messages.map((m) =>
+          m.id === optimistic.id ? { ...m, localStatus: 'failed', localError: reason } : m,
+        ),
+      }))
       if (hasLocalDb() && serverId.value) {
         await markFailed(serverId.value, optimistic.id, reason)
       }
@@ -233,11 +247,13 @@ export const useMessagesStore = defineStore('messages', () => {
 
   /** 服务端回执：剔除同 nonce 的临时行，再按 id 合并权威消息（不能直接 concat） */
   async function applyConfirmed(conversationId: string, nonce: string, message: Message): Promise<void> {
-    const target = bucket(conversationId)
-    target.messages = merge(
-      target.messages.filter((m) => m.clientNonce !== nonce && m.id !== message.id),
-      [message],
-    )
+    patchBucket(conversationId, (bucket) => ({
+      ...bucket,
+      messages: merge(
+        bucket.messages.filter((m) => m.clientNonce !== nonce && m.id !== message.id),
+        [message],
+      ),
+    }))
 
     if (hasLocalDb() && serverId.value) {
       await confirmPending(serverId.value, nonce, message)
@@ -246,20 +262,32 @@ export const useMessagesStore = defineStore('messages', () => {
 
   /** 收到其他端或本端广播的新消息 */
   async function applyCreated(message: Message): Promise<void> {
-    const target = bucket(message.conversationId)
-    target.messages = merge(
-      message.clientNonce ? target.messages.filter((m) => m.clientNonce !== message.clientNonce) : target.messages,
-      [message],
-    )
+    patchBucket(message.conversationId, (bucket) => ({
+      ...bucket,
+      messages: merge(
+        message.clientNonce ? bucket.messages.filter((m) => m.clientNonce !== message.clientNonce) : bucket.messages,
+        [message],
+      ),
+    }))
     if (hasLocalDb() && serverId.value) {
       await upsertMessage(serverId.value, { ...message, localStatus: 'synced' })
     }
   }
 
+  /** 仅内存合并一条更新（已存在的行整体替换）；镜像写入由调用方决定，sync 批量落库时不再单条写 */
+  function mergeUpdated(message: Message): void {
+    if (!buckets.value[message.conversationId]) return
+    patchBucket(message.conversationId, (bucket) => {
+      const index = bucket.messages.findIndex((m) => m.id === message.id)
+      if (index < 0) return bucket
+      const messages = bucket.messages.slice()
+      messages[index] = { ...bucket.messages[index], ...message }
+      return { ...bucket, messages }
+    })
+  }
+
   async function applyUpdated(message: Message): Promise<void> {
-    const target = bucket(message.conversationId)
-    const index = target.messages.findIndex((m) => m.id === message.id)
-    if (index >= 0) target.messages[index] = { ...target.messages[index], ...message }
+    mergeUpdated(message)
     if (hasLocalDb() && serverId.value) {
       await upsertMessage(serverId.value, message)
     }
@@ -296,6 +324,7 @@ export const useMessagesStore = defineStore('messages', () => {
     send,
     applyConfirmed,
     applyCreated,
+    mergeUpdated,
     applyUpdated,
     edit,
     recall,

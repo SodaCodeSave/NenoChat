@@ -50,6 +50,7 @@ import { connectorApi } from '@/api/connectors'
 import { resolveFileUrl } from '@/api/http'
 import { conversationApi, messageApi } from '@/api/endpoints'
 import { postApi } from '@/api/posts'
+import { messagePreview } from '@/composables/conversation'
 import { listPersonas, upsertPersona as upsertPersonaRow } from '@/db/dao/ai'
 import { hasLocalDb } from '@/platform/db'
 import { isTauri } from '@/platform/device'
@@ -90,6 +91,22 @@ interface AiCompleteResult {
 
 const MEMORY_COMPACT_THRESHOLD = 20
 
+/**
+ * rAF 合帧：把逐 token 的流式增量收敛到每帧最多一次响应式写入。
+ * 每个 token 都重建消息对象会让消息列表对着 ~300 行重算一遍布局；
+ * 没有 rAF 的环境（单测）退化为 16ms 定时器。
+ */
+function scheduleFrame(callback: () => void): number {
+  if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(callback)
+  return setTimeout(callback, 16) as unknown as number
+}
+
+function cancelFrame(handle: number | null): void {
+  if (handle == null) return
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(handle)
+  else clearTimeout(handle as unknown as ReturnType<typeof setTimeout>)
+}
+
 /** 识图提示词：描述结果会作为文字注记进入主模型提示词 */
 const VISION_PROMPT =
   '请客观描述这张图片的内容：主体、场景、画面里的文字等关键信息。' +
@@ -106,6 +123,9 @@ export const useAiStore = defineStore('ai', () => {
   const providers = ref<AiProvider[]>([])
   const personas = ref<AiPersona[]>([])
   const globalSettings = ref<AiGlobalSettings | null>(null)
+  /** 角色列表的加载状态：load 守卫用，服务端拉取成功才算 loaded */
+  const loading = ref(false)
+  const loaded = ref(false)
   const streaming = ref<Record<string, { generationId: string; text: string }>>({})
   const generating = ref<Record<string, boolean>>({})
   /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索），用于占位气泡的实时提示 */
@@ -313,35 +333,45 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
-  async function load(): Promise<void> {
-    // 先出本地镜像（断网也有角色列表），再拉服务端覆盖
-    if (hasLocalDb()) {
-      const sid = useServersStore().currentId ?? ''
-      if (sid) {
-        const local = await listPersonas(sid)
-        if (local.length > 0) personas.value = local
-      }
-    }
-
+  async function load(force = false): Promise<void> {
+    // 通讯录与新建聊天每次打开都会调 load，不做守卫的话每次都白拉 3 个接口并重写角色镜像；
+    // 保存角色后的手动刷新传 force。离线时不标记 loaded，联网后再拉。
+    if (loading.value) return
+    if (loaded.value && !force) return
+    loading.value = true
     try {
-      const [providerResult, personaResult] = await Promise.all([
-        aiApi.providers(),
-        aiApi.personas(),
-        loadSettings(),
-      ])
-      providers.value = providerResult.providers
-      personas.value = personaResult.personas
-
+      // 先出本地镜像（断网也有角色列表），再拉服务端覆盖
       if (hasLocalDb()) {
         const sid = useServersStore().currentId ?? ''
         if (sid) {
-          for (const persona of personaResult.personas) {
-            await upsertPersonaRow(sid, persona)
-          }
+          const local = await listPersonas(sid)
+          if (local.length > 0) personas.value = local
         }
       }
-    } catch {
-      /* 离线：保留本地镜像 */
+
+      try {
+        const [providerResult, personaResult] = await Promise.all([
+          aiApi.providers(),
+          aiApi.personas(),
+          loadSettings(),
+        ])
+        providers.value = providerResult.providers
+        personas.value = personaResult.personas
+
+        if (hasLocalDb()) {
+          const sid = useServersStore().currentId ?? ''
+          if (sid) {
+            for (const persona of personaResult.personas) {
+              await upsertPersonaRow(sid, persona)
+            }
+          }
+        }
+        loaded.value = true
+      } catch {
+        /* 离线：保留本地镜像，下次打开再拉 */
+      }
+    } finally {
+      loading.value = false
     }
   }
 
@@ -716,9 +746,28 @@ export const useAiStore = defineStore('ai', () => {
       for (const piece of ready) pushSegment(piece)
     }
 
+    /** 打字气泡文本按帧合并写入；每个 token 都写一次会让消息列表跟着每 token 重排 */
+    let textFrame: number | null = null
+    const flushStreamText = (): void => {
+      cancelFrame(textFrame)
+      textFrame = null
+      const current = streaming.value[conversationId]
+      if (current) current.text = stripStickerMarkers(pending)
+    }
+    const scheduleStreamText = (): void => {
+      if (textFrame != null) return
+      textFrame = scheduleFrame(() => {
+        textFrame = null
+        const current = streaming.value[conversationId]
+        if (current) current.text = stripStickerMarkers(pending)
+      })
+    }
+
     const cleanup = (): void => {
       for (const off of unlisteners) off()
       unlisteners.length = 0
+      cancelFrame(textFrame)
+      textFrame = null
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -726,13 +775,14 @@ export const useAiStore = defineStore('ai', () => {
         if (event.payload.generation_id !== generationId) return
         pending += event.payload.delta
         cutNow(false)
-        const current = streaming.value[conversationId]
-        if (current) current.text = stripStickerMarkers(pending)
+        scheduleStreamText()
       }).then((off) => unlisteners.push(off))
 
       void listen<StreamDone>('ai://done', (event) => {
         if (event.payload.generation_id !== generationId || finished) return
         finished = true
+        // 收尾前把攒着的增量写完，保证尾字不丢
+        flushStreamText()
         cleanup()
         reportUsage({
           conversationId,
@@ -753,6 +803,7 @@ export const useAiStore = defineStore('ai', () => {
       void listen<StreamError>('ai://error', (event) => {
         if (event.payload.generation_id !== generationId || finished) return
         finished = true
+        flushStreamText()
         cleanup()
         reject(new Error(event.payload.message))
       }).then((off) => unlisteners.push(off))
@@ -770,6 +821,7 @@ export const useAiStore = defineStore('ai', () => {
       }).catch((e: unknown) => {
         if (finished) return
         finished = true
+        flushStreamText()
         cleanup()
         reject(e instanceof Error ? e : new Error('生成失败'))
       })
@@ -835,7 +887,38 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
-  /** 服务端逐字推送：增量接到打字气泡上 */
+  /* ---------- 服务端逐字增量的合帧缓冲 ----------
+     每 token 直接写 streaming 会让消息列表跟着每 token 重算布局；
+     先攒进普通 Map，rAF 一帧最多往响应式对象写一次。 */
+
+  const pendingDeltas = new Map<string, string>()
+  const pendingDeltaFrames = new Map<string, number>()
+
+  /** 把攒着的增量写进气泡；顺带取消未触发的合帧 */
+  function flushServerDelta(conversationId: string): void {
+    const frame = pendingDeltaFrames.get(conversationId)
+    if (frame != null) {
+      cancelFrame(frame)
+      pendingDeltaFrames.delete(conversationId)
+    }
+    const buffered = pendingDeltas.get(conversationId)
+    if (buffered == null) return
+    pendingDeltas.delete(conversationId)
+    const current = streaming.value[conversationId]
+    if (current) current.text += buffered
+  }
+
+  /** 丢弃未合帧的增量：换代或切段时，这些文本按旧行为本来就不再展示 */
+  function dropServerDelta(conversationId: string): void {
+    const frame = pendingDeltaFrames.get(conversationId)
+    if (frame != null) {
+      cancelFrame(frame)
+      pendingDeltaFrames.delete(conversationId)
+    }
+    pendingDeltas.delete(conversationId)
+  }
+
+  /** 服务端逐字推送：增量接到打字气泡上（按帧合并写入） */
   function applyServerDelta(payload: {
     generationId: string
     conversationId: string
@@ -844,10 +927,22 @@ export const useAiStore = defineStore('ai', () => {
   }): void {
     const target = streaming.value[payload.conversationId]
     if (!target || target.generationId !== payload.generationId) {
+      dropServerDelta(payload.conversationId)
       streaming.value[payload.conversationId] = { generationId: payload.generationId, text: payload.delta }
       return
     }
-    target.text += payload.delta
+    pendingDeltas.set(
+      payload.conversationId,
+      (pendingDeltas.get(payload.conversationId) ?? '') + payload.delta,
+    )
+    if (pendingDeltaFrames.has(payload.conversationId)) return
+    pendingDeltaFrames.set(
+      payload.conversationId,
+      scheduleFrame(() => {
+        pendingDeltaFrames.delete(payload.conversationId)
+        flushServerDelta(payload.conversationId)
+      }),
+    )
   }
 
   /** 一段话切好了：清掉气泡里的半截话，正式消息随后由 message.created 下发 */
@@ -858,13 +953,18 @@ export const useAiStore = defineStore('ai', () => {
     text: string
   }): void {
     const target = streaming.value[payload.conversationId]
-    if (target && target.generationId === payload.generationId) target.text = ''
+    if (target && target.generationId === payload.generationId) {
+      dropServerDelta(payload.conversationId)
+      target.text = ''
+    }
   }
 
   function applyServerDone(payload: { generationId: string; conversationId: string }): void {
     const target = streaming.value[payload.conversationId]
     if (target && target.generationId !== payload.generationId) return
     disarmServerWatchdog(payload.conversationId)
+    // 收尾前先把攒着的增量合帧写完，保证尾字不丢
+    flushServerDelta(payload.conversationId)
     delete streaming.value[payload.conversationId]
     generating.value[payload.conversationId] = false
     setConnectorLive(payload.conversationId, null)
@@ -1293,13 +1393,9 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
-  /** 引用块里展示的摘要，与消息列表保持同一套收敛规则 */
+  /** 引用块里展示的摘要：直接复用消息列表的 messagePreview，不再维护第二份收敛规则 */
   function previewOfMessage(message: Message): string {
-    if (message.deletedAt) return '消息已撤回'
-    if (message.type === 'image') return '[图片]'
-    if (message.type === 'file') return '[文件]'
-    if (message.type === 'sticker') return '[表情]'
-    return message.content.trim().slice(0, 80) || '（空消息）'
+    return messagePreview(message)
   }
 
   /** 模型偶尔带引号或换行，落库前收敛成一句话 */
@@ -1422,6 +1518,8 @@ export const useAiStore = defineStore('ai', () => {
     providers,
     personas,
     globalSettings,
+    loading,
+    loaded,
     streaming,
     generating,
     connectorLive,

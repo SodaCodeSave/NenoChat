@@ -3,13 +3,31 @@ import { computed, ref } from 'vue'
 import type { ConversationSummary } from '@/api/endpoints'
 import { conversationApi, messageApi } from '@/api/endpoints'
 import {
-  applyConversationSummary,
+  applyConversationSummaries,
   listConversations,
   patchConversationUnread,
   upsertConversation,
 } from '@/db/dao/conversations'
 import { hasLocalDb } from '@/platform/db'
 import { useServersStore } from './servers'
+
+/** 字段级相等比较；ConversationSummary 全是原始值字段，逐键 Object.is 即可 */
+function sameSummary(a: ConversationSummary, b: ConversationSummary): boolean {
+  for (const key of Object.keys(a) as Array<keyof ConversationSummary>) {
+    if (!Object.is(a[key], b[key])) return false
+  }
+  return true
+}
+
+/** 刷新结果与内存列表一致时跳过镜像重写：同长度、同 id、逐条字段相等 */
+function sameSummaryList(next: ConversationSummary[], current: ConversationSummary[]): boolean {
+  if (next.length !== current.length) return false
+  const byId = new Map(current.map((item) => [item.id, item]))
+  return next.every((item) => {
+    const existing = byId.get(item.id)
+    return existing ? sameSummary(item, existing) : false
+  })
+}
 
 /** 会话列表：置顶（含 AI 会话）→ 群聊 → 私聊，未读数与 @ 数由服务端聚合 */
 export const useConversationsStore = defineStore('conversations', () => {
@@ -49,24 +67,30 @@ export const useConversationsStore = defineStore('conversations', () => {
     loading.value = true
     try {
       const result = await conversationApi.list()
+      // 列表与内存一致时直接跳过，refresh 在启动/每次进直聊都会跑，没必要反复重写本地库
+      if (sameSummaryList(result.conversations, items.value)) return
       items.value = result.conversations
       if (hasLocalDb()) {
-        for (const summary of result.conversations) {
-          await applyConversationSummary(serverId.value, summary)
-        }
+        // 整份列表合并成少量多行 upsert，一次往返写完
+        await applyConversationSummaries(serverId.value, result.conversations)
       }
     } finally {
       loading.value = false
     }
   }
 
-  async function upsert(conversation: ConversationSummary): Promise<void> {
+  /** 仅内存 upsert（sync 批量落库后统一刷新内存用，不再逐条写镜像） */
+  function upsertLocal(conversation: ConversationSummary): void {
     const index = items.value.findIndex((c) => c.id === conversation.id)
     if (index >= 0) {
       items.value[index] = { ...items.value[index], ...conversation }
     } else {
       items.value = [...items.value, conversation]
     }
+  }
+
+  async function upsert(conversation: ConversationSummary): Promise<void> {
+    upsertLocal(conversation)
     if (hasLocalDb() && serverId.value) {
       await upsertConversation(serverId.value, conversation)
     }
@@ -146,6 +170,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     hydrate,
     refresh,
     upsert,
+    upsertLocal,
     setActive,
     remove,
     markRead,

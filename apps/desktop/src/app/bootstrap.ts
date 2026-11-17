@@ -12,6 +12,9 @@ import { initFileCache } from '@/platform/file-cache'
 
 export type BootstrapStage = 'starting' | 'server' | 'auth' | 'cache' | 'realtime' | 'ready' | 'error'
 
+/** 启动时预载消息的会话数上限：只保最近一屏，避免冷启动把全部历史都拉一遍 */
+const PRELOAD_RECENT = 10
+
 /**
  * 启动顺序：服务器 → 登录态 → 本地镜像 → 实时连接。
  * 首屏始终先读本地 SQLite，网络只做增强，断网也能看到历史。
@@ -46,7 +49,8 @@ export async function bootstrap(
     // 本地镜像先出，再后台刷新，保证列表不会空屏
     void conversations.refresh()
       .catch(() => undefined)
-      .then(() => useMessagesStore().preload(conversations.ordered.map((c) => c.id)))
+      // 只预载最近一屏会话的消息，剩下的点开时再按需拉取
+      .then(() => useMessagesStore().preload(conversations.ordered.slice(0, PRELOAD_RECENT).map((c) => c.id)))
     // 角色列表供通讯录与 AI 分区使用，离线时读本地镜像
     void useAiStore().load().catch(() => undefined)
 

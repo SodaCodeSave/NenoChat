@@ -1,5 +1,5 @@
 import type { Message } from '@nenochat/shared'
-import { dbExecute, dbSelect } from '../../platform/db'
+import { dbExecute, dbExecuteMany, dbSelect, rowPlaceholders } from '../../platform/db'
 
 export interface MessageRow {
   server_id: string
@@ -83,28 +83,54 @@ function params(serverId: string, message: Message): unknown[] {
   ]
 }
 
+const UPSERT_COLUMNS = `(server_id, id, conversation_id, sender_id, sender_type, type, content, meta,
+   reply_to_id, seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at,
+   created_at, updated_at, local_status, local_error)`
+
+const UPSERT_ON_CONFLICT = `ON CONFLICT(server_id, id) DO UPDATE SET
+   content = excluded.content,
+   meta = excluded.meta,
+   reply_to_id = excluded.reply_to_id,
+   seq = excluded.seq,
+   pinned_at = excluded.pinned_at,
+   edited_at = excluded.edited_at,
+   deleted_at = excluded.deleted_at,
+   updated_at = excluded.updated_at,
+   local_status = excluded.local_status,
+   local_error = excluded.local_error`
+
+/** 每行 20 个参数，单语句最多 200 行（4000 参数），远低于 SQLite 默认变量数上限 */
+const UPSERT_CHUNK_ROWS = 200
+
 /** 写入或更新一条消息（含墓碑） */
 export async function upsertMessage(serverId: string, message: Message): Promise<void> {
-  await dbExecute(
-    `INSERT INTO messages
-       (server_id, id, conversation_id, sender_id, sender_type, type, content, meta,
-        reply_to_id, seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at,
-        created_at, updated_at, local_status, local_error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-     ON CONFLICT(server_id, id) DO UPDATE SET
-       content = excluded.content,
-       meta = excluded.meta,
-       reply_to_id = excluded.reply_to_id,
-       seq = excluded.seq,
-       pinned_at = excluded.pinned_at,
-       edited_at = excluded.edited_at,
-       deleted_at = excluded.deleted_at,
-       updated_at = excluded.updated_at,
-       local_status = excluded.local_status,
-       local_error = excluded.local_error`,
-    params(serverId, message),
-  )
-  await indexMessage(serverId, message)
+  await upsertMessagesBatched(serverId, [message])
+}
+
+/**
+ * 批量 upsert 一组消息：拼成多行 INSERT ... ON CONFLICT 加一次性的全文索引
+ * 删除/插入，把每页的镜像写入从 3N 次 IPC 压到 3 次。同一批内同 id 以最后一条为准。
+ * 索引行为与单条 indexMessage 完全一致（先清旧行，墓碑与空文本不入索引）。
+ */
+export async function upsertMessagesBatched(serverId: string, messages: Message[]): Promise<void> {
+  if (messages.length === 0) return
+  // 同 id 的重复行放进同一条多行 upsert 会让 SQLite 报「cannot affect row a second time」，
+  // 先收敛成最后一条（Map 覆盖写），与逐条顺序应用的结果一致
+  if (messages.length > 1) {
+    messages = [...new Map(messages.map((message) => [message.id, message])).values()]
+  }
+  const statements: Array<{ sql: string; params: unknown[] }> = []
+  for (let start = 0; start < messages.length; start += UPSERT_CHUNK_ROWS) {
+    const chunk = messages.slice(start, start + UPSERT_CHUNK_ROWS)
+    statements.push({
+      sql: `INSERT INTO messages ${UPSERT_COLUMNS} VALUES ${rowPlaceholders(chunk.length, COLUMNS)} ${UPSERT_ON_CONFLICT}`,
+      params: chunk.flatMap((message) => params(serverId, message)),
+    })
+    statements.push(ftsDeleteStatement(serverId, chunk))
+    const indexed = chunk.filter((message) => !message.deletedAt && message.content.trim().length > 0)
+    if (indexed.length > 0) statements.push(ftsInsertStatement(serverId, indexed))
+  }
+  await dbExecuteMany(statements)
 }
 
 /** 乐观插入：此时还没有服务端 seq，用本地序号占位保证排在最后 */
@@ -191,16 +217,28 @@ export async function listPinnedMessages(serverId: string, conversationId: strin
 /**
  * 本地全文索引。trigram 分词要求关键词至少 3 个字符，
  * 更短的查询由调用方回退到 LIKE。
+ * fts5 虚表没有唯一约束，写入前必须先清旧行，否则重复索引会翻倍。
  */
-async function indexMessage(serverId: string, message: Message): Promise<void> {
-  await dbExecute('DELETE FROM message_fts WHERE message_id = $1 AND server_id = $2', [message.id, serverId])
-  if (message.deletedAt) return
-  const text = message.content.trim()
-  if (text.length === 0) return
-  await dbExecute(
-    'INSERT INTO message_fts (message_id, server_id, conversation_id, content) VALUES ($1,$2,$3,$4)',
-    [message.id, serverId, message.conversationId, text],
-  )
+function ftsDeleteStatement(serverId: string, chunk: Message[]): { sql: string; params: unknown[] } {
+  const slots = chunk.map((_, index) => `$${index + 2}`)
+  return {
+    sql: `DELETE FROM message_fts WHERE server_id = $1 AND message_id IN (${slots.join(',')})`,
+    params: [serverId, ...chunk.map((message) => message.id)],
+  }
+}
+
+function ftsInsertStatement(serverId: string, chunk: Message[]): { sql: string; params: unknown[] } {
+  const values: string[] = []
+  const params: unknown[] = []
+  chunk.forEach((message, index) => {
+    const base = index * 4
+    values.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4})`)
+    params.push(message.id, serverId, message.conversationId, message.content.trim())
+  })
+  return {
+    sql: `INSERT INTO message_fts (message_id, server_id, conversation_id, content) VALUES ${values.join(',')}`,
+    params,
+  }
 }
 
 export interface SearchHit {

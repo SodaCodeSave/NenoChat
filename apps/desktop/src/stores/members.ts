@@ -12,6 +12,9 @@ export interface MemberWithUser extends Member {
   online?: boolean
 }
 
+/** 没有成员数据的会话共享同一个空索引，避免每次调用都重建 */
+const EMPTY_INDEX: Map<string, MemberWithUser> = new Map()
+
 /** 会话成员与成员资料缓存 */
 export const useMembersStore = defineStore('members', () => {
   const byConversation = ref<Record<string, MemberWithUser[]>>({})
@@ -23,6 +26,23 @@ export const useMembersStore = defineStore('members', () => {
 
   function of(conversationId: string): MemberWithUser[] {
     return byConversation.value[conversationId] ?? []
+  }
+
+  /**
+   * conversationId → userId 的成员索引缓存。
+   * 以成员列表的引用为失效依据：所有成员增删改都会整体替换数组，
+   * 引用一变即重建，与成员 upsert/remove 天然保持同步。
+   */
+  const indexCache = new Map<string, { source: MemberWithUser[]; index: Map<string, MemberWithUser> }>()
+
+  function memberIndex(conversationId: string): Map<string, MemberWithUser> {
+    const list = byConversation.value[conversationId]
+    if (!list) return EMPTY_INDEX
+    const cached = indexCache.get(conversationId)
+    if (cached && cached.source === list) return cached.index
+    const index = new Map(list.map((member) => [member.userId, member]))
+    indexCache.set(conversationId, { source: list, index })
+    return index
   }
 
   const groupedOf = computed(() => (conversationId: string) => {
@@ -77,14 +97,18 @@ export const useMembersStore = defineStore('members', () => {
     }
   }
 
-  async function applyUpserted(conversationId: string, member: Member, user?: PublicUser): Promise<void> {
-    const list = [...of(conversationId)]
+  /** 仅内存 upsert；镜像写入由调用方决定（sync 批量落库后统一刷新内存，不再逐条写） */
+  function upsertLocal(member: Member, user?: PublicUser): void {
+    const list = [...of(member.conversationId)]
     const index = list.findIndex((m) => m.userId === member.userId)
     const merged: MemberWithUser = { ...member, user: user ?? profiles.value[member.userId] ?? null }
     if (index >= 0) list[index] = merged
     else list.push(merged)
-    byConversation.value[conversationId] = list
+    byConversation.value[member.conversationId] = list
+  }
 
+  async function applyUpserted(conversationId: string, member: Member, user?: PublicUser): Promise<void> {
+    upsertLocal(member, user)
     if (user) profiles.value[user.id] = user
     if (hasLocalDb() && serverId.value) {
       await upsertMember(serverId.value, member)
@@ -92,8 +116,13 @@ export const useMembersStore = defineStore('members', () => {
     }
   }
 
-  async function applyRemoved(conversationId: string, userId: string): Promise<void> {
+  /** 仅内存移除；镜像写入由调用方决定 */
+  function removeLocal(conversationId: string, userId: string): void {
     byConversation.value[conversationId] = of(conversationId).filter((m) => m.userId !== userId)
+  }
+
+  async function applyRemoved(conversationId: string, userId: string): Promise<void> {
+    removeLocal(conversationId, userId)
     if (hasLocalDb() && serverId.value) await markMemberLeft(serverId.value, conversationId, userId)
   }
 
@@ -109,6 +138,7 @@ export const useMembersStore = defineStore('members', () => {
     byConversation.value = {}
     profiles.value = {}
     online.value = {}
+    indexCache.clear()
   }
 
   return {
@@ -117,8 +147,11 @@ export const useMembersStore = defineStore('members', () => {
     online,
     loading,
     of,
+    memberIndex,
     groupedOf,
     load,
+    upsertLocal,
+    removeLocal,
     applyUpserted,
     applyRemoved,
     setOnline,

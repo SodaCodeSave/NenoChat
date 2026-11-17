@@ -25,6 +25,8 @@ const POLICY_KEY = 'nenochat.attachmentCache.policy'
 const MAX_SINGLE_BYTES = 32 * 1024 * 1024
 /** 访问时间写回节流：同一文件 1 分钟内重复渲染不重复写库 */
 const TOUCH_INTERVAL_MS = 60_000
+/** 内存里 blob URL 的上限：超出的按 LRU 撤销，IndexedDB 里的 blob 还在，重读很便宜 */
+const MAX_OBJECT_URLS = 100
 
 interface CacheEntry extends CachedFileMeta {}
 
@@ -139,6 +141,18 @@ function touch(key: string): void {
   void writeEntryMeta(entry)
 }
 
+/** 记录新创建的 blob URL；超过容量时撤销并丢弃最老的条目（Map 迭代按插入序，天然是 LRU） */
+function rememberObjectUrl(key: string, url: string): void {
+  objectUrls.set(key, url)
+  while (objectUrls.size > MAX_OBJECT_URLS) {
+    const oldest = objectUrls.keys().next().value
+    if (oldest === undefined || oldest === key) break
+    const stale = objectUrls.get(oldest)
+    objectUrls.delete(oldest)
+    if (stale) URL.revokeObjectURL(stale)
+  }
+}
+
 async function deleteEntry(key: string): Promise<void> {
   const entry = metaIndex.get(key)
   if (entry) {
@@ -229,6 +243,9 @@ export async function cachedObjectUrl(rawUrl: string): Promise<string | null> {
   const key = keyFor(rawUrl)
   const existing = objectUrls.get(key)
   if (existing) {
+    // 命中后重新插入刷新 LRU 位次
+    objectUrls.delete(key)
+    objectUrls.set(key, existing)
     touch(key)
     return existing
   }
@@ -240,7 +257,7 @@ export async function cachedObjectUrl(rawUrl: string): Promise<string | null> {
     return null
   }
   const url = URL.createObjectURL(blob)
-  objectUrls.set(key, url)
+  rememberObjectUrl(key, url)
   touch(key)
   return url
 }

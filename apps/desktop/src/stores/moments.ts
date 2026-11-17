@@ -3,6 +3,21 @@ import { computed, ref } from 'vue'
 import type { Post, PostComment } from '@nenochat/shared'
 import { postApi } from '@/api/posts'
 
+/** 内存里最多保留的动态条数：动态是浏览型内容，老帖子滚出去就好 */
+const MAX_POSTS = 150
+/** 每条帖子在内存里保留的评论上限：取最近一段，评论总数仍以服务端的 commentCount 为准 */
+const MAX_COMMENTS_PER_POST = 30
+
+/** 动态列表按 createdAt 倒序，直接截掉尾部最老的 */
+function trimPosts(list: Post[]): Post[] {
+  return list.length > MAX_POSTS ? list.slice(0, MAX_POSTS) : list
+}
+
+/** 评论按时间正序追加，保留最近的若干条 */
+function trimComments(list: PostComment[]): PostComment[] {
+  return list.length > MAX_COMMENTS_PER_POST ? list.slice(list.length - MAX_COMMENTS_PER_POST) : list
+}
+
 /**
  * 动态空间状态。
  * 在线优先：首屏从服务端拉，之后由 WS 事件增量维护；
@@ -24,7 +39,7 @@ export const useMomentsStore = defineStore('moments', () => {
     error.value = null
     try {
       const result = await postApi.feed(reset ? undefined : posts.value[posts.value.length - 1]?.createdAt)
-      posts.value = reset ? result.posts : mergePosts(posts.value, result.posts)
+      posts.value = trimPosts(reset ? result.posts : mergePosts(posts.value, result.posts))
       hasMore.value = result.hasMore
     } catch (e) {
       error.value = e instanceof Error ? e.message : '读取动态失败'
@@ -89,7 +104,8 @@ export const useMomentsStore = defineStore('moments', () => {
     if (comments.value[postId]) return
     try {
       const result = await postApi.comments(postId)
-      comments.value[postId] = result.comments
+      comments.value[postId] = trimComments(result.comments)
+      // 计数用全量长度而不是截断后的列表长度
       const post = posts.value.find((item) => item.id === postId)
       if (post) post.commentCount = result.comments.length
     } catch (e) {
@@ -110,7 +126,7 @@ export const useMomentsStore = defineStore('moments', () => {
   /* --------------------------- WS 事件入口 --------------------------- */
 
   function onCreated(post: Post): void {
-    posts.value = mergePosts(posts.value, [post])
+    posts.value = trimPosts(mergePosts(posts.value, [post]))
   }
 
   function onUpdated(post: Post): void {
@@ -145,10 +161,11 @@ export const useMomentsStore = defineStore('moments', () => {
     const list = comments.value[comment.postId]
 
     if (list) {
-      // 已经展开评论区：以列表长度为准，同时避免 WS 回显造成重复
+      // 已经展开评论区：追加并只保留最近的若干条，同时避免 WS 回显造成重复
       if (!list.some((item) => item.id === comment.id)) {
-        comments.value[comment.postId] = [...list, comment]
-        if (post) post.commentCount = comments.value[comment.postId]!.length
+        comments.value[comment.postId] = trimComments([...list, comment])
+        // commentCount 以服务端推来的累计值为准，不被内存截断列表拉低
+        if (post) post.commentCount = Math.max(post.commentCount, comments.value[comment.postId]!.length)
       }
       return
     }
