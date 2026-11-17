@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   buildChatMessages,
   buildBilibiliSummaryPrompt,
+  buildPageSummaryPrompt,
   buildCompactionPrompt,
   buildGroupPrompt,
   buildMomentCommentPrompt,
@@ -14,11 +15,14 @@ import {
   cutStreamingSegments,
   dayKeyOf,
   estimateTokens,
+  extractUrls,
   findBilibiliInput,
+  isBilibiliUrl,
   isSkipReply,
   minutesOfLocalDay,
   parseScheduleItems,
   renderBilibiliContext,
+  renderFetchedPagesContext,
   segmentDelay,
   SEGMENT_REPLY_DEFAULTS,
   splitSegments,
@@ -401,51 +405,79 @@ export const useAiStore = defineStore('ai', () => {
      */
     const contextBlocks: string[] = []
 
+    /** 本机密钥复用于 B 站/网页正文的总结，失败返回 null */
+    const summarizeLocally = async (prompt: string, refId: string): Promise<string | null> => {
+      if (!provider || !apiKey) return null
+      const model = persona.modelOverride ?? provider.model
+      try {
+        const result = await invoke<AiCompleteResult>('ai_complete', {
+          baseUrl: provider.baseUrl,
+          apiKey,
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          maxTokens: 900,
+          jsonMode: false,
+        })
+        reportUsage({
+          conversationId,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'summary',
+          refId,
+          model,
+          usage: result.usage,
+        })
+        return result.content.trim()
+      } catch {
+        return null
+      }
+    }
+
     const videoInput = findBilibiliInput(userInput)
     if (videoInput) {
       try {
         const { material } = await connectorApi.prepareBilibili(videoInput)
         // 服务端没有缓存时用本机密钥总结一次，结果回传服务端按视频去重
-        if (!material.summary?.trim() && provider && apiKey) {
-          const summaryModel = persona.modelOverride ?? provider.model
-          try {
-            const result = await invoke<AiCompleteResult>('ai_complete', {
-              baseUrl: provider.baseUrl,
-              apiKey,
-              model: summaryModel,
-              messages: [{ role: 'user', content: buildBilibiliSummaryPrompt(material) }],
-              temperature: 0.3,
-              maxTokens: 700,
-              jsonMode: false,
-            })
-            const summary = result.content.trim()
-            if (summary) {
-              material.summary = summary
-              void connectorApi
-                .saveBilibiliSummary({
-                  videoId: material.video.bvid,
-                  summary,
-                  model: summaryModel,
-                })
-                .catch(() => undefined)
-            }
-            reportUsage({
-              conversationId,
-              personaId: persona.id,
-              providerId: provider.id,
-              kind: 'summary',
-              refId: material.video.bvid,
-              model: summaryModel,
-              usage: result.usage,
-            })
-          } catch {
-            /* 总结失败时仍注入标题、简介与热评 */
+        if (!material.summary?.trim()) {
+          const summary = await summarizeLocally(
+            buildBilibiliSummaryPrompt(material),
+            material.video.bvid,
+          )
+          if (summary) {
+            material.summary = summary
+            void connectorApi
+              .saveBilibiliSummary({
+                videoId: material.video.bvid,
+                summary,
+                model: persona.modelOverride ?? provider?.model,
+              })
+              .catch(() => undefined)
           }
         }
         contextBlocks.push(renderBilibiliContext(material))
       } catch {
         /* 抓取失败不注入 */
       }
+    }
+
+    // 只抓当前这条用户消息里的非 B 站链接，最多 3 条；单条失败不影响其他链接
+    let connectorFetchContext: string | null = null
+    const pageUrls = extractUrls(userInput)
+      .filter((url) => !isBilibiliUrl(url))
+      .slice(0, 3)
+    if (pageUrls.length > 0 && provider && apiKey) {
+      const summaries: Array<{ url: string; title: string; summary: string }> = []
+      for (const url of pageUrls) {
+        try {
+          const { page } = await connectorApi.fetchPage(url)
+          const summary = (await summarizeLocally(buildPageSummaryPrompt(page), url)) || page.content
+          summaries.push({ url: page.url, title: page.title, summary })
+        } catch {
+          /* 单条抓取/总结失败跳过 */
+        }
+      }
+      connectorFetchContext = renderFetchedPagesContext(summaries) || null
     }
 
     if (shouldSearchWeb(userInput)) {
@@ -473,6 +505,7 @@ export const useAiStore = defineStore('ai', () => {
       schedule,
       scheduleNowMinutes: minutesOfLocalDay(),
       connectorContext,
+      connectorFetchContext,
     })
 
     return { chat, memories }

@@ -38,6 +38,10 @@ export const ConnectorSearchSchema = z.object({
   query: z.string().trim().min(1).max(128),
 })
 
+export const ConnectorFetchSchema = z.object({
+  url: z.string().trim().min(8).max(8192),
+})
+
 export const BilibiliPrepareSchema = z.object({
   url: z.string().trim().min(8).max(1024),
 })

@@ -1,16 +1,28 @@
 import {
+  buildPageSummaryPrompt,
+  extractUrls,
   findBilibiliInput,
+  isBilibiliUrl,
   renderBilibiliContext,
+  renderFetchedPagesContext,
   renderWebSearchContext,
   shouldSearchWeb,
+  type FetchedPageSummary,
 } from '@nenochat/shared'
 import type { DB } from '../db'
 import * as connectorService from './connector-service'
 import * as bilibiliService from './bilibili-service'
 
 export interface ConnectorContextOptions {
-  /** B 站总结模型通道：服务端用托管密钥，客户端模式不传（由客户端自己总结） */
+  /** 总结模型通道：服务端用托管密钥；客户端模式不传（由客户端自己总结） */
   summarize?: bilibiliService.VideoSummarizer
+}
+
+export interface ConnectorContextResult {
+  /** B 站视频与网页搜索结果 */
+  context: string | null
+  /** 用户消息里链接的网页正文摘要，独立 token 预算 */
+  fetchContext: string | null
 }
 
 /**
@@ -22,8 +34,9 @@ export async function buildConnectorContext(
   ownerId: string,
   text: string,
   options: ConnectorContextOptions = {},
-): Promise<string | null> {
+): Promise<ConnectorContextResult> {
   const blocks: string[] = []
+  let fetchContext: string | null = null
 
   const videoInput = findBilibiliInput(text)
   if (videoInput) {
@@ -37,6 +50,36 @@ export async function buildConnectorContext(
       }
     } catch {
       /* 抓取或总结失败不阻断对话 */
+    }
+  }
+
+  // 只抓当前这条用户消息里的非 B 站链接，最多 3 条；B 站链接走上面的视频流程
+  const pageUrls = extractUrls(text)
+    .filter((url) => !isBilibiliUrl(url))
+    .slice(0, 3)
+  if (pageUrls.length > 0 && options.summarize) {
+    try {
+      const row = connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
+      if (row) {
+        connectorService.takeRateLimit(`ai-fetch:${ownerId}`, 20, 60_000)
+        const summaries: FetchedPageSummary[] = []
+        for (const url of pageUrls) {
+          try {
+            const page = await connectorService.fetchDeepSeekPage(row, url)
+            const summarized = await options.summarize(buildPageSummaryPrompt(page))
+            summaries.push({
+              url: page.url,
+              title: page.title,
+              summary: summarized.text.trim() || page.content,
+            })
+          } catch {
+            /* 单条抓取/总结失败不影响其他链接 */
+          }
+        }
+        fetchContext = renderFetchedPagesContext(summaries) || null
+      }
+    } catch {
+      /* 连接器不可用或限流时静默跳过 */
     }
   }
 
@@ -55,5 +98,8 @@ export async function buildConnectorContext(
     }
   }
 
-  return blocks.length > 0 ? blocks.join('\n\n') : null
+  return {
+    context: blocks.length > 0 ? blocks.join('\n\n') : null,
+    fetchContext,
+  }
 }

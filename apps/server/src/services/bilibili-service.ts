@@ -118,6 +118,8 @@ async function fetchVideoInfo(
     duration: data.duration ?? 0,
     pubDate: data.pubdate ?? 0,
     url: `https://www.bilibili.com/video/${data.bvid}`,
+    page: 1,
+    cid: data.cid ?? 0,
   }
   return { info, cid: data.cid ?? 0 }
 }

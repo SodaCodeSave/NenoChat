@@ -52,6 +52,8 @@ export const AI_CONTEXT_BUDGET = {
   recent: 3000,
   /** 连接器检索到的外部资料（搜索结果 / B 站视频内容） */
   connector: 1600,
+  /** 用户消息里链接的网页正文摘要，独立预算，不挤占搜索/B 站资料 */
+  connectorFetch: 1200,
 } as const
 
 /** 触发记忆压缩的阈值 */

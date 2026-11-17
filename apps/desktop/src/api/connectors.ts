@@ -4,6 +4,7 @@ import {
   type Connector,
   type ConnectorSearchResult,
   type ConnectorType,
+  type FetchedPage,
   type LinkPreview,
 } from '@nenochat/shared'
 import { http } from './http'
@@ -39,6 +40,10 @@ export const connectorApi = {
   /** 用已启用的 DeepSeek 搜索连接器检索网页 */
   search: (query: string) =>
     http.post<{ results: ConnectorSearchResult[] }>(p('/connectors/search'), { query }),
+
+  /** 用 DeepSeek fetch 抓取网页正文，客户端本地总结后注入 */
+  fetchPage: (url: string) =>
+    http.post<{ page: FetchedPage }>(p('/connectors/deepseek/fetch'), { url }),
 
   /** 抓取 B 站视频材料；服务端会做缓存 */
   prepareBilibili: (url: string) =>

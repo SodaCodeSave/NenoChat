@@ -635,6 +635,10 @@ export interface BilibiliVideoInfo {
   duration: number
   pubDate: number
   url: string
+  /** 当前抓取的 P 序号（从 1 开始） */
+  page: number
+  /** 当前 P 的 cid，字幕必须按它取 */
+  cid: number
 }
 
 export interface BilibiliComment {
@@ -652,6 +656,13 @@ export interface BilibiliVideoMaterial {
   summary: string | null
   summaryModel?: string | null
   summaryUpdatedAt?: number | null
+}
+
+/** DeepSeek fetch 抓到的网页正文 */
+export interface FetchedPage {
+  url: string
+  title: string
+  content: string
 }
 
 /** 聊天链接卡片：B 站视频卡片或通用网页卡片 */

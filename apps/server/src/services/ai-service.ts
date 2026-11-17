@@ -919,16 +919,16 @@ export async function generateOnServer(
     localDayKey(Date.now(), TZ_OFFSET_MIN),
   )
 
-  // 连接器资料（网页搜索 / B 站视频）只进提示词，失败不影响回复
+  // 连接器资料（网页搜索 / B 站视频 / 消息内链接正文）只进提示词，失败不影响回复
   const summaryModel = persona.model_override ?? provider.model
-  const connectorContext = await buildConnectorContext(db, input.userId, input.content, {
+  const connector = await buildConnectorContext(db, input.userId, input.content, {
     summarize: async (prompt) => {
       const result = await callUpstream({
         baseUrl: provider.base_url,
         apiKey,
         model: summaryModel,
         temperature: 0.3,
-        maxTokens: 700,
+        maxTokens: 900,
         messages: [{ role: 'user', content: prompt }],
         record: {
           db,
@@ -957,7 +957,8 @@ export async function generateOnServer(
     stickers: aiStickerOptions(db, input.userId),
     schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
-    connectorContext,
+    connectorContext: connector.context,
+    connectorFetchContext: connector.fetchContext,
   })
 
   const settings = aiRepo.readGlobalSettings(db, input.userId)

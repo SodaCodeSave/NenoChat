@@ -4,6 +4,7 @@ import type {
   ConnectorSearchResult,
   ConnectorSecretMask,
   ConnectorType,
+  FetchedPage,
 } from '@nenochat/shared'
 import type { DB } from '../db'
 import * as repo from '../db/repo/connectors'
@@ -340,6 +341,14 @@ export function normalizeSearchResults(payload: DeepSeekSearchPayload): Connecto
     }))
 }
 
+/** 兼容用户填 api.deepseek.com、/v1 或完整 tools 路径 */
+function deepseekUrl(config: ConnectorConfig, endpoint: 'tools/search' | 'tools/fetch'): string {
+  const base = (config.baseUrl || DEFAULTS.deepseek_search.baseUrl).replace(/\/$/, '')
+  if (base.endsWith(`/${endpoint}`)) return base
+  if (base.endsWith('/v1')) return `${base}/${endpoint}`
+  return `${base}/v1/${endpoint}`
+}
+
 export async function searchDeepSeek(
   row: repo.ConnectorRow,
   query: string,
@@ -348,12 +357,7 @@ export async function searchDeepSeek(
   const config = parseConfig(row)
   const secret = readConnectorSecret(row)
   if (!secret.apiKey) throw err.validation('该连接器没有保存 API Key')
-  const base = (config.baseUrl || DEFAULTS.deepseek_search.baseUrl).replace(/\/$/, '')
-  const url = base.endsWith('/tools/search')
-    ? base
-    : base.endsWith('/v1')
-      ? `${base}/tools/search`
-      : `${base}/v1/tools/search`
+  const url = deepseekUrl(config, 'tools/search')
 
   const payload = await fetchConnectorJson<DeepSeekSearchPayload>(url, {
     method: 'POST',
@@ -368,6 +372,39 @@ export async function searchDeepSeek(
     }),
   })
   return normalizeSearchResults(payload)
+}
+
+interface DeepSeekFetchPayload {
+  title?: string
+  content?: string
+}
+
+/** 复用 DeepSeek 连接器抓取网页正文（Markdown） */
+export async function fetchDeepSeekPage(
+  row: repo.ConnectorRow,
+  url: string,
+): Promise<FetchedPage> {
+  const config = parseConfig(row)
+  const secret = readConnectorSecret(row)
+  if (!secret.apiKey) throw err.validation('该连接器没有保存 API Key')
+
+  const payload = await fetchConnectorJson<DeepSeekFetchPayload>(
+    deepseekUrl(config, 'tools/fetch'),
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${secret.apiKey}`,
+      },
+      body: JSON.stringify({ url }),
+      timeoutMs: 20_000,
+      maxBytes: 8 * 1024 * 1024,
+    },
+  )
+  if (typeof payload.content !== 'string') {
+    throw new ConnectorRequestError('网页抓取失败：上游没有返回正文')
+  }
+  return { url, title: payload.title ?? '', content: payload.content }
 }
 
 interface BilibiliViewPayload {

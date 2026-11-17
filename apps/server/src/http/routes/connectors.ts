@@ -4,6 +4,7 @@ import {
   BilibiliSummaryQuerySchema,
   BilibiliSummarySaveSchema,
   ConnectorCreateSchema,
+  ConnectorFetchSchema,
   ConnectorPatchSchema,
   ConnectorSearchSchema,
   ConnectorToggleSchema,
@@ -62,6 +63,16 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     const input = parse(ConnectorSearchSchema, request.body)
     const results = await connectorService.searchWithEnabledConnector(db, userId, input.query)
     return { results }
+  })
+
+  /** 用 DeepSeek fetch 抓取网页正文；客户端模式拿到正文后本地总结再注入 */
+  app.post('/connectors/deepseek/fetch', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(ConnectorFetchSchema, request.body)
+    const row = connectorService.enabledConnectorOfType(db, userId, 'deepseek_search')
+    if (!row) throw err.validation('还没有启用 DeepSeek 搜索连接器')
+    connectorService.takeRateLimit(`fetch:${userId}`, 20, 60_000)
+    return { page: await connectorService.fetchDeepSeekPage(row, input.url) }
   })
 
   /** 抓取 B 站视频信息、字幕/热评与已缓存的总结 */

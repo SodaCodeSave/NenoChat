@@ -1,6 +1,7 @@
 import type {
   BilibiliVideoMaterial,
   ConnectorSearchResult,
+  FetchedPage,
 } from '../entities'
 
 /** 从一段文本里挑出 http(s) 链接，去掉末尾的中英文标点 */
@@ -69,6 +70,16 @@ export function findBilibiliInput(text: string): string | null {
     if (/^https?:\/\/(?:b23\.tv|bili2233\.cn)\//i.test(url)) return url
   }
   return findBilibiliVideoId(text)
+}
+
+/** 是否为 B 站链接（含短链），用于和网页正文抓取分流 */
+export function isBilibiliUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    return /(^|\.)bilibili\.com$/.test(host) || host === 'b23.tv' || host === 'bili2233.cn'
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -186,4 +197,36 @@ export function buildBilibiliSummaryPrompt(material: BilibiliVideoMaterial): str
     '请用中文写一段 200-400 字的视频大致内容总结：结合标题、简介与热评推断主题与看点，' +
       '明确说明这是基于简介与评论的归纳、不是逐字内容，不要编造具体台词或画面细节。',
   ].join('\n\n')
+}
+
+/** 网页正文很长，先总结再注入；要求只保留和正文一致的信息 */
+export function buildPageSummaryPrompt(page: FetchedPage): string {
+  return [
+    `网页标题：${page.title || '（无标题）'}`,
+    `网页地址：${page.url}`,
+    `正文（Markdown）：\n${clip(page.content, 12_000)}`,
+    '请用中文写一段 200-400 字的网页内容摘要，说明页面主要讲了什么、关键结论或数据。' +
+      '只依据给到的正文，不要编造正文里没有的事实、数字或链接。',
+  ].join('\n\n')
+}
+
+export interface FetchedPageSummary {
+  url: string
+  title: string
+  summary: string
+}
+
+/** 把用户消息里链接的网页摘要渲染成系统块 */
+export function renderFetchedPagesContext(pages: FetchedPageSummary[]): string {
+  const usable = pages.filter((page) => page.url && page.summary.trim())
+  if (usable.length === 0) return ''
+  const lines = usable.map((page, index) => {
+    const title = page.title.trim() || page.url
+    return `${index + 1}. ${title}\n   URL：${page.url}\n   摘要：${clip(page.summary, 900)}`
+  })
+  return [
+    '【用户链接的网页内容】',
+    '下面是用户本条消息里链接的网页正文摘要，回答问题时可参考；不要编造摘要里没有的内容。',
+    ...lines,
+  ].join('\n')
 }

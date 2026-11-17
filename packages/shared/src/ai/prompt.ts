@@ -49,6 +49,8 @@ export interface BuildContextInput {
   scheduleNowMinutes?: number
   /** 连接器检索到的外部资料（网页搜索、B 站视频内容），只给模型看 */
   connectorContext?: string | null
+  /** 用户消息里链接的网页正文摘要，独立预算，与 connectorContext 同一注入通道 */
+  connectorFetchContext?: string | null
   now?: number
 }
 
@@ -192,6 +194,16 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
       content: truncateByToken(
         input.connectorContext.trim(),
         AI_CONTEXT_BUDGET.connector,
+      ),
+    })
+  }
+
+  if (input.connectorFetchContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorFetchContext.trim(),
+        AI_CONTEXT_BUDGET.connectorFetch,
       ),
     })
   }

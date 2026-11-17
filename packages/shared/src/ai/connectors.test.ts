@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildBilibiliSummaryPrompt,
+  buildPageSummaryPrompt,
   extractUrls,
   findBilibiliInput,
   findBilibiliVideoId,
+  isBilibiliUrl,
   parseBilibiliVideoId,
   renderBilibiliContext,
+  renderFetchedPagesContext,
   renderWebSearchContext,
   shouldSearchWeb,
 } from './connectors'
@@ -95,6 +98,41 @@ describe('renderWebSearchContext', () => {
   })
 })
 
+describe('网页正文摘要', () => {
+  it('isBilibiliUrl 区分 B 站与普通链接', () => {
+    expect(isBilibiliUrl('https://www.bilibili.com/video/BV1GJ411x7h7')).toBe(true)
+    expect(isBilibiliUrl('https://b23.tv/abc')).toBe(true)
+    expect(isBilibiliUrl('https://example.com/post')).toBe(false)
+    expect(isBilibiliUrl('not a url')).toBe(false)
+  })
+
+  it('总结提示词带上标题、地址与正文', () => {
+    const prompt = buildPageSummaryPrompt({
+      url: 'https://example.com/a',
+      title: '示例文章',
+      content: '# 正文内容',
+    })
+    expect(prompt).toContain('示例文章')
+    expect(prompt).toContain('https://example.com/a')
+    expect(prompt).toContain('# 正文内容')
+    expect(prompt).toContain('不要编造')
+  })
+
+  it('渲染多条网页摘要并过滤空摘要', () => {
+    const text = renderFetchedPagesContext([
+      { url: 'https://example.com/a', title: '文章 A', summary: '摘要 A' },
+      { url: 'https://example.com/b', title: '文章 B', summary: '' },
+    ])
+    expect(text).toContain('【用户链接的网页内容】')
+    expect(text).toContain('文章 A')
+    expect(text).not.toContain('文章 B')
+  })
+
+  it('没有可用摘要时返回空串', () => {
+    expect(renderFetchedPagesContext([])).toBe('')
+  })
+})
+
 describe('B 站上下文与总结提示词', () => {
   const material: BilibiliVideoMaterial = {
     video: {
@@ -107,6 +145,8 @@ describe('B 站上下文与总结提示词', () => {
       duration: 100,
       pubDate: 0,
       url: 'https://www.bilibili.com/video/BV1GJ411x7h7',
+      page: 1,
+      cid: 123,
     },
     transcript: '',
     comments: [{ author: '观众 A', content: '很好看', like: 10 }],
