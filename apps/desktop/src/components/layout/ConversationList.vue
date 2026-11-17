@@ -8,14 +8,12 @@ import ConversationItem from './ConversationItem.vue'
 import NewChatDialog from './NewChatDialog.vue'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMessagesStore } from '@/stores/messages'
-import { useNotificationsStore } from '@/stores/notifications'
 import { useUiStore } from '@/stores/ui'
 import { conversationTitle } from '@/composables/conversation'
 
 const router = useRouter()
 const conversations = useConversationsStore()
 const messages = useMessagesStore()
-const notifications = useNotificationsStore()
 const ui = useUiStore()
 
 /** 分组标题上的未读汇总，入口角标之外再给一层细分 */
@@ -107,15 +105,6 @@ onMounted(() => {
       <div class="mb-2 flex items-center justify-between">
         <h1 class="text-[21px] font-semibold text-text-strong">消息</h1>
         <div class="flex items-center gap-1">
-          <span class="relative">
-            <IconButton icon="bell" label="通知中心" :size="19" @click="notifications.togglePanel()" />
-            <span
-              v-if="notifications.unreadTotal > 0"
-              class="pointer-events-none absolute -top-1 -right-1"
-            >
-              <Badge :count="notifications.unreadTotal" />
-            </span>
-          </span>
           <IconButton icon="search" label="全局搜索" :size="19" @click="ui.commandOpen = true" />
           <IconButton icon="plus" label="发起新会话" :size="20" @click="dialogOpen = true" />
         </div>

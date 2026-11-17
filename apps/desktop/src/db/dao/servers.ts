@@ -92,7 +92,6 @@ export async function removeServerCascade(serverId: string): Promise<void> {
     'ai_personas',
     'ai_memory_summaries',
     'ai_memory_facts',
-    'notifications',
     'app_settings',
     'outbox',
     'sync_state',

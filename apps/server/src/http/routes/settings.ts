@@ -4,18 +4,12 @@ import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import {
-  ensureNotificationSettings,
   mapNotificationSettings,
   updateNotificationSettings,
 } from '../../db/repo/settings'
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
-
-  app.get('/settings/notifications', async (request) => {
-    const userId = await requireUserId(request)
-    return { notificationSettings: mapNotificationSettings(ensureNotificationSettings(db, userId)) }
-  })
 
   app.patch('/settings/notifications', async (request) => {
     const userId = await requireUserId(request)

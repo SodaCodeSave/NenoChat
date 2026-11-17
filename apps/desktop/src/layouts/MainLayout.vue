@@ -9,8 +9,6 @@ import ConversationList from '@/components/layout/ConversationList.vue'
 import MobileTabBar from '@/components/layout/MobileTabBar.vue'
 import SearchDialog from '@/components/layout/SearchDialog.vue'
 import TitleBar from '@/components/layout/TitleBar.vue'
-import NotificationCenter from '@/components/notifications/NotificationCenter.vue'
-import NotificationToast from '@/components/notifications/NotificationToast.vue'
 
 const ui = useUiStore()
 const route = useRoute()
@@ -70,8 +68,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       <MobileTabBar v-if="tabVisible" />
 
       <SearchDialog />
-      <NotificationCenter />
-      <NotificationToast />
     </div>
   </div>
 </template>

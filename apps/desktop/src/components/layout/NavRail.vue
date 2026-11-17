@@ -8,7 +8,6 @@ import type { IconName } from '@/components/ui/icons'
 import { useAuthStore } from '@/stores/auth'
 import { useContactsStore } from '@/stores/contacts'
 import { useConversationsStore } from '@/stores/conversations'
-import { useNotificationsStore } from '@/stores/notifications'
 import { useSyncStore } from '@/stores/sync'
 import { useUiStore } from '@/stores/ui'
 
@@ -18,7 +17,6 @@ const router = useRouter()
 const auth = useAuthStore()
 const contacts = useContactsStore()
 const conversations = useConversationsStore()
-const notifications = useNotificationsStore()
 const sync = useSyncStore()
 
 onMounted(() => {
@@ -122,22 +120,6 @@ const connectionTone = computed(() => {
     </button>
 
     <div class="mt-auto flex flex-col items-center gap-1">
-      <button
-        type="button"
-        class="relative grid h-9 w-9 place-items-center rounded-xl transition-colors"
-        :class="
-          notifications.panelOpen
-            ? 'bg-surface text-accent shadow-sm'
-            : 'text-muted hover:bg-rail-active hover:text-text'
-        "
-        title="通知中心"
-        @click="notifications.togglePanel()"
-      >
-        <Icon name="bell" :size="18" />
-        <span v-if="notifications.unreadTotal > 0" class="absolute -top-0.5 right-0">
-          <Badge :count="notifications.unreadTotal" />
-        </span>
-      </button>
       <button
         type="button"
         class="grid h-9 w-9 place-items-center rounded-xl text-muted transition-colors hover:bg-rail-active hover:text-text"

@@ -1,6 +1,5 @@
 import {
   API_PREFIX,
-  type AppNotification,
   type Channel,
   type ChangeRecord,
   type Contact,
@@ -168,17 +167,8 @@ export const syncApi = {
   head: () => http.get<{ cursor: number }>(p('/sync/head')),
 }
 
-export const notificationApi = {
-  list: (query: { limit?: number; before?: number } = {}) =>
-    http.get<{ notifications: AppNotification[]; unreadCount: number; hasMore: boolean }>(
-      p('/notifications'),
-      { query },
-    ),
-  markRead: (body: { ids?: string[]; all?: boolean }) =>
-    http.post<{ updated: number; notifications: AppNotification[] }>(p('/notifications/read'), body),
-  settings: () =>
-    http.get<{ notificationSettings: NotificationSettings }>(p('/settings/notifications')),
-  updateSettings: (patch: Partial<NotificationSettings>) =>
+export const notificationSettingsApi = {
+  update: (patch: Partial<NotificationSettings>) =>
     http.patch<{ notificationSettings: NotificationSettings }>(p('/settings/notifications'), patch),
 }
 

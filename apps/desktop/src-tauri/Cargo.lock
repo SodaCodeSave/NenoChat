@@ -2543,8 +2543,10 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-sql",
  "tauri-plugin-store",
+ "tauri-winrt-notification",
  "tokio",
  "uuid",
+ "winreg",
 ]
 
 [[package]]

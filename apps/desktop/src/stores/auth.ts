@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { NotificationSettings, User, UserSettings } from '@nenochat/shared'
-import { authApi, notificationApi } from '@/api/endpoints'
+import { authApi, notificationSettingsApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
@@ -175,7 +175,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function updateNotificationSettings(
     patch: Partial<NotificationSettings>,
   ): Promise<NotificationSettings> {
-    const result = await notificationApi.updateSettings(patch)
+    const result = await notificationSettingsApi.update(patch)
     notificationSettings.value = result.notificationSettings
     return result.notificationSettings
   }

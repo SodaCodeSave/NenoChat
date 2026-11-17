@@ -32,7 +32,6 @@ export async function collectMirrorUsage(): Promise<MirrorUsage> {
     dbSelect<{ c: number }>(
       `SELECT
          (SELECT COUNT(*) FROM conversations) +
-         (SELECT COUNT(*) FROM notifications) +
          (SELECT COUNT(*) FROM drafts) +
          (SELECT COUNT(*) FROM contacts) +
          (SELECT COUNT(*) FROM users) AS c`,

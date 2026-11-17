@@ -3,15 +3,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import type { NotificationLevel, NotificationSettings } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
-import { useNotificationsStore } from '@/stores/notifications'
+import { useSystemNotificationsStore } from '@/stores/system-notifications'
 
 const auth = useAuthStore()
-const notifications = useNotificationsStore()
+const notifications = useSystemNotificationsStore()
 
 const form = ref<NotificationSettings | null>(null)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const savedHint = ref(false)
+const testHint = ref('')
 
 const levels: Array<{ key: NotificationLevel; label: string }> = [
   { key: 'all', label: '全部消息' },
@@ -26,7 +27,7 @@ const permissionLabel = computed(() => {
     case 'denied':
       return '系统通知权限被拒绝，请在系统设置中允许'
     case 'unsupported':
-      return '当前环境不支持系统通知，将降级为应用内提示'
+      return '当前环境不支持系统通知，请使用桌面客户端'
     default:
       return '尚未授权系统通知'
   }
@@ -81,6 +82,14 @@ async function enableSystemNotification(): Promise<void> {
   if (result === 'granted') await patch({ desktopEnabled: true })
 }
 
+async function sendTestNotification(): Promise<void> {
+  const delivered = await notifications.sendTest()
+  testHint.value = delivered ? '已发送，请查看系统通知' : '发送失败，请检查系统通知权限'
+  window.setTimeout(() => {
+    testHint.value = ''
+  }, 3000)
+}
+
 function toggle(key: 'desktopEnabled' | 'soundEnabled' | 'showPreview' | 'dndEnabled', value: boolean): void {
   void patch({ [key]: value } as Partial<NotificationSettings>)
 }
@@ -117,6 +126,16 @@ function setLevel(key: 'dmLevel' | 'groupLevel', value: NotificationLevel): void
           >
             去授权
           </button>
+        </div>
+        <div class="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg border border-line px-2.5 py-1 text-[12px] text-text hover:bg-surface-2"
+            @click="sendTestNotification"
+          >
+            发送测试通知
+          </button>
+          <span v-if="testHint" class="text-[11px] text-muted">{{ testHint }}</span>
         </div>
       </section>
 
@@ -210,7 +229,7 @@ function setLevel(key: 'dmLevel' | 'groupLevel', value: NotificationLevel): void
           <span>
             <span class="block text-[13px] text-text">免打扰时段</span>
             <span class="mt-0.5 block text-[11px] text-muted">
-              时段内不弹系统通知，通知中心仍会记录
+              时段内不弹系统通知，消息仍会在主页正常显示
             </span>
           </span>
           <input

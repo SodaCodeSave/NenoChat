@@ -26,7 +26,6 @@ import { err } from '../util/errors'
 import { now } from '../util/clock'
 import { aiStickerOptions, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
 import { appendSystemMessage } from './message-service'
-import { createNotification } from './notification-service'
 import * as scheduleService from './schedule-service'
 import {
   decideGroupAutonomy,
@@ -642,17 +641,6 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
   const firstId = appendSegments(db, input, segments, model)
   finishLog(db, input.logId, 'sent', { messageId: firstId })
   resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
-
-  if (input.kind === 'autonomy') {
-    createNotification(db, {
-      userId: input.member.persona.owner_id,
-      type: 'ai_proactive',
-      title: input.member.persona.name,
-      body: segments.join(' ').slice(0, 120),
-      conversationId: input.conversationId,
-      messageId: firstId,
-    })
-  }
 }
 
 /* ------------------------------ 对外入口 ------------------------------ */

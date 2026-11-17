@@ -6,7 +6,6 @@ import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
-import { createNotification } from './notification-service'
 import * as scheduleService from './schedule-service'
 import {
   decideProactiveFire,
@@ -364,15 +363,6 @@ async function fireOnServer(
     dayKey,
     slot,
     status: 'sent',
-    messageId: messageIds[0] ?? null,
-  })
-
-  createNotification(db, {
-    userId: candidate.owner_id,
-    type: 'ai_proactive',
-    title: persona.name,
-    body: segments.join(' ').slice(0, 120),
-    conversationId: candidate.conversation_id,
     messageId: messageIds[0] ?? null,
   })
 }

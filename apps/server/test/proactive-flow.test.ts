@@ -138,7 +138,7 @@ afterAll(async () => {
 })
 
 describe('主动消息端到端', () => {
-  it('扫描后生成一条 AI 消息、写入日志并发通知', async () => {
+  it('扫描后生成一条 AI 消息并写入日志', async () => {
     const { getDb } = await import('../src/db')
     const { scanOnce } = await import('../src/services/proactive-service')
     const db = getDb() as unknown as import('better-sqlite3').Database
@@ -171,11 +171,6 @@ describe('主动消息端到端', () => {
     expect(proactive!.senderType).toBe('ai')
     expect(proactive!.content).toContain('歌')
     expect(proactive!.meta!.ai!.personaId).toBe(personaId)
-
-    const notifications = db
-      .prepare('SELECT type, title, body FROM notifications WHERE user_id = (SELECT owner_id FROM ai_personas WHERE id = ?)')
-      .all(personaId) as Array<{ type: string; title: string; body: string | null }>
-    expect(notifications.some((n) => n.type === 'ai_proactive' && n.title === '小禾')).toBe(true)
   })
 
   it('同一轮再扫一次不会重复发（日上限 1）', async () => {

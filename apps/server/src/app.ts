@@ -22,7 +22,6 @@ import { postRoutes } from './http/routes/posts'
 import { stickerRoutes } from './http/routes/stickers'
 import { searchRoutes } from './http/routes/search'
 import { contactRoutes } from './http/routes/contacts'
-import { notificationRoutes } from './http/routes/notifications'
 import { settingsRoutes } from './http/routes/settings'
 import { registerWs } from './ws/server'
 import { startProactiveScheduler } from './services/proactive-service'
@@ -101,7 +100,6 @@ export async function buildApp(): Promise<FastifyInstance> {
       await scope.register(stickerRoutes)
       await scope.register(searchRoutes)
       await scope.register(contactRoutes)
-      await scope.register(notificationRoutes)
       await scope.register(settingsRoutes)
     },
     { prefix: API_PREFIX },

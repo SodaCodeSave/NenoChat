@@ -19,7 +19,6 @@ import { err } from '../util/errors'
 import { now } from '../util/clock'
 import { hub } from '../ws/hub'
 import { emitMessageCreated, emitMessageUpdated } from '../ws/emitter'
-import { notifyMessageRecipients } from './message-notifications'
 
 export interface SendMessageInput {
   conversationId: string
@@ -136,7 +135,6 @@ export function send(db: DB, input: SendMessageInput): SendMessageResult {
 
   if (!result.duplicated) {
     emitMessageCreated(db, result.message, input.clientNonce)
-    notifyMessageRecipients(db, result.message)
   }
   return result
 }
@@ -197,7 +195,6 @@ export function appendSystemMessage(
   })
 
   emitMessageCreated(db, message, null)
-  notifyMessageRecipients(db, message)
   return message
 }
 

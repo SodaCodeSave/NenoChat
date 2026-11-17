@@ -1,6 +1,11 @@
-import { isTauri } from './device'
+import { isTauri, platformName } from './device'
 
-/** 系统通知能力：Tauri 原生通知优先，浏览器降级到 Notification API 或应用内提示 */
+/** 系统通知能力：Tauri 原生通知优先，浏览器开发环境退回 Notification API */
+
+/** Windows 走自建 AUMID 的原生命令，其余平台继续用通知插件 */
+function isWindowsDesktop(): boolean {
+  return isTauri() && platformName() === 'win32'
+}
 
 export type SystemNotificationPermission = 'granted' | 'denied' | 'default' | 'unsupported'
 
@@ -8,18 +13,16 @@ export interface SystemNotificationInput {
   title: string
   body: string
   conversationId?: string | null
-  notificationId?: string | null
+  /** true 时不播放系统提示音 */
+  silent?: boolean
 }
 
 export interface SystemNotificationClickPayload {
   conversationId?: string | null
-  notificationId?: string | null
 }
 
 let clickHandler: ((payload: SystemNotificationClickPayload) => void) | null = null
 let actionListenerReady = false
-/** 浏览器端的点击回调按通知实例挂载，这里记录 id 与通知对象，方便取消 */
-const browserNotifications = new Map<string, Notification>()
 
 export function onSystemNotificationClick(
   handler: (payload: SystemNotificationClickPayload) => void,
@@ -36,13 +39,19 @@ async function ensureTauriActionListener(): Promise<void> {
   if (actionListenerReady || !isTauri()) return
   actionListenerReady = true
   try {
+    if (isWindowsDesktop()) {
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen<string>('system-notification://click', (event) => {
+        dispatchClick({ conversationId: event.payload || null })
+      })
+      return
+    }
     const { onAction } = await import('@tauri-apps/plugin-notification')
     await onAction((event) => {
       if (event.actionId !== 'tap') return
       const extra = event.notification?.extra ?? {}
       dispatchClick({
         conversationId: typeof extra.conversationId === 'string' ? extra.conversationId : null,
-        notificationId: typeof extra.notificationId === 'string' ? extra.notificationId : null,
       })
     })
   } catch (e) {
@@ -85,62 +94,90 @@ export async function requestNotificationPermission(): Promise<SystemNotificatio
 }
 
 /**
- * 调用系统通知。
- * 返回 native 表示已交给操作系统；fallback 表示当前环境不可用，调用方应改用应用内提示。
+ * 当前应用窗口是否在前台。
+ * 不能用 document.hasFocus()：WebView2 在宿主窗口失焦后仍可能返回 true，
+ * 会把后台消息误判成「正在看」而抑制系统通知。
  */
-export async function sendSystemNotification(
-  input: SystemNotificationInput,
-): Promise<'native' | 'fallback'> {
+export async function isAppWindowFocused(): Promise<boolean> {
   if (isTauri()) {
     try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      return await getCurrentWindow().isFocused()
+    } catch {
+      // 读不到状态时按「不在前台」处理，宁可多弹一次也不要漏通知
+      return false
+    }
+  }
+  return (
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'visible' &&
+    document.hasFocus()
+  )
+}
+
+/** 调用系统通知；返回 false 表示当前环境无法展示 */
+export async function sendSystemNotification(input: SystemNotificationInput): Promise<boolean> {
+  if (isTauri()) {
+    if (isWindowsDesktop()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await ensureTauriActionListener()
+        await invoke('show_system_notification', {
+          title: input.title,
+          body: input.body,
+          silent: input.silent ?? false,
+          conversationId: input.conversationId ?? null,
+        })
+        return true
+      } catch (e) {
+        console.warn('[notification] 发送系统通知失败', e)
+        return false
+      }
+    }
+    try {
       const { isPermissionGranted, sendNotification } = await import('@tauri-apps/plugin-notification')
-      if (!(await isPermissionGranted())) return 'fallback'
+      if (!(await isPermissionGranted())) return false
       await ensureTauriActionListener()
       sendNotification({
         title: input.title,
         body: input.body,
-        extra: {
-          conversationId: input.conversationId ?? '',
-          notificationId: input.notificationId ?? '',
-        },
+        silent: input.silent,
+        extra: { conversationId: input.conversationId ?? '' },
       })
-      return 'native'
+      return true
     } catch (e) {
       console.warn('[notification] 发送原生通知失败', e)
-      return 'fallback'
+      return false
     }
   }
 
-  if (typeof window === 'undefined' || !('Notification' in window)) return 'fallback'
-  if (Notification.permission !== 'granted') return 'fallback'
+  if (typeof window === 'undefined' || !('Notification' in window)) return false
+  if (Notification.permission !== 'granted') return false
 
   try {
-    const notification = new Notification(input.title, { body: input.body })
-    const key = input.notificationId ?? String(Date.now())
-    browserNotifications.set(key, notification)
+    const notification = new Notification(input.title, {
+      body: input.body,
+      silent: input.silent,
+    })
     notification.onclick = () => {
       window.focus()
-      dispatchClick({
-        conversationId: input.conversationId ?? null,
-        notificationId: input.notificationId ?? null,
-      })
+      dispatchClick({ conversationId: input.conversationId ?? null })
       notification.close()
     }
-    notification.onclose = () => {
-      browserNotifications.delete(key)
-    }
-    return 'native'
+    return true
   } catch (e) {
     console.warn('[notification] 浏览器通知发送失败', e)
-    return 'fallback'
+    return false
   }
 }
 
-/** 浏览器降级提示音：短促两声，不依赖音频资源文件 */
+/** 浏览器开发环境的提示音；Tauri 由系统通知自带声音 */
 export function playNotificationSound(): void {
   if (isTauri()) return
   try {
-    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    const Ctx =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!Ctx) return
     const context = new Ctx()
     const play = (at: number, frequency: number): void => {
@@ -160,6 +197,6 @@ export function playNotificationSound(): void {
     play(0.18, 1170)
     window.setTimeout(() => void context.close(), 600)
   } catch {
-    /* 静默失败，提示音不是必要能力 */
+    /* 提示音不是必要能力 */
   }
 }

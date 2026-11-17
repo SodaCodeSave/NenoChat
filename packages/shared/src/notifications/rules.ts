@@ -3,8 +3,7 @@ import { NotificationLevel } from '../enums'
 
 /**
  * 通知判定的纯函数集合。
- * 服务端只负责产生通知记录与下发，客户端在调用系统通知前用这里的结果做最终取舍，
- * 所以两端对「要不要提醒」的结论必须来自同一份逻辑。
+ * 客户端收到新消息后，用这里的结果决定「这条消息该不该弹系统通知」。
  */
 
 export type NotificationKind =
@@ -90,7 +89,7 @@ export function resolveNotificationLevel(
 
 /**
  * 最终是否弹出系统通知。
- * 通知中心里的记录不受这里影响 —— 静音、免打扰、正在看该会话都只是「不打扰」。
+ * 静音、免打扰、正在看该会话都只是「不打扰」，消息本身仍会正常落库。
  */
 export function shouldShowSystemNotification(input: NotificationGateInput): boolean {
   const { kind, settings } = input
@@ -131,4 +130,30 @@ export function notificationPreview(type: string, content: string, maxLength = 1
 export function systemNotificationBody(showPreview: boolean, body?: string | null): string {
   if (!showPreview || !body) return '你收到一条新消息'
   return body
+}
+
+export interface MessageNotificationInput {
+  conversationType: string
+  senderType: string
+  senderId?: string | null
+  selfId?: string | null
+  mentioned?: boolean
+  proactive?: boolean
+  aiIndex?: number | null
+}
+
+/**
+ * 消息是否需要系统弹窗，以及按哪种类型判定。
+ * 返回 null 表示这条消息不该打扰（自己发的、系统消息、AI 回复的后续分段）。
+ */
+export function messageNotificationKind(input: MessageNotificationInput): NotificationKind | null {
+  if (input.senderType === 'system') return null
+  if (input.selfId && input.senderId === input.selfId) return null
+  if (input.aiIndex != null && input.aiIndex > 0) return null
+  if (input.mentioned) return 'mention'
+  if (input.proactive) return 'ai_proactive'
+  if (input.conversationType === 'group') {
+    return input.senderType === 'ai' ? 'group_ai' : 'group'
+  }
+  return 'direct'
 }

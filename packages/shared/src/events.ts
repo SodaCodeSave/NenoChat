@@ -1,5 +1,4 @@
 import type {
-  AppNotification,
   Attachment,
   AiGroupDecision,
   Channel,
@@ -160,8 +159,8 @@ export interface ServerEventPayloads {
   'sync.batch': { changes: ChangeRecord[]; nextCursor: number; hasMore: boolean }
   'sync.reset': { reason: 'cursor_expired'; snapshotCursor: number }
 
-  'notification.created': { notification: AppNotification }
-  'notification.updated': { notification: AppNotification }
+
+
   'server.notice': { level: 'info' | 'warn' | 'error'; message: string }
   error: { code: string; message: string }
 }

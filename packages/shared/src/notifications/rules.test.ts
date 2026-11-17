@@ -3,6 +3,7 @@ import type { NotificationSettings } from '../entities'
 import { NotificationLevel } from '../enums'
 import {
   isInDndWindow,
+  messageNotificationKind,
   minutesOfDay,
   notificationPreview,
   parseHm,
@@ -123,6 +124,27 @@ describe('shouldShowSystemNotification', () => {
         conversationLevel: NotificationLevel.None,
       }),
     ).toBe(false)
+  })
+})
+
+describe('messageNotificationKind', () => {
+  const base = { conversationType: 'direct', senderType: 'user', selfId: 'me', senderId: 'other' }
+
+  it('自己发的与系统消息不弹', () => {
+    expect(messageNotificationKind({ ...base, senderId: 'me' })).toBeNull()
+    expect(messageNotificationKind({ ...base, senderType: 'system' })).toBeNull()
+  })
+
+  it('AI 回复只在第一段提醒', () => {
+    expect(messageNotificationKind({ ...base, conversationType: 'ai', senderType: 'ai', aiIndex: 0 })).toBe('direct')
+    expect(messageNotificationKind({ ...base, conversationType: 'ai', senderType: 'ai', aiIndex: 2 })).toBeNull()
+  })
+
+  it('群聊区分 @、AI 接话与普通消息', () => {
+    expect(messageNotificationKind({ ...base, conversationType: 'group', mentioned: true })).toBe('mention')
+    expect(messageNotificationKind({ ...base, conversationType: 'group', senderType: 'ai' })).toBe('group_ai')
+    expect(messageNotificationKind({ ...base, conversationType: 'group' })).toBe('group')
+    expect(messageNotificationKind({ ...base, conversationType: 'group', proactive: true })).toBe('ai_proactive')
   })
 })
 

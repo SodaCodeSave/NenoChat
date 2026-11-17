@@ -9,7 +9,6 @@ import * as contactsRepo from '../db/repo/contacts'
 import * as usersRepo from '../db/repo/users'
 import * as aiRepo from '../db/repo/ai'
 import { writeChange } from './change-log'
-import { createNotification } from './notification-service'
 import { err } from '../util/errors'
 import { emitContactUpdated } from '../ws/emitter'
 
@@ -168,14 +167,6 @@ export function sendRequest(
     return outgoing
   })
 
-  const requester = publicUserOf(db, ownerId)
-  createNotification(db, {
-    userId: targetUserId,
-    type: 'system',
-    title: '新的好友申请',
-    body: `${requester?.displayName ?? '有人'} 想加你为好友${message ? `：${message}` : ''}`,
-  })
-
   const contact = mapContact(result, publicUserOf(db, targetUserId))
   emitContactUpdated(ownerId, contact)
   emitContactUpdated(targetUserId, mapContact(contactsRepo.find(db, targetUserId, ownerId)!, publicUserOf(db, ownerId)))
@@ -194,12 +185,6 @@ export function accept(
 
   const result = withTx(db, () => linkFriends(db, ownerId, requesterId, ownerId))
 
-  createNotification(db, {
-    userId: requesterId,
-    type: 'system',
-    title: '好友申请已通过',
-    body: `${publicUserOf(db, ownerId)?.displayName ?? '对方'} 通过了你的好友申请`,
-  })
   emitContactUpdated(ownerId, result.mine)
   emitContactUpdated(requesterId, result.theirs)
   return { contact: result.mine, requester: result.theirs }

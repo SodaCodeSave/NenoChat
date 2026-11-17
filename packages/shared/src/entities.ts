@@ -548,19 +548,6 @@ export interface AiGeneration {
   finishedAt?: number | null
 }
 
-export interface AppNotification {
-  id: string
-  userId: string
-  type: 'mention' | 'dm' | 'group' | 'group_ai' | 'ai_proactive' | 'post_like' | 'post_comment' | 'system'
-  title: string
-  body?: string | null
-  conversationId?: string | null
-  messageId?: string | null
-  postId?: string | null
-  isRead: boolean
-  createdAt: number
-}
-
 export interface UserSettings {
   theme: ThemeMode
   accent: string

@@ -5,7 +5,7 @@ import { useContactsStore } from '@/stores/contacts'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMembersStore } from '@/stores/members'
 import { useMessagesStore } from '@/stores/messages'
-import { useNotificationsStore } from '@/stores/notifications'
+import { useSystemNotificationsStore } from '@/stores/system-notifications'
 import { useServersStore } from '@/stores/servers'
 import { useSyncStore } from '@/stores/sync'
 import { hasLocalDb } from '@/platform/db'
@@ -51,11 +51,8 @@ export async function bootstrap(
     // 角色列表供通讯录与 AI 分区使用，离线时读本地镜像
     void useAiStore().load().catch(() => undefined)
 
-    // 通知中心先出本地缓存，再后台刷新；同时挂好系统通知点击回调
-    const notifications = useNotificationsStore()
-    await notifications.hydrate()
-    void notifications.refresh().catch(() => undefined)
-    void notifications.initSystemNotifications()
+    // 挂好系统通知点击回调并同步当前权限；通知本身由 message.created 直接触发
+    void useSystemNotificationsStore().init()
 
     onStage('realtime')
     const sync = useSyncStore()
@@ -78,7 +75,6 @@ export function resetWorkspace(): void {
   useChannelsStore().reset()
   useMembersStore().reset()
   useContactsStore().reset()
-  useNotificationsStore().reset()
   useSyncStore().disconnect()
   useSyncStore().reset()
   if (!hasLocalDb()) {

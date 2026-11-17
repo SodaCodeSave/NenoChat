@@ -1,5 +1,6 @@
 mod ai_gateway;
 mod db;
+mod notification;
 mod secrets;
 
 use tauri::Manager;
@@ -36,8 +37,15 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
+            notification::show_system_notification,
         ])
         .setup(|app| {
+            // Windows 通知平台要求 AUMID 带显示名，否则 toast 只入库不弹出
+            #[cfg(windows)]
+            {
+                let icon = std::env::current_exe().ok();
+                notification::ensure_app_id_registered("NenoChat", icon.as_deref());
+            }
             // 调试构建自动打开开发者工具，方便看日志（open_devtools 仅桌面端可用）
             #[cfg(all(desktop, debug_assertions))]
             {
