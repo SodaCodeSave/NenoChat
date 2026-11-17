@@ -4,7 +4,7 @@ import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Segmented from '@/components/ui/form/Segmented.vue'
 import Switch from '@/components/ui/form/Switch.vue'
-import { useUiStore } from '@/stores/ui'
+import { useUiStore, type MessageStyle } from '@/stores/ui'
 
 const ui = useUiStore()
 
@@ -77,6 +77,19 @@ function setReduceMotion(value: boolean): void {
     </SettingsCard>
 
     <SettingsCard id="input" title="聊天与输入" icon="message">
+      <SettingRow label="消息样式" description="切换消息的排版风格，立即生效" stacked>
+        <Segmented
+          :model-value="ui.messageStyle"
+          full
+          :options="[
+            { value: 'discord', label: '扁平流式' },
+            { value: 'qq', label: 'QQ 气泡' },
+          ]"
+          aria-label="消息样式"
+          @update:model-value="ui.setMessageStyle($event as MessageStyle)"
+        />
+      </SettingRow>
+
       <SettingRow label="发送方式" description="选择按下哪个快捷键时发送消息" stacked>
         <Segmented
           :model-value="ui.sendKey"

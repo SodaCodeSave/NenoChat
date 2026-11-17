@@ -5,11 +5,14 @@ import { useMediaQuery } from '@vueuse/core'
 
 const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
+const MESSAGE_STYLE_KEY = 'nenochat.messageStyle'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
 export type MobileTab = 'messages' | 'contacts' | 'moments' | 'me'
 export type RightPanel = 'none' | 'members' | 'memory' | 'detail'
+/** 消息排版风格：discord 扁平流式，qq 气泡式（自己靠右） */
+export type MessageStyle = 'discord' | 'qq'
 
 /**
  * 纯界面状态：主题、密度、导航位置、抽屉开关。
@@ -24,6 +27,10 @@ export const useUiStore = defineStore('ui', () => {
   const fontScale = ref(1)
   const reduceMotion = ref(false)
   const sendKey = ref<'enter' | 'ctrl+enter'>('enter')
+  /** 消息排版风格，纯本地偏好不进服务器设置 */
+  const messageStyle = ref<MessageStyle>(
+    localStorage.getItem(MESSAGE_STYLE_KEY) === 'qq' ? 'qq' : 'discord',
+  )
   /** 桌面端会话列表的手动收起状态，跨会话记住 */
   const conversationListCollapsed = ref(
     localStorage.getItem(CONVERSATION_LIST_KEY) === 'true',
@@ -72,6 +79,11 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(CONVERSATION_LIST_KEY, String(next))
   }
 
+  function setMessageStyle(next: MessageStyle): void {
+    messageStyle.value = next
+    localStorage.setItem(MESSAGE_STYLE_KEY, next)
+  }
+
   function toggleConversationList(): void {
     setConversationListCollapsed(!conversationListCollapsed.value)
   }
@@ -102,6 +114,7 @@ export const useUiStore = defineStore('ui', () => {
     fontScale,
     reduceMotion,
     sendKey,
+    messageStyle,
     conversationListCollapsed,
     navSection,
     mobileTab,
@@ -116,6 +129,7 @@ export const useUiStore = defineStore('ui', () => {
     setTheme,
     toggleTheme,
     setAccent,
+    setMessageStyle,
     setConversationListCollapsed,
     toggleConversationList,
     applyServerSettings,

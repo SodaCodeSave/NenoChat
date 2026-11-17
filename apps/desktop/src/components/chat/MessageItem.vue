@@ -49,6 +49,31 @@ const emit = defineEmits<{
 
 const deleted = computed(() => Boolean(props.message.deletedAt))
 
+/* ------------------------- 消息样式（Discord / QQ） ------------------------- */
+
+const isQq = computed(() => ui.messageStyle === 'qq')
+/** QQ 风格下自己的消息：整行镜像（头像在右、气泡靠右、用主题色气泡） */
+const qqOwn = computed(() => isQq.value && props.isOwn)
+
+/** QQ 风格下包进气泡的内容：仅文本类消息；贴纸/图片/文件/系统与撤回消息保持平铺 */
+const bubbleNeeded = computed(
+  () => isQq.value && props.message.type === 'text' && !deleted.value,
+)
+
+const bubbleClass = computed(() => {
+  if (!bubbleNeeded.value) return ''
+  return qqOwn.value
+    ? 'max-w-[78%] rounded-2xl rounded-tr-md bg-accent px-3 py-2'
+    : 'max-w-[78%] rounded-2xl rounded-tl-md bg-surface-2 px-3 py-2'
+})
+
+/** QQ 风格下内容列改为纵向 flex，按发送方对齐；系统消息居中 */
+const contentAlign = computed(() => {
+  if (!isQq.value) return ''
+  if (props.message.type === 'system') return 'flex flex-col items-center'
+  return qqOwn.value ? 'flex flex-col items-end' : 'flex flex-col items-start'
+})
+
 /** 把正文按 @提及 与链接切开，其余原样保留 */
 const segments = computed(() => {
   const text = props.message.content
@@ -203,6 +228,7 @@ const liveConnectorLabel = computed(() => {
 
     <div
       class="flex gap-2.5"
+      :class="qqOwn ? 'flex-row-reverse' : ''"
       @contextmenu="openContextMenu"
       @touchstart.passive="onTouchStart"
       @touchmove.passive="onTouchMove"
@@ -220,142 +246,159 @@ const liveConnectorLabel = computed(() => {
         />
       </div>
 
-      <div class="min-w-0 flex-1">
-        <div v-if="showHeader" class="flex items-baseline gap-1.5">
+      <div class="min-w-0 flex-1" :class="contentAlign">
+        <div
+          v-if="showHeader"
+          class="flex items-baseline gap-1.5"
+          :class="qqOwn ? 'justify-end' : ''"
+        >
           <span class="text-[13.5px] font-medium text-text-strong">{{ senderName }}</span>
           <span v-if="isOwn" class="rounded bg-surface-3 px-1 text-[10px] text-muted">我</span>
           <span class="text-[11px] text-muted">{{ formatMessageTime(message.createdAt) }}</span>
           <span v-if="message.editedAt && !deleted" class="text-[11px] text-muted">（已编辑）</span>
         </div>
 
-        <!-- 引用 -->
-        <button
-          v-if="message.replyToId && !deleted"
-          type="button"
-          class="mt-1 flex max-w-full items-center gap-1.5 border-l-2 border-line bg-transparent pl-2 text-left text-[12px] text-muted transition-colors hover:text-text"
-          @click="emit('jump', message.replyToId)"
-        >
-          <Icon name="reply" :size="12" class="shrink-0 text-accent" />
-          <span class="shrink-0 text-accent">{{ reply?.senderName ?? '某条消息' }}</span>
-          <span class="min-w-0 truncate">{{ reply?.preview ?? '原消息不在当前记录里' }}</span>
-        </button>
-
-        <!-- 撤回 -->
-        <p v-if="deleted" class="py-0.5 text-[13px] text-muted italic">[消息已撤回]</p>
-
-        <!-- 文本 -->
-        <template v-else-if="message.type === 'text' || message.type === 'system'">
-          <!-- 连接器提示：本次回复用过的资料来源 -->
-          <div
-            v-if="connectorHints.length > 0"
-            class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted"
-          >
-            <template v-for="(hint, index) in connectorHints" :key="hint.kind">
-              <span v-if="index > 0" class="text-muted/50">·</span>
-              <span class="flex items-center gap-1">
-                <img
-                  v-if="hint.kind === 'bilibili' && bilibiliIcon"
-                  :src="bilibiliIcon"
-                  class="h-3 w-3 object-contain"
-                  alt=""
-                />
-                <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
-                {{ hint.label }}
-              </span>
-            </template>
-          </div>
-
-          <!-- 连接器实时提示：思考阶段正在执行的动作 -->
-          <div
-            v-if="liveConnectorLabel"
-            class="mt-1 flex items-center gap-1 text-[11px] text-muted"
-          >
-            <Icon name="refresh" :size="12" class="animate-spin" />
-            {{ liveConnectorLabel }}
-          </div>
-
-          <p
-            class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words text-text"
-            :class="[
-              message.type === 'system' ? 'text-[12px] text-muted' : '',
-              thinking ? 'text-muted italic' : '',
-            ]"
-          >
-            <template v-for="(segment, index) in segments" :key="index">
-              <a
-                v-if="segment.kind === 'link'"
-                :href="segment.text"
-                target="_blank"
-                rel="noreferrer"
-                class="text-accent hover:underline"
-                >{{ segment.text }}</a
-              >
-              <span
-                v-else-if="segment.kind === 'mention'"
-                class="rounded bg-accent-soft px-1 font-medium text-accent"
-                >{{ segment.text }}</span
-              >
-              <span v-else>{{ segment.text }}</span>
-            </template>
-            <span v-if="streaming" class="typing-caret ml-0.5" />
-          </p>
-
-          <!-- 链接卡片：流式生成中的半截链接不请求元信息 -->
-          <div
-            v-if="linkUrls.length > 0 && !streaming && !thinking"
-            class="mt-1.5 space-y-1.5"
-          >
-            <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
-          </div>
-        </template>
-
-        <!-- 图片 -->
-        <div v-else-if="isImage" class="mt-1 space-y-1">
+        <!-- 气泡容器：QQ 风格下文本消息包进气泡（引用也随气泡对齐），其余风格保持平铺 -->
+        <div class="min-w-0" :class="bubbleClass">
+          <!-- 引用 -->
           <button
-            v-for="attachment in attachments"
-            :key="attachment.id"
+            v-if="message.replyToId && !deleted"
             type="button"
-            class="block overflow-hidden rounded-lg border border-line"
-            @click="emit('preview', attachment.displayUrl)"
+            class="mt-1 flex max-w-full items-center gap-1.5 border-l-2 bg-transparent pl-2 text-left text-[12px] transition-colors"
+            :class="
+              qqOwn
+                ? 'border-white/40 text-white/75 hover:text-white'
+                : 'border-line text-muted hover:text-text'
+            "
+            @click="emit('jump', message.replyToId)"
           >
+            <Icon name="reply" :size="12" class="shrink-0" :class="qqOwn ? 'text-white' : 'text-accent'" />
+            <span class="shrink-0" :class="qqOwn ? 'text-white' : 'text-accent'">{{ reply?.senderName ?? '某条消息' }}</span>
+            <span class="min-w-0 truncate">{{ reply?.preview ?? '原消息不在当前记录里' }}</span>
+          </button>
+
+          <!-- 撤回 -->
+          <p v-if="deleted" class="py-0.5 text-[13px] text-muted italic">[消息已撤回]</p>
+
+          <!-- 文本 -->
+          <template v-else-if="message.type === 'text' || message.type === 'system'">
+            <!-- 连接器提示：本次回复用过的资料来源 -->
+            <div
+              v-if="connectorHints.length > 0"
+              class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]"
+              :class="qqOwn ? 'text-white/75' : 'text-muted'"
+            >
+              <template v-for="(hint, index) in connectorHints" :key="hint.kind">
+                <span v-if="index > 0" :class="qqOwn ? 'text-white/40' : 'text-muted/50'">·</span>
+                <span class="flex items-center gap-1">
+                  <img
+                    v-if="hint.kind === 'bilibili' && bilibiliIcon"
+                    :src="bilibiliIcon"
+                    class="h-3 w-3 object-contain"
+                    alt=""
+                  />
+                  <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
+                  {{ hint.label }}
+                </span>
+              </template>
+            </div>
+
+            <!-- 连接器实时提示：思考阶段正在执行的动作 -->
+            <div
+              v-if="liveConnectorLabel"
+              class="mt-1 flex items-center gap-1 text-[11px]"
+              :class="qqOwn ? 'text-white/75' : 'text-muted'"
+            >
+              <Icon name="refresh" :size="12" class="animate-spin" />
+              {{ liveConnectorLabel }}
+            </div>
+
+            <p
+              class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words"
+              :class="[
+                qqOwn ? 'text-white' : 'text-text',
+                message.type === 'system' ? 'text-[12px] text-muted' : '',
+                thinking ? (qqOwn ? 'text-white/70 italic' : 'text-muted italic') : '',
+              ]"
+            >
+              <template v-for="(segment, index) in segments" :key="index">
+                <a
+                  v-if="segment.kind === 'link'"
+                  :href="segment.text"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="hover:underline"
+                  :class="qqOwn ? 'text-white underline decoration-white/50' : 'text-accent'"
+                  >{{ segment.text }}</a
+                >
+                <span
+                  v-else-if="segment.kind === 'mention'"
+                  class="rounded px-1 font-medium"
+                  :class="qqOwn ? 'bg-white/25 text-white' : 'bg-accent-soft text-accent'"
+                  >{{ segment.text }}</span
+                >
+                <span v-else>{{ segment.text }}</span>
+              </template>
+              <span v-if="streaming" class="typing-caret ml-0.5" />
+            </p>
+
+            <!-- 链接卡片：流式生成中的半截链接不请求元信息 -->
+            <div
+              v-if="linkUrls.length > 0 && !streaming && !thinking"
+              class="mt-1.5 space-y-1.5"
+            >
+              <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
+            </div>
+          </template>
+
+          <!-- 图片 -->
+          <div v-else-if="isImage" class="mt-1 space-y-1">
+            <button
+              v-for="attachment in attachments"
+              :key="attachment.id"
+              type="button"
+              class="block overflow-hidden rounded-lg border border-line"
+              @click="emit('preview', attachment.displayUrl)"
+            >
+              <img
+                :src="attachment.displayUrl"
+                :alt="attachment.filename"
+                class="max-h-[300px] w-auto max-w-full object-cover"
+                loading="lazy"
+              />
+            </button>
+            <p v-if="message.content" class="text-[13px]">{{ message.content }}</p>
+          </div>
+
+          <!-- 贴纸 -->
+          <div v-else-if="isSticker">
             <img
+              v-for="attachment in attachments"
+              :key="attachment.id"
               :src="attachment.displayUrl"
               :alt="attachment.filename"
-              class="max-h-[300px] w-auto max-w-full object-cover"
-              loading="lazy"
+              class="block max-h-[160px] max-w-[200px] rounded-lg object-contain"
             />
-          </button>
-          <p v-if="message.content" class="text-[13px]">{{ message.content }}</p>
-        </div>
+          </div>
 
-        <!-- 贴纸 -->
-        <div v-else-if="isSticker">
-          <img
-            v-for="attachment in attachments"
-            :key="attachment.id"
-            :src="attachment.displayUrl"
-            :alt="attachment.filename"
-            class="block max-h-[160px] max-w-[200px] rounded-lg object-contain"
-          />
-        </div>
-
-        <!-- 文件 -->
-        <div v-else-if="message.type === 'file'" class="mt-1 space-y-1">
-          <a
-            v-for="attachment in attachments"
-            :key="attachment.id"
-            :href="attachment.displayUrl"
-            target="_blank"
-            class="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
-          >
-            <Icon name="folder" :size="18" class="text-accent" />
-            <div class="min-w-0">
-              <p class="truncate text-[13px] text-text-strong">{{ attachment.filename }}</p>
-              <p class="text-[11px] text-muted">
-                {{ Math.max(1, Math.round(attachment.size / 1024)) }} KB
-              </p>
-            </div>
-          </a>
+          <!-- 文件 -->
+          <div v-else-if="message.type === 'file'" class="mt-1 space-y-1">
+            <a
+              v-for="attachment in attachments"
+              :key="attachment.id"
+              :href="attachment.displayUrl"
+              target="_blank"
+              class="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
+            >
+              <Icon name="folder" :size="18" class="text-accent" />
+              <div class="min-w-0">
+                <p class="truncate text-[13px] text-text-strong">{{ attachment.filename }}</p>
+                <p class="text-[11px] text-muted">
+                  {{ Math.max(1, Math.round(attachment.size / 1024)) }} KB
+                </p>
+              </div>
+            </a>
+          </div>
         </div>
 
         <div class="mt-0.5 flex items-center gap-2">
@@ -373,7 +416,8 @@ const liveConnectorLabel = computed(() => {
     <!-- hover 操作条 -->
     <div
       v-if="!ui.isMobile && !deleted && !ephemeral"
-      class="absolute -top-3 right-4 hidden items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[var(--shadow-soft)] group-hover:flex"
+      class="absolute -top-3 hidden items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[var(--shadow-soft)] group-hover:flex"
+      :class="qqOwn ? 'left-4' : 'right-4'"
     >
       <button
         type="button"
