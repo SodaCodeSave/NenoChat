@@ -575,3 +575,97 @@ export interface ServerInstance {
   lastConnectedAt?: number | null
   addedAt: number
 }
+
+/* ------------------------------ 连接器 ------------------------------ */
+
+/** 连接器类型：网页搜索 / B 站视频 */
+export type ConnectorType = 'deepseek_search' | 'bilibili'
+
+/** 非敏感配置，随连接器一起下发给客户端 */
+export interface ConnectorConfig {
+  /** DeepSeek 搜索端点，留空使用官方地址 */
+  baseUrl?: string | null
+  /** 搜索返回条数 */
+  count?: number | null
+  /** B 站降级时取多少条热评 */
+  maxComments?: number | null
+}
+
+/** 敏感配置只回掩码，明文永远不上客户端 */
+export interface ConnectorSecretMask {
+  apiKey?: string | null
+  cookie?: string | null
+}
+
+export interface Connector {
+  id: string
+  ownerId: string
+  type: ConnectorType
+  name: string
+  enabled: boolean
+  config: ConnectorConfig
+  secretMasked: ConnectorSecretMask
+  lastTestAt?: number | null
+  lastTestOk?: boolean | null
+  lastTestMessage?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** DeepSeek 网页搜索的结果条目 */
+export interface ConnectorSearchResult {
+  title: string
+  url: string
+  snippet: string
+  summary: string
+  siteName?: string | null
+  siteIcon?: string | null
+  date?: string | null
+  score?: number | null
+}
+
+export interface BilibiliVideoInfo {
+  bvid: string
+  aid: number
+  title: string
+  description: string
+  author: string
+  authorAvatar?: string | null
+  cover: string
+  duration: number
+  pubDate: number
+  url: string
+}
+
+export interface BilibiliComment {
+  author: string
+  content: string
+  like: number
+}
+
+/** 抓取到的 B 站视频材料：总结与卡片共用；transcript 为空表示无字幕 */
+export interface BilibiliVideoMaterial {
+  video: BilibiliVideoInfo
+  transcript: string
+  comments: BilibiliComment[]
+  /** 已缓存的 AI 总结，未生成时为 null */
+  summary: string | null
+  summaryModel?: string | null
+  summaryUpdatedAt?: number | null
+}
+
+/** 聊天链接卡片：B 站视频卡片或通用网页卡片 */
+export interface LinkPreview {
+  url: string
+  kind: 'bilibili' | 'website'
+  title: string | null
+  description: string | null
+  image: string | null
+  siteName: string | null
+  /** B 站卡片额外字段 */
+  author?: string | null
+  videoId?: string | null
+  /** B 站卡片是否有缓存的总结 */
+  hasSummary?: boolean
+  fetchedAt: number
+}

@@ -23,6 +23,7 @@ import { stickerRoutes } from './http/routes/stickers'
 import { searchRoutes } from './http/routes/search'
 import { contactRoutes } from './http/routes/contacts'
 import { settingsRoutes } from './http/routes/settings'
+import { connectorRoutes } from './http/routes/connectors'
 import { registerWs } from './ws/server'
 import { startProactiveScheduler } from './services/proactive-service'
 import { startMomentsScheduler } from './services/moment-ai-service'
@@ -101,6 +102,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await scope.register(searchRoutes)
       await scope.register(contactRoutes)
       await scope.register(settingsRoutes)
+      await scope.register(connectorRoutes)
     },
     { prefix: API_PREFIX },
   )

@@ -47,6 +47,8 @@ export interface BuildContextInput {
   schedule?: AiSchedule | null
   /** 角色本地时区下当天已过去的分钟数，用来标记进行中的日程 */
   scheduleNowMinutes?: number
+  /** 连接器检索到的外部资料（网页搜索、B 站视频内容），只给模型看 */
+  connectorContext?: string | null
   now?: number
 }
 
@@ -182,6 +184,16 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
   const stickerBlock = renderStickerBlock(input.stickers ?? [])
   if (stickerBlock) {
     messages.push({ role: 'system', content: stickerBlock })
+  }
+
+  if (input.connectorContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorContext.trim(),
+        AI_CONTEXT_BUDGET.connector,
+      ),
+    })
   }
 
   if (input.facts.length > 0) {
