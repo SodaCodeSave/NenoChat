@@ -7,12 +7,14 @@ import {
   ConnectorPatchSchema,
   ConnectorSearchSchema,
   ConnectorToggleSchema,
+  LinkPreviewQuerySchema,
 } from '@nenochat/shared'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import * as connectorService from '../../services/connector-service'
 import * as bilibiliService from '../../services/bilibili-service'
+import * as linkPreviewService from '../../services/link-preview-service'
 import { err } from '../../util/errors'
 
 export async function connectorRoutes(app: FastifyInstance): Promise<void> {
@@ -84,5 +86,12 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(BilibiliSummaryQuerySchema, request.query)
     return bilibiliService.getCachedSummary(db, userId, input.videoId)
+  })
+
+  /** 聊天链接卡片：服务端抓取并缓存元信息，失败返回 null 由客户端降级为纯链接 */
+  app.get('/connectors/link-preview', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(LinkPreviewQuerySchema, request.query)
+    return { preview: await linkPreviewService.getLinkPreview(db, userId, input.url) }
   })
 }

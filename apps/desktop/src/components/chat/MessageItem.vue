@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import type { Message } from '@nenochat/shared'
+import { type Message, extractUrls } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
+import LinkCard from './LinkCard.vue'
 import { resolveFileUrl } from '@/api/http'
 import { resolveAttachmentUrl } from '@/platform/file-cache'
 import { formatMessageTime } from '@/composables/conversation'
@@ -62,6 +63,9 @@ const segments = computed(() => {
 
 const isImage = computed(() => props.message.type === 'image')
 const isSticker = computed(() => props.message.type === 'sticker')
+
+/** 正文里的链接：每条都渲染卡片，失败时卡片组件自身降级为不显示 */
+const linkUrls = computed(() => extractUrls(props.message.content))
 
 /** 命中本地缓存后用 blob URL 展示，离线也能看图；未命中时先用网络地址 */
 const cachedUrls = ref<Record<string, string>>({})
@@ -207,32 +211,41 @@ const showAiTail = computed(
         <p v-if="deleted" class="py-0.5 text-[13px] text-muted italic">[消息已撤回]</p>
 
         <!-- 文本 -->
-        <p
-          v-else-if="message.type === 'text' || message.type === 'system'"
-          class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words text-text"
-          :class="[
-            message.type === 'system' ? 'text-[12px] text-muted' : '',
-            thinking ? 'text-muted italic' : '',
-          ]"
-        >
-          <template v-for="(segment, index) in segments" :key="index">
-            <a
-              v-if="segment.kind === 'link'"
-              :href="segment.text"
-              target="_blank"
-              rel="noreferrer"
-              class="text-accent hover:underline"
-              >{{ segment.text }}</a
-            >
-            <span
-              v-else-if="segment.kind === 'mention'"
-              class="rounded bg-accent-soft px-1 font-medium text-accent"
-              >{{ segment.text }}</span
-            >
-            <span v-else>{{ segment.text }}</span>
-          </template>
-          <span v-if="streaming" class="typing-caret ml-0.5" />
-        </p>
+        <template v-else-if="message.type === 'text' || message.type === 'system'">
+          <p
+            class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words text-text"
+            :class="[
+              message.type === 'system' ? 'text-[12px] text-muted' : '',
+              thinking ? 'text-muted italic' : '',
+            ]"
+          >
+            <template v-for="(segment, index) in segments" :key="index">
+              <a
+                v-if="segment.kind === 'link'"
+                :href="segment.text"
+                target="_blank"
+                rel="noreferrer"
+                class="text-accent hover:underline"
+                >{{ segment.text }}</a
+              >
+              <span
+                v-else-if="segment.kind === 'mention'"
+                class="rounded bg-accent-soft px-1 font-medium text-accent"
+                >{{ segment.text }}</span
+              >
+              <span v-else>{{ segment.text }}</span>
+            </template>
+            <span v-if="streaming" class="typing-caret ml-0.5" />
+          </p>
+
+          <!-- 链接卡片：流式生成中的半截链接不请求元信息 -->
+          <div
+            v-if="linkUrls.length > 0 && !streaming && !thinking"
+            class="mt-1.5 space-y-1.5"
+          >
+            <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
+          </div>
+        </template>
 
         <!-- 图片 -->
         <div v-else-if="isImage" class="mt-1 space-y-1">

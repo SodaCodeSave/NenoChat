@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildBilibiliSummaryPrompt,
   extractUrls,
+  findBilibiliInput,
   findBilibiliVideoId,
   parseBilibiliVideoId,
   renderBilibiliContext,
@@ -45,6 +46,15 @@ describe('parseBilibiliVideoId', () => {
   it('findBilibiliVideoId 能从整句话里抓出 BV 号', () => {
     expect(findBilibiliVideoId('帮我看看 BV1GJ411x7h7 讲了什么')).toBe('BV1GJ411x7h7')
     expect(findBilibiliVideoId('今天天气不错')).toBeNull()
+  })
+
+  it('findBilibiliInput 优先返回可抓取的完整链接（含短链）', () => {
+    expect(findBilibiliInput('看这个 https://www.bilibili.com/video/BV1GJ411x7h7 很好')).toBe(
+      'https://www.bilibili.com/video/BV1GJ411x7h7',
+    )
+    expect(findBilibiliInput('https://b23.tv/abc123')).toBe('https://b23.tv/abc123')
+    expect(findBilibiliInput('BV1GJ411x7h7')).toBe('BV1GJ411x7h7')
+    expect(findBilibiliInput('普通消息')).toBeNull()
   })
 })
 

@@ -69,6 +69,16 @@ async function resolveVideoId(input: string): Promise<string | null> {
   return match ? `BV${match[0].slice(2)}` : null
 }
 
+/** 供链接卡片复用：解析 BV / av / 短链 */
+export async function resolveBilibiliVideoId(input: string): Promise<string | null> {
+  return resolveVideoId(input)
+}
+
+/** 供链接卡片复用：只取公开视频信息 */
+export async function getVideoInfo(videoId: string): Promise<BilibiliVideoInfo> {
+  return (await fetchVideoInfo(videoId)).info
+}
+
 interface ViewPayload {
   code?: number
   message?: string

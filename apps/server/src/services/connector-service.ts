@@ -258,6 +258,7 @@ export async function fetchConnectorJson<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   let response: Response
+  let text: string
   try {
     response = await fetch(url, {
       method,
@@ -265,23 +266,15 @@ export async function fetchConnectorJson<T>(
       body,
       signal: controller.signal,
     })
-  } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') {
-      throw new ConnectorRequestError('连接超时，请检查网络或稍后重试')
-    }
-    throw new ConnectorRequestError('无法连接到上游服务，请检查地址与网络')
-  } finally {
-    clearTimeout(timer)
-  }
-
-  let text: string
-  try {
     text = await readBodyLimited(response, maxBytes)
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') {
       throw new ConnectorRequestError('连接超时，请检查网络或稍后重试')
     }
-    throw e
+    if (e instanceof ConnectorRequestError) throw e
+    throw new ConnectorRequestError('无法连接到上游服务，请检查地址与网络')
+  } finally {
+    clearTimeout(timer)
   }
 
   let payload: unknown = null
@@ -356,7 +349,11 @@ export async function searchDeepSeek(
   const secret = readConnectorSecret(row)
   if (!secret.apiKey) throw err.validation('该连接器没有保存 API Key')
   const base = (config.baseUrl || DEFAULTS.deepseek_search.baseUrl).replace(/\/$/, '')
-  const url = base.endsWith('/tools/search') ? base : `${base}/v1/tools/search`
+  const url = base.endsWith('/tools/search')
+    ? base
+    : base.endsWith('/v1')
+      ? `${base}/tools/search`
+      : `${base}/v1/tools/search`
 
   const payload = await fetchConnectorJson<DeepSeekSearchPayload>(url, {
     method: 'POST',
