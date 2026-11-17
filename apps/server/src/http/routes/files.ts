@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { MAX_UPLOAD_FILE_BYTES } from '@nenochat/shared'
 import { getDb } from '../../db'
 import { requireUserId } from '../plugins/auth'
+import { rateLimit } from '../plugins/rate-limit'
 import { err } from '../../util/errors'
 import { saveUpload } from '../../services/file-service'
 
@@ -15,34 +16,38 @@ import { saveUpload } from '../../services/file-service'
 export async function fileRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
 
-  app.post<{ Querystring: { kind?: string } }>('/files', async (request) => {
-    const userId = await requireUserId(request)
-    const rawKind = request.query.kind
-    const kind = rawKind === 'avatar' ? 'avatar' : rawKind === 'sticker' ? 'sticker' : 'file'
+  app.post<{ Querystring: { kind?: string } }>(
+    '/files',
+    { preHandler: rateLimit({ max: 30, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const rawKind = request.query.kind
+      const kind = rawKind === 'avatar' ? 'avatar' : rawKind === 'sticker' ? 'sticker' : 'file'
 
-    let part: Awaited<ReturnType<typeof request.file>> | undefined
-    try {
-      part = await request.file()
-    } catch {
-      throw err.tooLarge(`文件不能超过 ${Math.round(MAX_UPLOAD_FILE_BYTES / 1048576)}MB`)
-    }
-    if (!part) throw err.validation('缺少文件字段 file')
+      let part: Awaited<ReturnType<typeof request.file>> | undefined
+      try {
+        part = await request.file()
+      } catch {
+        throw err.tooLarge(`文件不能超过 ${Math.round(MAX_UPLOAD_FILE_BYTES / 1048576)}MB`)
+      }
+      if (!part) throw err.validation('缺少文件字段 file')
 
-    let buffer: Buffer
-    try {
-      buffer = await part.toBuffer()
-    } catch {
-      throw err.tooLarge(`文件不能超过 ${Math.round(MAX_UPLOAD_FILE_BYTES / 1048576)}MB`)
-    }
+      let buffer: Buffer
+      try {
+        buffer = await part.toBuffer()
+      } catch {
+        throw err.tooLarge(`文件不能超过 ${Math.round(MAX_UPLOAD_FILE_BYTES / 1048576)}MB`)
+      }
 
-    const attachment = saveUpload(db, {
-      userId,
-      buffer,
-      filename: part.filename ?? 'file',
-      mime: part.mimetype ?? 'application/octet-stream',
-      kind,
-    })
+      const attachment = saveUpload(db, {
+        userId,
+        buffer,
+        filename: part.filename ?? 'file',
+        mime: part.mimetype ?? 'application/octet-stream',
+        kind,
+      })
 
-    return { attachment }
-  })
+      return { attachment }
+    },
+  )
 }

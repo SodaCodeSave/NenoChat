@@ -23,7 +23,9 @@ import {
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
+import { rateLimit } from '../plugins/rate-limit'
 import * as aiRepo from '../../db/repo/ai'
+import * as conversationsRepo from '../../db/repo/conversations'
 import * as aiService from '../../services/ai-service'
 import * as groupAiService from '../../services/group-ai-service'
 import * as scheduleService from '../../services/schedule-service'
@@ -132,16 +134,20 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /** 强制重新生成当天的日程 */
-  app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule/generate', async (request) => {
-    const userId = await requireUserId(request)
-    const persona = ownedPersona(userId, request.params.id)
-    const query = parse(AiScheduleQuerySchema, request.body ?? {})
-    return scheduleService.regenerateSchedule(
-      db,
-      persona,
-      query.date ?? scheduleService.todayKey(),
-    )
-  })
+  app.post<{ Params: { id: string } }>(
+    '/ai/personas/:id/schedule/generate',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const persona = ownedPersona(userId, request.params.id)
+      const query = parse(AiScheduleQuerySchema, request.body ?? {})
+      return scheduleService.regenerateSchedule(
+        db,
+        persona,
+        query.date ?? scheduleService.todayKey(),
+      )
+    },
+  )
 
   /** 保存日程：手动编辑与客户端本地生成的结果都走这里 */
   app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule', async (request) => {
@@ -187,8 +193,12 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   /** 追加一条 AI 分段消息（客户端本地生成模式使用） */
   app.post<{ Params: { id: string } }>('/ai/conversations/:id/messages', async (request) => {
-    await requireUserId(request)
+    const userId = await requireUserId(request)
     const input = parse(AppendAiSegmentSchema, request.body)
+    // 归属校验：服务层只校验会话类型，这里必须确认会话属于当前用户，防止拿他人会话 ULID 注入消息
+    const conv = conversationsRepo.findById(db, request.params.id)
+    if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
+    if (conv.ai_owner_user_id !== userId) throw err.forbidden('无权访问该 AI 会话')
     const message = aiService.appendAiSegment(db, request.params.id, {
       generationId: input.generationId,
       index: input.index,
@@ -205,18 +215,22 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ 生成 ------------------------------ */
 
   /** 服务端托管密钥时由此触发生成，分条结果通过普通消息事件下发 */
-  app.post('/ai/generations', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(StartGenerationSchema, request.body)
-    const result = await aiService.generateOnServer(db, {
-      conversationId: input.conversationId,
-      userId,
-      content: input.content,
-      clientNonce: input.clientNonce,
-      providerId: input.providerId,
-    })
-    return { generation: result }
-  })
+  app.post(
+    '/ai/generations',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const input = parse(StartGenerationSchema, request.body)
+      const result = await aiService.generateOnServer(db, {
+        conversationId: input.conversationId,
+        userId,
+        content: input.content,
+        clientNonce: input.clientNonce,
+        providerId: input.providerId,
+      })
+      return { generation: result }
+    },
+  )
 
   /** 本机识图完成后把图片描述交回服务端：落缓存并写进消息 meta */
   app.post('/ai/image-descriptions', async (request) => {
@@ -227,12 +241,16 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /** 服务端识图分析一张表情包的情绪标签（密钥托管模式）；本机密钥由客户端自行分析 */
-  app.post('/ai/stickers/analyze', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(z.object({ stickerId: z.string().min(1) }), request.body)
-    const tags = await aiService.analyzeStickerOnServer(db, userId, input.stickerId)
-    return { tags }
-  })
+  app.post(
+    '/ai/stickers/analyze',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const input = parse(z.object({ stickerId: z.string().min(1) }), request.body)
+      const tags = await aiService.analyzeStickerOnServer(db, userId, input.stickerId)
+      return { tags }
+    },
+  )
 
   /* ------------------------------ 群聊 AI ------------------------------ */
 

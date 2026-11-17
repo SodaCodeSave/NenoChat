@@ -20,5 +20,9 @@ export async function syncRoutes(app: FastifyInstance): Promise<void> {
     return syncService.listChanges(db, userId, Number.isFinite(since) ? since : 0, limit)
   })
 
-  app.get('/sync/head', async () => ({ cursor: syncService.maxCursor(db) }))
+  /** 游标也要登录后才能看：maxCursor 属于全局信息，不能匿名泄漏 */
+  app.get('/sync/head', async (request) => {
+    await requireUserId(request)
+    return { cursor: syncService.maxCursor(db) }
+  })
 }

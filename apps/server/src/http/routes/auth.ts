@@ -3,6 +3,7 @@ import { LoginSchema, LogoutSchema, RefreshSchema, RegisterSchema } from '@nenoc
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
+import { rateLimit } from '../plugins/rate-limit'
 import * as authService from '../../services/auth-service'
 import * as usersRepo from '../../db/repo/users'
 import * as devicesRepo from '../../db/repo/devices'
@@ -16,17 +17,21 @@ import {
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
 
-  app.post('/auth/register', async (request) => {
-    const input = parse(RegisterSchema, request.body)
-    return authService.register(db, app.jwt, input)
-  })
+  app.post(
+    '/auth/register',
+    { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) },
+    async (request) => {
+      const input = parse(RegisterSchema, request.body)
+      return authService.register(db, app.jwt, input)
+    },
+  )
 
-  app.post('/auth/login', async (request) => {
+  app.post('/auth/login', { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) }, async (request) => {
     const input = parse(LoginSchema, request.body)
     return authService.login(db, app.jwt, input)
   })
 
-  app.post('/auth/refresh', async (request) => {
+  app.post('/auth/refresh', { preHandler: rateLimit({ max: 30, windowMs: 60_000 }) }, async (request) => {
     const input = parse(RefreshSchema, request.body)
     return authService.refresh(db, app.jwt, input.refreshToken, input.device.id)
   })

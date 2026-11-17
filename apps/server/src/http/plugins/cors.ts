@@ -4,7 +4,8 @@ import { corsOrigins } from '../../env'
 
 /**
  * 手写 CORS：自建服务器场景足够用，且省掉一个依赖。
- * 支持带凭证的跨域（Web 版客户端需要）。
+ * 默认通配所有来源（NAS 内网直连场景），此时不发送凭证头，避免「任意来源 + 允许凭证」的组合；
+ * 显式配置 CORS_ORIGINS 后才允许携带凭证的跨域（Web 版客户端需要）。
  */
 export function applyCors(app: FastifyInstance): void {
   const allowAll = corsOrigins === true
@@ -18,7 +19,9 @@ export function applyCors(app: FastifyInstance): void {
         reply.header('Access-Control-Allow-Origin', (corsOrigins as string[]).includes(origin) ? origin : '')
       }
       reply.header('Vary', 'Origin')
-      reply.header('Access-Control-Allow-Credentials', 'true')
+      if (!allowAll) {
+        reply.header('Access-Control-Allow-Credentials', 'true')
+      }
       reply.header(
         'Access-Control-Allow-Headers',
         'Authorization, Content-Type, X-Device-Id, X-Client-Version',
