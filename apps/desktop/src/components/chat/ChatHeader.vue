@@ -13,12 +13,15 @@ const props = defineProps<{
   typingNames?: string[]
   memberCount?: number
   showMembers?: boolean
+  /** 右侧日程面板是否展开 */
+  scheduleActive?: boolean
   backable?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-members'): void
   (e: 'open-memory'): void
+  (e: 'toggle-schedule'): void
   (e: 'open-settings'): void
   (e: 'open-channels'): void
   (e: 'back'): void
@@ -100,6 +103,14 @@ const subtitle = computed(() => {
         :size="17"
         :active="showMembers"
         @click="emit('open-memory')"
+      />
+      <IconButton
+        v-if="isAi"
+        icon="calendar"
+        label="今日日程"
+        :size="17"
+        :active="scheduleActive"
+        @click="emit('toggle-schedule')"
       />
       <IconButton v-if="!ui.isMobile" icon="search" label="搜索（即将开放）" :size="17" />
       <IconButton

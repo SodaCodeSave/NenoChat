@@ -45,6 +45,8 @@ export const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,24}$/
 export const AI_CONTEXT_BUDGET = {
   /** 人设提示词 + 角色卡 + 兴趣，长角色卡主要吃这一份预算 */
   system: 1600,
+  /** 当天日程：全天安排 + 当前活动提示 */
+  schedule: 500,
   facts: 400,
   summary: 500,
   recent: 3000,

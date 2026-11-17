@@ -43,6 +43,7 @@ export const iconPaths = {
   wifiOff: 'M3 3l18 18M8.5 15.5a5 5 0 0 1 7 0M5 12a10 10 0 0 1 4-2.4M19 12a10 10 0 0 0-2-1.5M12 19h.01',
   panelRight: 'M4 5h16v14H4zM15 5v14',
   memory: 'M9 4h6v3h3v10h-3v3H9v-3H6V7h3V4ZM10 10h4v4h-4z',
+  calendar: 'M5 6h14v14H5zM8 3v4M16 3v4M5 10h14M9 14h.01M13 14h.01M9 17h.01M13 17h.01',
   refresh:
     'M20 11a8 8 0 0 0-13.6-5.4L4 8M4 13a8 8 0 0 0 13.6 5.4L20 16M4 5v3h3M20 19v-3h-3',
   heart: 'M12 20s-7-4.4-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.6-7 9-7 9Z',

@@ -7,6 +7,8 @@ import {
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type AiSchedule,
+  type AiScheduleItem,
   type AiUsageEntry,
   type Conversation,
 } from '@nenochat/shared'
@@ -77,6 +79,28 @@ export const aiApi = {
   updatePersona: (id: string, body: Partial<PersonaInput>) =>
     http.patch<{ persona: AiPersona }>(p(`/ai/personas/${id}`), body),
   deletePersona: (id: string) => http.delete<{ ok: boolean }>(p(`/ai/personas/${id}`)),
+
+  /** 读取某天日程；不传 date 取今天 */
+  schedule: (personaId: string, date?: string) =>
+    http.get<{ schedule: AiSchedule | null }>(p(`/ai/personas/${personaId}/schedule`), {
+      query: date ? { date } : undefined,
+    }),
+  /** 确保当天有日程；本机密钥时返回 needsClientGeneration */
+  ensureSchedule: (personaId: string, date?: string) =>
+    http.post<{ schedule: AiSchedule | null; needsClientGeneration: boolean }>(
+      p(`/ai/personas/${personaId}/schedule/ensure`),
+      date ? { date } : {},
+    ),
+  /** 强制重新生成当天日程 */
+  regenerateSchedule: (personaId: string, date?: string) =>
+    http.post<{ schedule: AiSchedule | null; needsClientGeneration: boolean }>(
+      p(`/ai/personas/${personaId}/schedule/generate`),
+      date ? { date } : {},
+    ),
+  saveSchedule: (
+    personaId: string,
+    body: { dayKey: string; items: AiScheduleItem[]; source?: 'ai' | 'manual' },
+  ) => http.post<{ schedule: AiSchedule }>(p(`/ai/personas/${personaId}/schedule`), body),
 
   settings: () => http.get<{ settings: AiGlobalSettings }>(p('/ai/settings')),
   updateSettings: (body: Partial<Omit<AiGlobalSettings, 'updatedAt'>>) =>

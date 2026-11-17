@@ -7,10 +7,12 @@ import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
 import { createNotification } from './notification-service'
+import * as scheduleService from './schedule-service'
 import {
   decideProactiveFire,
   formatLocalTime,
   localDayKey,
+  minutesOfDay,
   serverTzOffsetMinutes,
   type ProactiveDecision,
 } from './proactive-rules'
@@ -279,11 +281,14 @@ async function fireOnServer(
   }
 
   const mapped = aiRepo.mapPersona(persona)
+  const schedule = await scheduleService.ensureScheduleQuietly(db, persona)
   const messages = buildProactivePrompt({
     persona: mapped,
     memoryDigest: buildMemoryDigest(db, candidate.conversation_id),
     idleHours: decision.idleHours,
     localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
+    schedule,
+    scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
   })
 
   let reply: string

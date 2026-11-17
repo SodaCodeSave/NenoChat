@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import {
   AiGlobalSettingsPatchSchema,
+  AiScheduleQuerySchema,
+  AiScheduleSaveSchema,
+  normalizeScheduleItems,
   AppendAiSegmentSchema,
   AppendGroupSegmentSchema,
   GroupAiSkipSchema,
@@ -23,7 +26,9 @@ import { requireUserId } from '../plugins/auth'
 import * as aiRepo from '../../db/repo/ai'
 import * as aiService from '../../services/ai-service'
 import * as groupAiService from '../../services/group-ai-service'
+import * as scheduleService from '../../services/schedule-service'
 import { emitConversationUpdated } from '../../ws/emitter'
+import { err } from '../../util/errors'
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
@@ -90,6 +95,71 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     aiService.deletePersona(db, userId, request.params.id)
     return { ok: true }
+  })
+
+  /* ------------------------------ 日程 ------------------------------ */
+
+  const ownedPersona = (userId: string, personaId: string): aiRepo.PersonaRow => {
+    const persona = aiRepo.findPersona(db, personaId)
+    if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
+    return persona
+  }
+
+  /** 读取某天的日程；date 缺省为今天，只读不触发生成 */
+  app.get<{ Params: { id: string } }>('/ai/personas/:id/schedule', async (request) => {
+    const userId = await requireUserId(request)
+    const persona = ownedPersona(userId, request.params.id)
+    const query = parse(AiScheduleQuerySchema, request.query)
+    return {
+      schedule: scheduleService.getSchedule(
+        db,
+        persona.id,
+        query.date ?? scheduleService.todayKey(),
+      ),
+    }
+  })
+
+  /** 确保当天有日程：服务端密钥直接生成，本机密钥让客户端生成后回传 */
+  app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule/ensure', async (request) => {
+    const userId = await requireUserId(request)
+    const persona = ownedPersona(userId, request.params.id)
+    const query = parse(AiScheduleQuerySchema, request.body ?? {})
+    return scheduleService.ensureSchedule(
+      db,
+      persona,
+      query.date ?? scheduleService.todayKey(),
+    )
+  })
+
+  /** 强制重新生成当天的日程 */
+  app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule/generate', async (request) => {
+    const userId = await requireUserId(request)
+    const persona = ownedPersona(userId, request.params.id)
+    const query = parse(AiScheduleQuerySchema, request.body ?? {})
+    return scheduleService.regenerateSchedule(
+      db,
+      persona,
+      query.date ?? scheduleService.todayKey(),
+    )
+  })
+
+  /** 保存日程：手动编辑与客户端本地生成的结果都走这里 */
+  app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule', async (request) => {
+    const userId = await requireUserId(request)
+    const persona = ownedPersona(userId, request.params.id)
+    const input = parse(AiScheduleSaveSchema, request.body)
+    const items = normalizeScheduleItems(input.items)
+    if (items.length === 0) throw err.validation('日程内容不合法')
+
+    return {
+      schedule: scheduleService.saveSchedule(db, {
+        ownerId: userId,
+        personaId: persona.id,
+        dayKey: input.dayKey,
+        items,
+        source: input.source ?? 'manual',
+      }),
+    }
   })
 
   /* --------------------------- 全局自动互动 --------------------------- */

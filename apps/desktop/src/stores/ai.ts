@@ -9,9 +9,13 @@ import {
   buildMomentCommentPrompt,
   buildMomentPostPrompt,
   buildProactivePrompt,
+  buildSchedulePrompt,
   cutStreamingSegments,
+  dayKeyOf,
   estimateTokens,
   isSkipReply,
+  minutesOfLocalDay,
+  parseScheduleItems,
   segmentDelay,
   SEGMENT_REPLY_DEFAULTS,
   splitSegments,
@@ -23,6 +27,8 @@ import {
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type AiSchedule,
+  type AiScheduleItem,
   type AttachmentRef,
   type ChatMessage,
   type Message,
@@ -100,6 +106,119 @@ export const useAiStore = defineStore('ai', () => {
   const providerById = computed(() => new Map(providers.value.map((p) => [p.id, p])))
   const personaById = computed(() => new Map(personas.value.map((p) => [p.id, p])))
 
+  /* ------------------------------- 角色日程 ------------------------------- */
+
+  /** 内存里的当天日程：按 personaId + dayKey 缓存，不落本地库 */
+  const schedules = ref<Record<string, AiSchedule>>({})
+  const schedulePending = new Map<string, Promise<AiSchedule | null>>()
+
+  function scheduleKeyOf(personaId: string, dayKey: string): string {
+    return `${personaId}:${dayKey}`
+  }
+
+  function cachedSchedule(personaId: string, dayKey = dayKeyOf()): AiSchedule | null {
+    return schedules.value[scheduleKeyOf(personaId, dayKey)] ?? null
+  }
+
+  function rememberSchedule(schedule: AiSchedule): AiSchedule {
+    schedules.value = { ...schedules.value, [scheduleKeyOf(schedule.personaId, schedule.dayKey)]: schedule }
+    return schedule
+  }
+
+  /** 本机密钥：用角色自己的服务商生成当天日程并回传保存 */
+  async function generateScheduleLocally(
+    persona: AiPersona,
+    dayKey: string,
+  ): Promise<AiSchedule> {
+    if (!isTauri()) throw new Error('本机密钥需要桌面客户端生成日程')
+    const provider = providerOf(persona)
+    if (!provider) throw new Error('还没有配置 AI 服务商')
+    const apiKey = await loadProviderKey(provider.id)
+    if (!apiKey) throw new Error('本机没有找到该服务商的密钥，请到设置里重新填写')
+
+    const result = await invoke<AiCompleteResult>('ai_complete', {
+      baseUrl: provider.baseUrl,
+      apiKey,
+      model: persona.modelOverride ?? provider.model,
+      messages: buildSchedulePrompt({
+        persona,
+        dayKey,
+        localTime: new Date().toLocaleString(),
+      }),
+      temperature: 0.8,
+      maxTokens: 800,
+      jsonMode: true,
+    })
+
+    const items = parseScheduleItems(result.content)
+    if (items.length === 0) throw new Error('日程生成失败，请重试')
+
+    reportUsage({
+      personaId: persona.id,
+      providerId: provider.id,
+      kind: 'schedule',
+      model: persona.modelOverride ?? provider.model,
+      usage: result.usage,
+    })
+
+    const saved = await aiApi.saveSchedule(persona.id, { dayKey, items, source: 'ai' })
+    return rememberSchedule(saved.schedule)
+  }
+
+  /**
+   * 确保某个角色当天有日程。
+   * 已缓存直接返回；服务端托管密钥由服务端生成；本机密钥在客户端生成后回传。
+   */
+  async function ensureSchedule(
+    personaId: string,
+    options: { dayKey?: string; force?: boolean } = {},
+  ): Promise<AiSchedule | null> {
+    const persona = personaById.value.get(personaId)
+    if (!persona) return null
+    const dayKey = options.dayKey ?? dayKeyOf()
+
+    if (!options.force) {
+      const cached = cachedSchedule(personaId, dayKey)
+      if (cached) return cached
+    }
+
+    const key = scheduleKeyOf(personaId, dayKey)
+    const pending = schedulePending.get(key)
+    if (pending) return pending
+
+    const task = (async (): Promise<AiSchedule | null> => {
+      try {
+        const result = options.force
+          ? await aiApi.regenerateSchedule(personaId, dayKey)
+          : await aiApi.ensureSchedule(personaId, dayKey)
+        if (result.schedule) return rememberSchedule(result.schedule)
+        if (result.needsClientGeneration) return await generateScheduleLocally(persona, dayKey)
+        return cachedSchedule(personaId, dayKey)
+      } catch (e) {
+        // 手动重新生成失败要明确报错；自动补日程失败则回退到已有内容
+        if (options.force) throw e
+        const cached = cachedSchedule(personaId, dayKey)
+        if (cached) return cached
+        throw e
+      } finally {
+        schedulePending.delete(key)
+      }
+    })()
+
+    schedulePending.set(key, task)
+    return task
+  }
+
+  /** 手动保存当天日程（面板编辑） */
+  async function saveScheduleItems(
+    personaId: string,
+    dayKey: string,
+    items: AiScheduleItem[],
+  ): Promise<AiSchedule> {
+    const result = await aiApi.saveSchedule(personaId, { dayKey, items, source: 'manual' })
+    return rememberSchedule(result.schedule)
+  }
+
   /** 分段规则以全局设置为准；离线读不到设置时退回默认规则 */
   function currentSegmentRule(): SegmentRule {
     const settings = globalSettings.value
@@ -119,7 +238,15 @@ export const useAiStore = defineStore('ai', () => {
     conversationId?: string
     personaId?: string
     providerId?: string
-    kind: 'chat' | 'group_reply' | 'group_autonomy' | 'proactive' | 'moment' | 'summary' | 'vision'
+    kind:
+      | 'chat'
+      | 'group_reply'
+      | 'group_autonomy'
+      | 'proactive'
+      | 'moment'
+      | 'schedule'
+      | 'summary'
+      | 'vision'
     refId?: string
     model?: string
     usage: AiCompleteResult['usage']
@@ -253,6 +380,9 @@ export const useAiStore = defineStore('ai', () => {
       .filter((message) => message.id !== currentMessageId)
       .slice(-60)
 
+    // 日程只影响角色「此刻是谁」，取不到就照常回复
+    const schedule = await ensureSchedule(persona.id).catch(() => null)
+
     const chat = buildChatMessages({
       persona,
       facts: memories.facts,
@@ -264,6 +394,8 @@ export const useAiStore = defineStore('ai', () => {
       userImages: images,
       includeImages,
       stickers: stickerOptionsFromPacks(useStickersStore().packs),
+      schedule,
+      scheduleNowMinutes: minutesOfLocalDay(),
     })
 
     return { chat, memories }
@@ -623,6 +755,9 @@ export const useAiStore = defineStore('ai', () => {
     const provider = providerOf(persona)
     if (!provider) throw new Error('还没有配置 AI 服务商')
 
+    // 跨天后第一条消息：先把今天的日程准备好；失败不阻断这轮回复
+    await ensureSchedule(persona.id).catch(() => null)
+
     const images = attachments.filter((a) => a.kind === 'image')
     const nonce = ulid()
     // clientNonce 必须与下面 generation 用的完全一致：
@@ -784,11 +919,14 @@ export const useAiStore = defineStore('ai', () => {
       /* 没有记忆也能主动开口 */
     }
 
+    const schedule = await ensureSchedule(persona.id).catch(() => null)
     const prompt = buildProactivePrompt({
       persona,
       memoryDigest: hint ? `${digest}\n提示：${hint}` : digest,
       idleHours: 0,
       localTime: new Date().toLocaleString(),
+      schedule,
+      scheduleNowMinutes: minutesOfLocalDay(),
     })
 
     const result = await invoke<AiCompleteResult>('ai_complete', {
@@ -921,6 +1059,7 @@ export const useAiStore = defineStore('ai', () => {
         return snapshot ? { speaker: snapshot.senderName, content: snapshot.preview } : null
       }
 
+      const schedule = await ensureSchedule(persona.id).catch(() => null)
       const prompt = buildGroupPrompt({
         persona,
         mood: payload.mood,
@@ -956,6 +1095,8 @@ export const useAiStore = defineStore('ai', () => {
             : null,
         idleHours: Math.max(0, Math.floor((Date.now() - lastAt) / 3_600_000)),
         localTime: new Date().toLocaleString(),
+        schedule,
+        scheduleNowMinutes: minutesOfLocalDay(),
       })
 
       const groupResult = await invoke<AiCompleteResult>('ai_complete', {
@@ -1164,6 +1305,10 @@ export const useAiStore = defineStore('ai', () => {
     handleProactiveDue,
     handleMomentDue,
     handleGroupDue,
+    schedules,
+    cachedSchedule,
+    ensureSchedule,
+    saveScheduleItems,
     estimateTokens,
   }
 })

@@ -1,5 +1,13 @@
 import { AI_CONTEXT_BUDGET, AI_SKIP_TOKEN } from '../constants'
-import type { AiMemoryFact, AiMemorySummary, AiPersona, AttachmentRef, Message } from '../entities'
+import type {
+  AiMemoryFact,
+  AiMemorySummary,
+  AiPersona,
+  AiSchedule,
+  AttachmentRef,
+  Message,
+} from '../entities'
+import { currentScheduleItem } from './schedule'
 import { estimateTokens } from './tokens'
 import { renderStickerBlock, type StickerOption } from './sticker-markers'
 
@@ -35,6 +43,10 @@ export interface BuildContextInput {
   includeImages?: boolean
   /** 可选的表情包清单：非空时模型可以在回复里输出 [[sticker:id]] 标记 */
   stickers?: StickerOption[]
+  /** 角色当天的日程：让回复自然贴合「此刻在做什么」 */
+  schedule?: AiSchedule | null
+  /** 角色本地时区下当天已过去的分钟数，用来标记进行中的日程 */
+  scheduleNowMinutes?: number
   now?: number
 }
 
@@ -117,6 +129,27 @@ function renderPersonaBlock(persona: AiPersona, userName: string, now: number): 
 }
 
 /**
+ * 当天日程块。
+ * 只给模型看，UI 那边默认只展示已发生的部分；
+ * 提示词里保留全天，是为了让角色知道接下来要做什么、不把未来安排说成正在做。
+ */
+function renderScheduleBlock(schedule: AiSchedule, nowMinutes?: number): string {
+  const current = nowMinutes === undefined ? null : currentScheduleItem(schedule.items, nowMinutes)
+  const lines = schedule.items.map((item) => {
+    const doing = current && item === current ? '（你此刻正在做）' : ''
+    return `- ${item.start}-${item.end} ${item.activity}${doing}`
+  })
+
+  return [
+    `【今日日程（${schedule.dayKey}）】`,
+    ...lines,
+    current ? `你此刻正在：${current.activity}。` : '此刻你的日程里没有安排，可能在休息或临时做别的事。',
+    '回复时自然带入你当前正在做的事和状态，但不要把日程逐条念出来；' +
+      '还没到的安排不要提前说成正在做，也不要说自己在做日程之外的事。',
+  ].join('\n')
+}
+
+/**
  * 组装一次对话所需的完整消息数组。
  * 顺序固定为 规则 → 人设 → 事实 → 摘要 → 最近原文 → 本次输入，
  * 每一段都有独立 token 预算，避免长会话把上下文挤爆。
@@ -135,6 +168,16 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     role: 'system',
     content: truncateByToken(renderPersonaBlock(input.persona, input.userName, now), AI_CONTEXT_BUDGET.system),
   })
+
+  if (input.schedule && input.schedule.items.length > 0) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        renderScheduleBlock(input.schedule, input.scheduleNowMinutes),
+        AI_CONTEXT_BUDGET.schedule,
+      ),
+    })
+  }
 
   const stickerBlock = renderStickerBlock(input.stickers ?? [])
   if (stickerBlock) {
@@ -242,6 +285,53 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
   return messages
 }
 
+/**
+ * 生成角色当天日程的提示词。
+ * 服务端托管密钥与客户端本机密钥共用同一份，保证两边生成的风格一致。
+ */
+export function buildSchedulePrompt(input: {
+  persona: AiPersona
+  dayKey: string
+  localTime: string
+}): ChatMessage[] {
+  const interests = (input.persona.interests ?? []).filter((item) => item.trim().length > 0)
+  const card = input.persona.card?.trim()
+  const prompt = input.persona.systemPrompt
+    .replace(/\{\{user\}\}/g, '对方')
+    .replace(/\{\{time\}\}/g, input.localTime)
+
+  const profile = [
+    `角色名：${input.persona.name}`,
+    `角色设定：\n${prompt}`,
+    card ? `角色卡：\n${card}` : '',
+    interests.length > 0 ? `兴趣：${interests.join('、')}` : '',
+  ]
+    .filter((part) => part.length > 0)
+    .join('\n\n')
+
+  return [
+    {
+      role: 'system',
+      content: [
+        '你负责为聊天角色设计当天的生活日程。',
+        '要求：',
+        '1. 输出 6~10 个时间段，按时间升序，从起床覆盖到睡前。',
+        '2. 时间用 24 小时制 HH:MM，结束时间必须晚于开始时间，时间段之间不要重叠。',
+        '3. 活动描述 4~18 个字，具体、生活化，体现角色身份、兴趣和说话风格；不要出现「AI」「角色」「日程」这类字眼。',
+        '4. 保留起床、三餐、洗漱等日常，但可以写得有角色特色。',
+        '5. 只输出严格 JSON，不要代码块，不要任何解释。',
+        '格式：{"items":[{"start":"07:30","end":"08:10","activity":"起床洗漱"}]}',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [`今天日期：${input.dayKey}`, `当前时间：${input.localTime}`, profile, '请生成今天的日程 JSON。'].join(
+        '\n\n',
+      ),
+    },
+  ]
+}
+
 /** 记忆压缩用的提示词，要求模型输出严格 JSON */
 export function buildCompactionPrompt(input: {
   previousSummary: string | null
@@ -275,6 +365,8 @@ export function buildProactivePrompt(input: {
   memoryDigest: string
   idleHours: number
   localTime: string
+  schedule?: AiSchedule | null
+  scheduleNowMinutes?: number
 }): ChatMessage[] {
   const interests = (input.persona.interests ?? []).filter((item) => item.trim().length > 0)
   const card = input.persona.card?.trim()
@@ -286,6 +378,9 @@ export function buildProactivePrompt(input: {
         input.persona.systemPrompt,
         card ? `【角色卡】\n${card}` : '',
         interests.length > 0 ? `【兴趣】${interests.join('、')}` : '',
+        input.schedule && input.schedule.items.length > 0
+          ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
+          : '',
         PLATFORM_RULES,
         '现在是你主动找对方聊天，不是回复。',
         '要求：1~2 句话，自然开启话题；可以从你的兴趣或对方记得的事里挑一个切口。',
@@ -345,6 +440,8 @@ export interface GroupPromptInput {
   /** 可选的表情包清单：非空时模型可以在回复里输出 [[sticker:id]] 标记 */
   stickers?: StickerOption[]
   localTime: string
+  schedule?: AiSchedule | null
+  scheduleNowMinutes?: number
 }
 
 export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
@@ -370,6 +467,9 @@ export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
     input.persona.systemPrompt,
     card ? `【角色卡】\n${card}` : '',
     interests.length > 0 ? `【兴趣】${interests.join('、')}。聊到这些会更投入。` : '',
+    input.schedule && input.schedule.items.length > 0
+      ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
+      : '',
     renderStickerBlock(input.stickers ?? []),
     PLATFORM_RULES,
     [

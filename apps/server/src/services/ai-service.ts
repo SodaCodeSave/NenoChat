@@ -39,7 +39,9 @@ import * as conversationsRepo from '../db/repo/conversations'
 import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
+import * as scheduleRepo from '../db/repo/schedule'
 import * as stickersRepo from '../db/repo/stickers'
+import { localDayKey, minutesOfDay, serverTzOffsetMinutes } from './proactive-rules'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
@@ -55,6 +57,9 @@ import {
   emitMemberRemoved,
   emitMessageCreated,
 } from '../ws/emitter'
+
+/** 与服务端定时任务保持同一套时区口径 */
+const TZ_OFFSET_MIN = serverTzOffsetMinutes()
 
 /* ------------------------------ 服务商 ------------------------------ */
 
@@ -909,6 +914,13 @@ export async function generateOnServer(
   // 图片上下文：配了识图模型就先转文字描述，没配就转成 data URL 直传主模型
   const imageInput = await prepareImageInput(db, provider, apiKey, userRow, recent)
 
+  // 角色日程：客户端打开会话时会确保已生成；这里只读，不阻塞回复
+  const scheduleRow = scheduleRepo.findSchedule(
+    db,
+    persona.id,
+    localDayKey(Date.now(), TZ_OFFSET_MIN),
+  )
+
   const chatMessages = buildChatMessages({
     persona: aiRepo.mapPersona(persona),
     facts,
@@ -920,6 +932,8 @@ export async function generateOnServer(
     userImages: imageInput.userImages,
     includeImages: imageInput.includeImages,
     stickers: aiStickerOptions(db, input.userId),
+    schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
+    scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
   })
 
   const settings = aiRepo.readGlobalSettings(db, input.userId)

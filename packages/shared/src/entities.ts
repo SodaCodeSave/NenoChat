@@ -347,6 +347,26 @@ export interface AiPersona {
   updatedAt: number
 }
 
+/** 角色日程里的一个时间段，时间统一用角色本地时区的 HH:MM */
+export interface AiScheduleItem {
+  start: string
+  end: string
+  activity: string
+}
+
+/** 日程来源：AI 生成 / 用户手动调整 */
+export type AiScheduleSource = 'ai' | 'manual'
+
+/** 角色某一天的日程 */
+export interface AiSchedule {
+  personaId: string
+  /** YYYY-MM-DD，按角色所在时区算出的本地日 */
+  dayKey: string
+  items: AiScheduleItem[]
+  source: AiScheduleSource
+  updatedAt: number
+}
+
 /**
  * 用户的 AI 自动互动总闸。
  * 主动私聊与动态互动共用同一条记录，避免「关了一个另一个还在发」。
@@ -395,6 +415,7 @@ export type AiUsageKind =
   | 'group_autonomy'
   | 'proactive'
   | 'moment'
+  | 'schedule'
   | 'summary'
   | 'vision'
   | 'title'

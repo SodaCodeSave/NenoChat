@@ -62,6 +62,24 @@ export const PersonaSchema = z.object({
 export const PersonaPatchSchema = PersonaSchema.partial()
 
 const HHMM = /^\d{2}:\d{2}$/
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+
+export const AiScheduleItemSchema = z.object({
+  start: z.string().regex(HHMM),
+  end: z.string().regex(HHMM),
+  activity: z.string().trim().min(1).max(60),
+})
+
+/** 保存某一天的日程：AI 生成回写与手动编辑共用 */
+export const AiScheduleSaveSchema = z.object({
+  dayKey: z.string().regex(DAY_KEY),
+  items: z.array(AiScheduleItemSchema).min(1).max(20),
+  source: z.enum(['ai', 'manual']).optional(),
+})
+
+export const AiScheduleQuerySchema = z.object({
+  date: z.string().regex(DAY_KEY).optional(),
+})
 
 /** 全局 AI 自动互动设置：主动私聊 + 动态互动共用一条 */
 export const AiGlobalSettingsSchema = z.object({
@@ -139,6 +157,7 @@ export const UsageReportSchema = z.object({
     'group_autonomy',
     'proactive',
     'moment',
+    'schedule',
     'summary',
     'vision',
     'title',

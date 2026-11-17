@@ -19,6 +19,7 @@ import * as conversationsRepo from '../db/repo/conversations'
 import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
+import * as scheduleRepo from '../db/repo/schedule'
 import * as stickersRepo from '../db/repo/stickers'
 import * as usersRepo from '../db/repo/users'
 import { err } from '../util/errors'
@@ -26,6 +27,7 @@ import { now } from '../util/clock'
 import { aiStickerOptions, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
 import { appendSystemMessage } from './message-service'
 import { createNotification } from './notification-service'
+import * as scheduleService from './schedule-service'
 import {
   decideGroupAutonomy,
   decideGroupReply,
@@ -37,6 +39,7 @@ import {
   formatLocalTime,
   inQuietWindow,
   localDayKey,
+  minutesOfDay,
   serverTzOffsetMinutes,
 } from './proactive-rules'
 import { hub } from '../ws/hub'
@@ -372,6 +375,11 @@ function buildTurnPrompt(
   )
 
   const triggerRow = input.trigger ? messagesRepo.findById(db, input.trigger.messageId) : null
+  const scheduleRow = scheduleRepo.findSchedule(
+    db,
+    input.member.persona.id,
+    localDayKey(now(), TZ_OFFSET_MIN),
+  )
 
   return buildGroupPrompt({
     persona,
@@ -395,6 +403,8 @@ function buildTurnPrompt(
         ? Math.max(0, Math.floor((now() - conversationLastMessageAt(db, input.conversationId)) / 3_600_000))
         : undefined,
     localTime: formatLocalTime(now(), TZ_OFFSET_MIN),
+    schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
+    scheduleNowMinutes: minutesOfDay(now(), TZ_OFFSET_MIN),
   })
 }
 
@@ -553,6 +563,10 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
     return
   }
 
+  // 服务端托管密钥时顺手补齐当天日程；本机密钥由客户端生成时自己注入
+  if (provider.key_location === 'server') {
+    await scheduleService.ensureScheduleQuietly(db, input.member.persona)
+  }
   const prompt = buildTurnPrompt(db, input)
   const model = input.member.persona.model_override ?? provider.model
 
