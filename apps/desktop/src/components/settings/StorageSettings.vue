@@ -13,6 +13,12 @@ import { CACHE_AGE_OPTIONS, CACHE_SIZE_OPTIONS } from '@nenochat/shared/storage/
 import { buildStorageReport, formatBytes } from '@nenochat/shared/storage/stats'
 import Icon from '@/components/ui/Icon.vue'
 import type { IconName } from '@/components/ui/icons'
+import SettingsCard from '@/components/ui/form/SettingsCard.vue'
+import Field from '@/components/ui/form/Field.vue'
+import Select from '@/components/ui/form/Select.vue'
+import Button from '@/components/ui/form/Button.vue'
+import Alert from '@/components/ui/form/Alert.vue'
+import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { hasLocalDb } from '@/platform/db'
 import {
   attachmentCacheStats,
@@ -53,6 +59,13 @@ const categoryIcons: Record<string, IconName> = {
 }
 
 const exportable = computed(() => hasLocalDb() && Boolean(servers.currentId))
+
+const sizeOptions = computed(() =>
+  CACHE_SIZE_OPTIONS.map((bytes) => ({ value: bytes, label: formatBytes(bytes) })),
+)
+const ageOptions = computed(() =>
+  CACHE_AGE_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+)
 
 function formatTime(ts: number): string {
   if (!ts) return '-'
@@ -107,10 +120,6 @@ async function clearCache(): Promise<void> {
 }
 
 async function clearMessages(): Promise<void> {
-  if (!confirmClearMessages.value) {
-    confirmClearMessages.value = true
-    return
-  }
   const serverId = servers.currentId
   if (!serverId) return
 
@@ -221,37 +230,33 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div>
-    <h2 class="mb-1 text-[15px] font-semibold text-text-strong">存储与数据</h2>
-    <p class="mb-4 text-[12px] text-muted">
-      消息、图片与文件会镜像到本机，离线也能查看；所有清理只影响当前设备
-    </p>
+  <div class="space-y-3">
+    <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-else-if="notice" tone="success">{{ notice }}</Alert>
 
-    <p v-if="error" class="mb-3 text-[12px] text-danger">{{ error }}</p>
-    <p v-else-if="notice" class="mb-3 text-[12px] text-accent">{{ notice }}</p>
-
-    <!-- 占用总览 -->
-    <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <p class="text-[12px] text-muted">本机占用</p>
-          <p class="mt-0.5 text-[22px] font-semibold leading-tight text-text-strong">
-            {{ loading ? '统计中…' : formatBytes(report?.totalBytes ?? 0) }}
-          </p>
-          <p class="mt-1 text-[11.5px] text-muted">
-            本地镜像 {{ formatBytes(report?.mirrorBytes ?? 0) }}（全部服务器） · 附件缓存
-            {{ formatBytes(report?.cacheBytes ?? 0) }}
-          </p>
-        </div>
-        <button
-          type="button"
-          class="rounded-lg border border-line p-1.5 text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50"
-          title="重新统计"
+    <SettingsCard id="usage" title="占用总览" icon="folder">
+      <template #actions>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon="refresh"
+          :loading="loading"
           :disabled="loading"
           @click="refresh"
         >
-          <Icon name="refresh" :size="14" />
-        </button>
+          重新统计
+        </Button>
+      </template>
+
+      <div class="rounded-lg bg-surface-2 px-3.5 py-3">
+        <p class="text-[11.5px] text-muted">本机占用</p>
+        <p class="mt-0.5 text-[24px] font-semibold leading-tight tracking-tight text-text-strong">
+          {{ loading ? '统计中…' : formatBytes(report?.totalBytes ?? 0) }}
+        </p>
+        <p class="mt-1 text-[11.5px] text-muted">
+          本地镜像 {{ formatBytes(report?.mirrorBytes ?? 0) }}（全部服务器） · 附件缓存
+          {{ formatBytes(report?.cacheBytes ?? 0) }}
+        </p>
       </div>
 
       <div class="mt-3 space-y-2.5">
@@ -274,124 +279,109 @@ onMounted(refresh)
       <p v-if="!hasLocalDb()" class="mt-3 text-[11px] text-muted">
         浏览器模式没有本地镜像，统计仅包含附件缓存
       </p>
-    </section>
+    </SettingsCard>
 
-    <!-- 附件缓存 -->
-    <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-      <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0">
-          <p class="text-[13px] font-medium text-text-strong">附件缓存</p>
-          <p class="mt-0.5 text-[11.5px] text-muted">
-            服务端图片与文件优先读本机缓存，已缓存 {{ cacheFileCount }} 个文件
-          </p>
-        </div>
+    <SettingsCard
+      id="cache"
+      title="附件缓存"
+      description="服务端图片与文件优先读本机缓存，超过上限时先清理最久未使用的文件"
+      icon="image"
+    >
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="容量上限">
+          <Select
+            :model-value="policy.maxBytes"
+            :options="sizeOptions"
+            @update:model-value="
+              (value) => value !== null && updatePolicy({ maxBytes: Number(value) })
+            "
+          />
+        </Field>
+        <Field label="闲置过期">
+          <Select
+            :model-value="policy.maxAgeMs"
+            :options="ageOptions"
+            @update:model-value="
+              (value) => value !== null && updatePolicy({ maxAgeMs: Number(value) })
+            "
+          />
+        </Field>
       </div>
 
-      <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <label class="block">
-          <span class="mb-1 block text-[11.5px] text-muted">容量上限</span>
-          <select
-            class="h-9 w-full rounded-lg border border-line bg-surface-2 px-2 text-[12.5px] text-text outline-none focus:border-accent"
-            :value="policy.maxBytes"
-            @change="updatePolicy({ maxBytes: Number(($event.target as HTMLSelectElement).value) })"
-          >
-            <option v-for="bytes in CACHE_SIZE_OPTIONS" :key="bytes" :value="bytes">
-              {{ formatBytes(bytes) }}
-            </option>
-          </select>
-        </label>
-        <label class="block">
-          <span class="mb-1 block text-[11.5px] text-muted">闲置过期</span>
-          <select
-            class="h-9 w-full rounded-lg border border-line bg-surface-2 px-2 text-[12.5px] text-text outline-none focus:border-accent"
-            :value="policy.maxAgeMs"
-            @change="updatePolicy({ maxAgeMs: Number(($event.target as HTMLSelectElement).value) })"
-          >
-            <option v-for="option in CACHE_AGE_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+        <p class="text-[11.5px] text-muted">已缓存 {{ cacheFileCount }} 个文件</p>
+        <Button size="sm" :loading="busy === 'cache'" :disabled="busy !== ''" @click="clearCache">
+          {{ busy === 'cache' ? '清理中…' : '清理附件缓存' }}
+        </Button>
       </div>
+    </SettingsCard>
 
-      <button
-        type="button"
-        class="mt-3 rounded-lg border border-line px-3 py-1.5 text-[12.5px] text-text hover:bg-surface-2 disabled:opacity-60"
-        :disabled="busy === 'cache'"
-        @click="clearCache"
-      >
-        {{ busy === 'cache' ? '清理中…' : '清理附件缓存' }}
-      </button>
-    </section>
-
-    <!-- 本地镜像 -->
-    <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-      <p class="text-[13px] font-medium text-text-strong">本地消息镜像</p>
-      <p class="mt-0.5 text-[11.5px] leading-relaxed text-muted">
-        清空后当前服务器在本机的聊天记录会被删除，服务端与其它设备不受影响；重新联网会重新同步历史消息。
-      </p>
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          class="rounded-lg border px-3 py-1.5 text-[12.5px] disabled:opacity-60"
-          :class="
-            confirmClearMessages
-              ? 'border-danger bg-danger/10 text-danger'
-              : 'border-line text-text hover:bg-surface-2'
-          "
+    <SettingsCard
+      id="mirror"
+      title="本地消息镜像"
+      description="清空后当前服务器在本机的聊天记录会被删除，服务端与其它设备不受影响；重新联网会重新同步历史消息"
+      icon="trash"
+      tone="danger"
+    >
+      <div class="flex flex-wrap items-center gap-2">
+        <Button
+          variant="danger-ghost"
+          size="sm"
+          icon="trash"
           :disabled="!hasLocalDb() || busy === 'messages'"
-          @click="clearMessages"
+          @click="confirmClearMessages = true"
         >
-          {{ busy === 'messages' ? '清理中…' : confirmClearMessages ? '确认清空消息镜像' : '清空消息镜像' }}
-        </button>
-        <button
-          v-if="confirmClearMessages"
-          type="button"
-          class="rounded-lg px-2 py-1.5 text-[12.5px] text-muted hover:text-text"
-          @click="confirmClearMessages = false"
-        >
-          取消
-        </button>
+          {{ busy === 'messages' ? '清理中…' : '清空消息镜像' }}
+        </Button>
       </div>
-    </section>
 
-    <!-- 导出 -->
-    <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-      <p class="text-[13px] font-medium text-text-strong">导出备份</p>
-      <p class="mt-0.5 text-[11.5px] leading-relaxed text-muted">
-        把当前服务器的本地镜像与本地偏好导出为一份 JSON 备份，可随时导入恢复。
-      </p>
-      <button
-        type="button"
-        class="mt-3 flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-text disabled:opacity-60"
-        :disabled="!exportable || busy === 'export'"
+      <ConfirmDialog
+        v-model:open="confirmClearMessages"
+        title="清空本机消息镜像？"
+        description="只会删除这台设备上的消息记录，服务端与其它设备不受影响。清空后需要联网重新同步。"
+        confirm-text="确认清空"
+        :loading="busy === 'messages'"
+        @confirm="clearMessages"
+      />
+    </SettingsCard>
+
+    <SettingsCard
+      id="export"
+      title="导出备份"
+      description="把当前服务器的本地镜像与本地偏好导出为一份 JSON 备份，可随时导入恢复"
+      icon="copy"
+    >
+      <Button
+        variant="primary"
+        size="sm"
+        icon="copy"
+        :loading="busy === 'export'"
+        :disabled="!exportable || busy !== ''"
         @click="exportBackup"
       >
-        <Icon name="copy" :size="13" />
         {{ busy === 'export' ? '导出中…' : '导出备份文件' }}
-      </button>
-    </section>
+      </Button>
+    </SettingsCard>
 
-    <!-- 导入 -->
-    <section class="rounded-xl border border-line bg-surface p-4">
-      <p class="text-[13px] font-medium text-text-strong">导入备份</p>
-      <p class="mt-0.5 text-[11.5px] leading-relaxed text-muted">
-        导入会覆盖当前服务器在备份中出现的同名表数据，建议先导出一份当前备份。
-      </p>
-
-      <button
-        type="button"
-        class="mt-3 flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12.5px] text-text hover:bg-surface-2 disabled:opacity-60"
-        :disabled="!hasLocalDb() || busy === 'pick' || importing"
+    <SettingsCard
+      id="import"
+      title="导入备份"
+      description="导入会覆盖当前服务器在备份中出现的同名表数据，建议先导出一份当前备份"
+      icon="restore"
+    >
+      <Button
+        size="sm"
+        icon="restore"
+        :loading="busy === 'pick'"
+        :disabled="!hasLocalDb() || busy !== '' || importing"
         @click="chooseImport"
       >
-        <Icon name="restore" :size="13" />
         {{ busy === 'pick' ? '读取中…' : '选择备份文件' }}
-      </button>
+      </Button>
 
       <div
         v-if="pendingImport"
-        class="mt-3 rounded-lg border border-line bg-surface-2 p-3 text-[11.5px] leading-relaxed"
+        class="mt-3 rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[11.5px] leading-relaxed"
       >
         <p class="truncate text-[12px] font-medium text-text-strong">{{ pendingImport.fileName }}</p>
         <p class="mt-0.5 text-muted">
@@ -403,25 +393,22 @@ onMounted(refresh)
           {{ pendingImport.summary.conversations }} · 成员 {{ pendingImport.summary.members }} · 用户
           {{ pendingImport.summary.users }} · 共 {{ pendingImport.summary.totalRows }} 条
         </p>
-        <div class="mt-2 flex flex-wrap gap-2">
-          <button
-            type="button"
-            class="rounded-lg bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-text disabled:opacity-60"
-            :disabled="importing"
-            @click="confirmImport"
-          >
-            {{ importing ? '导入中…' : '确认导入' }}
-          </button>
-          <button
-            type="button"
-            class="rounded-lg px-2 py-1 text-[12px] text-muted hover:text-text"
-            :disabled="importing"
-            @click="pendingImport = null"
-          >
-            取消
-          </button>
-        </div>
       </div>
-    </section>
+
+      <ConfirmDialog
+        :open="Boolean(pendingImport)"
+        title="导入这份备份？"
+        description="当前服务器在备份中出现的同名表会被覆盖，此操作不可撤销。"
+        confirm-text="确认导入"
+        :loading="importing"
+        @update:open="(value) => !value && (pendingImport = null)"
+        @confirm="confirmImport"
+      >
+        <div v-if="pendingImport" class="rounded-lg bg-surface-2 px-3 py-2 text-[11.5px] text-muted">
+          将恢复 {{ pendingImport.summary.totalRows }} 条记录，来自
+          {{ pendingImport.backup.server.name }}
+        </div>
+      </ConfirmDialog>
+    </SettingsCard>
   </div>
 </template>

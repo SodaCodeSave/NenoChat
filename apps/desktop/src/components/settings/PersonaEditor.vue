@@ -3,6 +3,15 @@ import { computed, ref, watch } from 'vue'
 import type { AiPersona, AiProvider } from '@nenochat/shared'
 import AvatarUploader from './AvatarUploader.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Field from '@/components/ui/form/Field.vue'
+import TextInput from '@/components/ui/form/TextInput.vue'
+import Textarea from '@/components/ui/form/Textarea.vue'
+import Select from '@/components/ui/form/Select.vue'
+import Segmented from '@/components/ui/form/Segmented.vue'
+import Switch from '@/components/ui/form/Switch.vue'
+import NumberInput from '@/components/ui/form/NumberInput.vue'
+import Button from '@/components/ui/form/Button.vue'
+import Alert from '@/components/ui/form/Alert.vue'
 import { aiApi, type PersonaInput } from '@/api/ai'
 import { uploadFile } from '@/api/files'
 import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
@@ -131,6 +140,17 @@ function setMode(mode: 'global' | 'custom'): void {
   form.value.proactiveMode = mode
 }
 
+/** 主动互动参数统一走这里，避免模板里到处展开对象 */
+function setProactive(patch: Partial<NonNullable<PersonaInput['proactive']>>): void {
+  form.value.proactive = { ...proactive.value, ...patch }
+}
+
+/** 概率用百分比展示，内部存 0-1 */
+function setChanceProbability(percent: number | null): void {
+  const value = Math.min(100, Math.max(0, Math.round(percent ?? 10)))
+  setProactive({ chanceProbability: value / 100 })
+}
+
 function addInterest(): void {
   const value = interestDraft.value.trim().replace(/[,，]$/, '')
   interestDraft.value = ''
@@ -229,15 +249,20 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-3 rounded-xl border border-line bg-surface p-3">
+  <div class="space-y-3 rounded-xl border border-dashed border-line bg-surface-2/50 p-3">
     <div class="flex items-center justify-between">
-      <h4 class="text-[12.5px] font-medium text-text-strong">{{ title }}</h4>
-      <button type="button" class="rounded-md p-1 text-muted hover:bg-surface-3" @click="emit('cancel')">
-        <Icon name="close" :size="13" />
-      </button>
+      <h4 class="text-[12.5px] font-semibold text-text-strong">{{ title }}</h4>
+      <Button
+        variant="ghost"
+        size="sm"
+        icon="close"
+        title="关闭"
+        aria-label="关闭角色编辑器"
+        @click="emit('cancel')"
+      />
     </div>
 
-    <p v-if="error" class="rounded-lg bg-danger/10 px-2.5 py-1.5 text-[11.5px] text-danger">{{ error }}</p>
+    <Alert v-if="error" tone="danger">{{ error }}</Alert>
 
     <AvatarUploader
       :src="form.avatarUrl ?? null"
@@ -247,14 +272,14 @@ async function save(): Promise<void> {
       @uploaded="form.avatarUrl = $event"
     />
 
-    <label class="block">
-      <span class="mb-1 block text-[11.5px] font-medium text-muted">名称</span>
-      <input
+    <Field label="名称" for-id="persona-name">
+      <TextInput
+        id="persona-name"
         v-model="form.name"
         placeholder="角色名，如 小禾"
-        class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
+        maxlength="32"
       />
-    </label>
+    </Field>
 
     <div>
       <span class="mb-1 block text-[11.5px] font-medium text-muted">
@@ -284,286 +309,227 @@ async function save(): Promise<void> {
     </div>
 
     <div>
-      <div class="mb-1 flex items-center justify-between">
-        <span class="text-[11.5px] font-medium text-muted">角色卡</span>
-        <div class="flex items-center gap-1">
+      <div class="mb-1 flex items-center justify-between gap-2">
+        <span class="text-[12px] font-medium text-muted">角色卡</span>
+        <div class="flex items-center gap-1.5">
           <span v-if="form.cardFilename" class="max-w-[140px] truncate text-[11px] text-muted">
             {{ form.cardFilename }}
           </span>
-          <button
-            type="button"
-            class="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-text disabled:opacity-50"
+          <Button
+            size="sm"
+            :loading="cardBusy"
             :disabled="cardBusy"
             @click="cardInput?.click()"
           >
             {{ cardBusy ? '导入中…' : '导入文件' }}
-          </button>
-          <button
+          </Button>
+          <Button
             v-if="form.card"
-            type="button"
-            class="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-danger"
+            variant="ghost"
+            size="sm"
+            class="hover:!bg-danger/10 hover:!text-danger"
             @click="clearCard"
           >
             清空
-          </button>
+          </Button>
         </div>
       </div>
-      <textarea
-        v-model="form.card"
-        rows="5"
+      <Textarea
+        :model-value="form.card ?? ''"
+        :rows="5"
         placeholder="世界观、经历、说话习惯、和你的关系……也可以直接导入 .md / .txt / .json"
-        class="w-full resize-y rounded-lg border border-line bg-surface-2 px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-accent"
+        @update:model-value="form.card = $event"
       />
       <input ref="cardInput" type="file" accept=".md,.txt,.json" class="hidden" @change="importCard" />
     </div>
 
-    <label class="block">
-      <span class="mb-1 block text-[11.5px] font-medium text-muted">提示词（怎么说话）</span>
-      <textarea
+    <Field label="提示词（怎么说话）" for-id="persona-prompt">
+      <Textarea
+        id="persona-prompt"
         v-model="form.systemPrompt"
-        rows="4"
+        :rows="4"
         placeholder="人设提示词"
-        class="w-full resize-y rounded-lg border border-line bg-surface-2 px-2.5 py-2 text-[12.5px] outline-none focus:border-accent"
       />
-    </label>
+    </Field>
 
-    <label class="block">
-      <span class="mb-1 block text-[11.5px] font-medium text-muted">开场白（可选，只在首次建会话时发一次）</span>
-      <textarea
-        v-model="form.greeting"
-        rows="2"
+    <Field label="开场白" for-id="persona-greeting" optional hint="只在首次建会话时发一次">
+      <Textarea
+        id="persona-greeting"
+        :model-value="form.greeting ?? ''"
+        :rows="2"
+        :resize="false"
         placeholder="比如：你来啦，今天想聊点什么？"
-        class="w-full resize-none rounded-lg border border-line bg-surface-2 px-2.5 py-2 text-[12.5px] outline-none focus:border-accent"
+        @update:model-value="form.greeting = $event"
       />
-    </label>
+    </Field>
 
-    <div class="grid grid-cols-2 gap-2">
-      <label class="block">
-        <span class="mb-1 block text-[11.5px] font-medium text-muted">服务商</span>
-        <select
-          v-model="form.providerId"
-          class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2 text-[12px] outline-none"
-        >
-          <option :value="null">默认服务商</option>
-          <option v-for="provider in providers" :key="provider.id" :value="provider.id">
-            {{ provider.name }}
-          </option>
-        </select>
-      </label>
-      <label class="block">
-        <span class="mb-1 block text-[11.5px] font-medium text-muted">回复风格</span>
-        <select
-          v-model="form.replyStyle"
-          class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2 text-[12px] outline-none"
-        >
-          <option value="chatty">闲聊（分条较多）</option>
-          <option value="concise">简洁（分条较少）</option>
-          <option value="narrative">叙述（长段落）</option>
-        </select>
-      </label>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <Field label="服务商">
+        <Select
+          :model-value="form.providerId ?? '__default__'"
+          :options="[
+            { value: '__default__', label: '默认服务商' },
+            ...providers.map((provider) => ({ value: provider.id, label: provider.name })),
+          ]"
+          @update:model-value="
+            (value) => (form.providerId = value === '__default__' ? null : String(value))
+          "
+        />
+      </Field>
+      <Field label="回复风格">
+        <Select
+          :model-value="form.replyStyle ?? 'chatty'"
+          :options="[
+            { value: 'chatty', label: '闲聊（分条较多）' },
+            { value: 'concise', label: '简洁（分条较少）' },
+            { value: 'narrative', label: '叙述（长段落）' },
+          ]"
+          @update:model-value="
+            (value) =>
+              (form.replyStyle = value as 'chatty' | 'concise' | 'narrative')
+          "
+        />
+      </Field>
     </div>
 
-    <label class="block">
-      <span class="mb-1 block text-[11.5px] font-medium text-muted">模型覆盖（可选）</span>
-      <input
-        v-model="form.modelOverride"
-        placeholder="留空则用服务商的模型"
-        class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
+    <Field label="模型覆盖" for-id="persona-model" optional hint="留空则使用服务商配置的模型">
+      <TextInput
+        id="persona-model"
+        :model-value="form.modelOverride ?? ''"
+        placeholder="如 gpt-4o-mini"
+        spellcheck="false"
+        @update:model-value="form.modelOverride = $event"
       />
-    </label>
+    </Field>
 
     <div class="rounded-lg border border-line bg-surface-2 p-2.5">
-      <div class="mb-2 flex items-center gap-1 rounded-lg bg-surface p-0.5">
-        <button
-          type="button"
-          class="flex-1 rounded-md px-2 py-1 text-[11.5px] transition-colors"
-          :class="followsGlobal ? 'bg-accent/12 font-medium text-accent' : 'text-muted hover:text-text'"
-          @click="setMode('global')"
-        >
-          跟随全局
-        </button>
-        <button
-          type="button"
-          class="flex-1 rounded-md px-2 py-1 text-[11.5px] transition-colors"
-          :class="!followsGlobal ? 'bg-accent/12 font-medium text-accent' : 'text-muted hover:text-text'"
-          @click="setMode('custom')"
-        >
-          单独设置
-        </button>
-      </div>
+      <Segmented
+        :model-value="form.proactiveMode ?? 'global'"
+        full
+        size="sm"
+        :options="[
+          { value: 'global', label: '跟随全局' },
+          { value: 'custom', label: '单独设置' },
+        ]"
+        aria-label="主动消息来源"
+        @update:model-value="setMode($event as 'global' | 'custom')"
+      />
 
       <template v-if="followsGlobal">
-        <p class="text-[11.5px] leading-relaxed text-muted">{{ globalSummary }}</p>
+        <p class="mt-2 text-[11.5px] leading-relaxed text-muted">{{ globalSummary }}</p>
         <p class="mt-1 text-[11px] leading-relaxed text-muted">
           想改这些就切到「单独设置」，或者在设置页调整全局默认值。
         </p>
       </template>
 
       <template v-else>
-        <label class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            :checked="proactive.enabled"
-            class="h-3.5 w-3.5 accent-[var(--color-accent)]"
-            @change="
-              form.proactive = {
-                ...proactive,
-                enabled: ($event.target as HTMLInputElement).checked,
-              }
-            "
-          />
+        <div class="mt-2 flex items-center justify-between gap-3">
           <span class="text-[12px] font-medium text-text">允许主动找我</span>
-        </label>
+          <Switch
+            size="sm"
+            :model-value="proactive.enabled"
+            aria-label="允许主动找我"
+            @update:model-value="setProactive({ enabled: $event })"
+          />
+        </div>
 
-        <div v-if="proactive.enabled" class="mt-2 grid grid-cols-2 gap-2">
-          <label class="block">
-            <span class="mb-0.5 block text-[11px] text-muted">触发方式</span>
-            <select
-              :value="proactive.triggerMode ?? 'idle'"
-              class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-              @change="
-                form.proactive = {
-                  ...proactive,
-                  triggerMode: ($event.target as HTMLSelectElement).value as 'idle' | 'chance',
-                }
+        <div v-if="proactive.enabled" class="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <Field label="触发方式">
+            <Select
+              :model-value="proactive.triggerMode ?? 'idle'"
+              :options="[
+                { value: 'idle', label: '空闲几小时后找' },
+                { value: 'chance', label: '定时随机找话题' },
+              ]"
+              @update:model-value="
+                setProactive({ triggerMode: $event as 'idle' | 'chance' })
               "
-            >
-              <option value="idle">空闲几小时后找</option>
-              <option value="chance">定时随机找话题</option>
-            </select>
-          </label>
-          <label class="block">
-            <span class="mb-0.5 block text-[11px] text-muted">每天最多几条</span>
-            <div class="flex items-center gap-1.5">
-              <input
-                :value="proactive.maxPerDay"
-                type="number"
-                min="0"
-                max="998"
+            />
+          </Field>
+          <Field label="每天最多几条">
+            <div class="flex items-center gap-2">
+              <NumberInput
+                class="min-w-0 flex-1"
+                :model-value="proactive.maxPerDay"
+                :min="0"
+                :max="998"
                 :disabled="proactive.maxPerDay < 0"
-                class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface px-2 text-[12px] outline-none disabled:opacity-40"
-                @change="
-                  form.proactive = {
-                    ...proactive,
-                    maxPerDay: Math.max(0, Math.min(998, Math.round(Number(($event.target as HTMLInputElement).value)))),
-                  }
-                "
+                @update:model-value="setProactive({ maxPerDay: $event ?? 0 })"
               />
-              <label class="flex shrink-0 items-center gap-1 text-[11px] text-muted">
-                <input
-                  type="checkbox"
-                  :checked="proactive.maxPerDay < 0"
-                  class="h-3 w-3 accent-[var(--color-accent)]"
-                  @change="
-                    form.proactive = {
-                      ...proactive,
-                      maxPerDay: ($event.target as HTMLInputElement).checked ? -1 : 1,
-                    }
-                  "
+              <label class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
+                <Switch
+                  size="sm"
+                  :model-value="proactive.maxPerDay < 0"
+                  aria-label="主动消息无上限"
+                  @update:model-value="setProactive({ maxPerDay: $event ? -1 : 1 })"
                 />
                 无上限
               </label>
             </div>
-          </label>
+          </Field>
 
           <template v-if="(proactive.triggerMode ?? 'idle') === 'idle'">
-            <label class="block">
-              <span class="mb-0.5 block text-[11px] text-muted">空闲多久后找（小时）</span>
-              <input
-                :value="proactive.minIdleHours"
-                type="number"
-                min="0"
-                max="720"
-                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-                @change="
-                  form.proactive = {
-                    ...proactive,
-                    minIdleHours: Math.max(0, Math.min(720, Math.round(Number(($event.target as HTMLInputElement).value)))),
-                  }
-                "
+            <Field label="空闲多久后找">
+              <NumberInput
+                :model-value="proactive.minIdleHours"
+                :min="0"
+                :max="720"
+                suffix="小时"
+                @update:model-value="setProactive({ minIdleHours: $event ?? 0 })"
               />
-            </label>
+            </Field>
           </template>
           <template v-else>
-            <label class="block">
-              <span class="mb-0.5 block text-[11px] text-muted">掷骰间隔</span>
-              <select
-                :value="proactive.chanceUnit ?? 'hour'"
-                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-                @change="
-                  form.proactive = {
-                    ...proactive,
-                    chanceUnit: ($event.target as HTMLSelectElement).value as 'minute' | 'hour',
-                  }
-                "
-              >
-                <option value="minute">每分钟</option>
-                <option value="hour">每小时</option>
-              </select>
-            </label>
-            <label class="block">
-              <span class="mb-0.5 block text-[11px] text-muted">每次触发概率（%）</span>
-              <input
-                :value="Math.round((proactive.chanceProbability ?? 0.1) * 100)"
-                type="number"
-                min="0"
-                max="100"
-                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-                @change="
-                  form.proactive = {
-                    ...proactive,
-                    chanceProbability:
-                      Math.round(Math.max(0, Math.min(100, Number(($event.target as HTMLInputElement).value) || 0))) / 100,
-                  }
+            <Field label="掷骰间隔">
+              <Select
+                :model-value="proactive.chanceUnit ?? 'hour'"
+                :options="[
+                  { value: 'minute', label: '每分钟' },
+                  { value: 'hour', label: '每小时' },
+                ]"
+                @update:model-value="
+                  setProactive({ chanceUnit: $event as 'minute' | 'hour' })
                 "
               />
-            </label>
-            <label class="block">
-              <span class="mb-0.5 block text-[11px] text-muted">两条之间最少隔（分钟）</span>
-              <input
-                :value="proactive.chanceCooldownMinutes"
-                type="number"
-                min="0"
-                max="1440"
-                class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
-                @change="
-                  form.proactive = {
-                    ...proactive,
-                    chanceCooldownMinutes: Math.max(0, Math.min(1440, Math.round(Number(($event.target as HTMLInputElement).value)))),
-                  }
-                "
+            </Field>
+            <Field label="每次触发概率">
+              <NumberInput
+                :model-value="Math.round((proactive.chanceProbability ?? 0.1) * 100)"
+                :min="0"
+                :max="100"
+                suffix="%"
+                @update:model-value="setChanceProbability"
               />
-            </label>
+            </Field>
+            <Field label="两条之间最少间隔">
+              <NumberInput
+                :model-value="proactive.chanceCooldownMinutes"
+                :min="0"
+                :max="1440"
+                suffix="分钟"
+                @update:model-value="setProactive({ chanceCooldownMinutes: $event ?? 0 })"
+              />
+            </Field>
           </template>
 
-          <label class="block">
-            <span class="mb-0.5 block text-[11px] text-muted">免打扰开始（可跨零点）</span>
-            <input
-              :value="proactive.windowStart"
+          <Field label="免打扰开始" hint="可跨零点">
+            <TextInput
               type="time"
-              class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+              :model-value="proactive.windowStart ?? ''"
               @change="
-                form.proactive = {
-                  ...proactive,
-                  windowStart: ($event.target as HTMLInputElement).value,
-                }
+                setProactive({ windowStart: ($event.target as HTMLInputElement).value })
               "
             />
-          </label>
-          <label class="block">
-            <span class="mb-0.5 block text-[11px] text-muted">免打扰结束</span>
-            <input
-              :value="proactive.windowEnd"
+          </Field>
+          <Field label="免打扰结束">
+            <TextInput
               type="time"
-              class="h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] outline-none"
+              :model-value="proactive.windowEnd ?? ''"
               @change="
-                form.proactive = {
-                  ...proactive,
-                  windowEnd: ($event.target as HTMLInputElement).value,
-                }
+                setProactive({ windowEnd: ($event.target as HTMLInputElement).value })
               "
             />
-          </label>
+          </Field>
         </div>
 
         <p v-if="proactive.enabled && chanceMode" class="mt-2 text-[11px] leading-relaxed text-muted">
@@ -577,32 +543,27 @@ async function save(): Promise<void> {
       </template>
     </div>
 
-    <label class="flex items-center gap-2">
-      <input
-        type="checkbox"
-        :checked="form.inContacts"
-        class="h-3.5 w-3.5 accent-[var(--color-accent)]"
-        @change="form.inContacts = ($event.target as HTMLInputElement).checked"
-      />
+    <div class="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2">
       <span class="text-[12px] text-text">显示在通讯录的「AI 角色」分组</span>
-    </label>
+      <Switch
+        size="sm"
+        :model-value="form.inContacts ?? true"
+        aria-label="显示在通讯录"
+        @update:model-value="form.inContacts = $event"
+      />
+    </div>
 
     <div class="flex items-center justify-end gap-2 pt-1">
-      <button
-        type="button"
-        class="rounded-lg border border-line px-2.5 py-1 text-[12px] text-muted hover:text-text"
-        @click="emit('cancel')"
-      >
-        取消
-      </button>
-      <button
-        type="button"
-        class="rounded-lg bg-accent px-3 py-1 text-[12px] font-medium text-accent-text disabled:opacity-60"
+      <Button variant="ghost" size="sm" @click="emit('cancel')">取消</Button>
+      <Button
+        variant="primary"
+        size="sm"
+        :loading="saving"
         :disabled="saving || !form.name.trim()"
         @click="save"
       >
         {{ saving ? '保存中…' : editing ? '保存' : '创建' }}
-      </button>
+      </Button>
     </div>
   </div>
 </template>
