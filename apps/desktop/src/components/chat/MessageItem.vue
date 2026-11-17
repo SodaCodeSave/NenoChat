@@ -60,6 +60,9 @@ const bubbleNeeded = computed(
   () => isQq.value && props.message.type === 'text' && !deleted.value,
 )
 
+/** 引用块随自己的彩色气泡时需要换成白色系配色，避免白底上白字 */
+const inOwnBubble = computed(() => bubbleNeeded.value && qqOwn.value)
+
 const bubbleClass = computed(() => {
   if (!bubbleNeeded.value) return ''
   return qqOwn.value
@@ -260,20 +263,30 @@ const liveConnectorLabel = computed(() => {
 
         <!-- 气泡容器：QQ 风格下文本消息包进气泡（引用也随气泡对齐），其余风格保持平铺 -->
         <div class="min-w-0" :class="bubbleClass">
-          <!-- 引用 -->
+          <!-- 引用：独立引用块，带底色与圆角，和正文拉开层次 -->
           <button
             v-if="message.replyToId && !deleted"
             type="button"
-            class="mt-1 flex max-w-full items-center gap-1.5 border-l-2 bg-transparent pl-2 text-left text-[12px] transition-colors"
-            :class="
-              qqOwn
-                ? 'border-white/40 text-white/75 hover:text-white'
-                : 'border-line text-muted hover:text-text'
-            "
+            class="flex max-w-full items-center gap-1.5 rounded-md border-l-2 py-1 pl-2 pr-2.5 text-left text-[12px] transition-colors"
+            :class="[
+              bubbleNeeded ? '' : 'mt-1 mb-0.5',
+              inOwnBubble
+                ? 'border-white/60 bg-white/15 text-white/80 hover:bg-white/25 hover:text-white'
+                : 'border-accent/40 bg-surface-3/70 text-muted hover:bg-surface-3 hover:text-text',
+            ]"
             @click="emit('jump', message.replyToId)"
           >
-            <Icon name="reply" :size="12" class="shrink-0" :class="qqOwn ? 'text-white' : 'text-accent'" />
-            <span class="shrink-0" :class="qqOwn ? 'text-white' : 'text-accent'">{{ reply?.senderName ?? '某条消息' }}</span>
+            <Icon
+              name="reply"
+              :size="12"
+              class="shrink-0"
+              :class="inOwnBubble ? 'text-white' : 'text-accent'"
+            />
+            <span
+              class="shrink-0"
+              :class="inOwnBubble ? 'text-white' : 'text-accent'"
+              >{{ reply?.senderName ?? '某条消息' }}</span
+            >
             <span class="min-w-0 truncate">{{ reply?.preview ?? '原消息不在当前记录里' }}</span>
           </button>
 
