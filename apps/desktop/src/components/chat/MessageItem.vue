@@ -329,13 +329,13 @@ const liveConnectorLabel = computed(() => {
         </div>
 
         <!-- 贴纸 -->
-        <div v-else-if="isSticker" class="mt-1">
+        <div v-else-if="isSticker">
           <img
             v-for="attachment in attachments"
             :key="attachment.id"
             :src="attachment.displayUrl"
             :alt="attachment.filename"
-            class="h-[140px] w-[140px] object-contain"
+            class="block max-h-[160px] max-w-[200px] rounded-lg object-contain"
           />
         </div>
 
