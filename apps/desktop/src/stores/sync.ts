@@ -282,7 +282,7 @@ export const useSyncStore = defineStore('sync', () => {
     const startCursor = await loadCursor()
 
     wsClient.configure({
-      url: servers.current.wsUrl,
+      url: servers.effective?.wsUrl ?? servers.current.wsUrl,
       deviceId: auth.devicePayload().id,
       getToken: async () => auth.accessToken,
       getCursor: async () => startCursor,

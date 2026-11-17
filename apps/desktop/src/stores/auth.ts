@@ -95,8 +95,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   function bindServer(): void {
     const servers = useServersStore()
+    // Android 下 servers.effective 是环回代理地址；未就绪时退回真实地址
     configureHttp({
-      baseUrl: servers.current?.baseUrl ?? '',
+      baseUrl: servers.effective?.baseUrl ?? servers.current?.baseUrl ?? '',
       deviceId: deviceId(),
       refresh: () => refreshSession(),
       onAuthLost: () => {

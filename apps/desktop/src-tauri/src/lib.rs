@@ -1,6 +1,7 @@
 mod ai_gateway;
 mod db;
 mod notification;
+mod proxy;
 mod secrets;
 
 use tauri::Manager;
@@ -19,6 +20,8 @@ fn app_info() -> serde_json::Value {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Android WebView 的 Local Network Access 限制需要走环回代理，启动即监听
+    proxy::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -38,6 +41,7 @@ pub fn run() {
             secrets::secret_get,
             secrets::secret_delete,
             notification::show_system_notification,
+            proxy::proxy_set_target,
         ])
         .setup(|app| {
             // Windows 通知平台要求 AUMID 带显示名，否则 toast 只入库不弹出

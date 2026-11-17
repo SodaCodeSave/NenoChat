@@ -26,6 +26,9 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# 环回反向代理（Android WebView Local Network Access 限制的绕行通道）
+axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 
 # keyring 在移动端不可用，只在桌面端引入
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

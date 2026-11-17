@@ -4,6 +4,7 @@ import { API_PREFIX, type ServerInfo, type ServerInstance } from '@nenochat/shar
 import { listServers, removeServerCascade, touchServer, upsertServer } from '@/db/dao/servers'
 import { hasLocalDb } from '@/platform/db'
 import { clearAttachmentCache } from '@/platform/file-cache'
+import { mapServerUrls, type MappedUrls } from '@/platform/proxy'
 
 const CURRENT_KEY = 'nenochat.currentServer'
 const SERVERS_KEY = 'nenochat.servers'
@@ -54,6 +55,7 @@ export const useServersStore = defineStore('servers', () => {
     if (!currentId.value && servers.value.length > 0) {
       currentId.value = servers.value[0]!.id
     }
+    await refreshEffective()
   }
 
   /** 把服务器列表落到本地（桌面走 SQLite，浏览器走 localStorage） */
@@ -67,18 +69,34 @@ export const useServersStore = defineStore('servers', () => {
     }
   }
 
-  /** 探测地址是否是可用的 NenoChat 服务端 */
+  /** 探测地址是否是可用的 NenoChat 服务端（Android 下探测请求也走环回代理） */
   async function probe(rawUrl: string): Promise<ServerInfo> {
     const { baseUrl } = normalizeServerUrl(rawUrl)
+    const { baseUrl: probeBase } = await mapServerUrls(baseUrl, baseUrl)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 8000)
     try {
-      const response = await fetch(`${baseUrl}${API_PREFIX}/server/info`, { signal: controller.signal })
+      const response = await fetch(`${probeBase}${API_PREFIX}/server/info`, { signal: controller.signal })
       if (!response.ok) throw new Error(`服务器返回 ${response.status}`)
       return (await response.json()) as ServerInfo
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  /**
+   * 当前服务器的生效地址：桌面/浏览器 = 真实地址；
+   * Android = 环回代理地址（WebView 的 Local Network Access 拦截私网直连）。
+   * 持久化的 baseUrl/wsUrl 始终存真实地址，代理地址只存在于运行时。
+   */
+  const effective = ref<MappedUrls | null>(null)
+
+  async function refreshEffective(): Promise<void> {
+    if (!current.value) {
+      effective.value = null
+      return
+    }
+    effective.value = await mapServerUrls(current.value.baseUrl, current.value.wsUrl)
   }
 
   async function add(rawUrl: string, displayName?: string): Promise<ServerInstance> {
@@ -121,6 +139,7 @@ export const useServersStore = defineStore('servers', () => {
     currentId.value = id
     localStorage.setItem(CURRENT_KEY, id)
     serverInfo.value = null
+    await refreshEffective()
     await refreshInfo()
   }
 
@@ -159,6 +178,7 @@ export const useServersStore = defineStore('servers', () => {
       if (next) localStorage.setItem(CURRENT_KEY, next)
       else localStorage.removeItem(CURRENT_KEY)
     }
+    await refreshEffective()
     await persist()
   }
 
@@ -170,6 +190,8 @@ export const useServersStore = defineStore('servers', () => {
     serverInfo,
     loading,
     error,
+    /** 当前服务器的生效地址（Android 下为环回代理地址），见 refreshEffective */
+    effective,
     hydrate,
     persist,
     probe,
