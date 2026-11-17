@@ -1,6 +1,13 @@
+# 基础镜像走国内加速源；如需官方源可用 --build-arg NODE_IMAGE=node:22-alpine 覆盖
+ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine
+
 # 构建阶段：只装生产依赖
-FROM node:22-alpine AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
+
+# npm/pnpm/corepack 全部走 npmmirror 镜像
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=https://registry.npmmirror.com
 
 RUN corepack enable && corepack prepare pnpm@12 --activate
 
@@ -16,8 +23,12 @@ COPY packages/shared ./packages/shared
 COPY apps/server ./apps/server
 
 # 运行阶段：保留编译期原生模块
-FROM node:22-alpine AS runner
+FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
+
+# pnpm 安装也走 npmmirror（运行期需要时同样加速）
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=https://registry.npmmirror.com
 
 RUN corepack enable && corepack prepare pnpm@12 --activate \
     && mkdir -p /app/apps/server/data
