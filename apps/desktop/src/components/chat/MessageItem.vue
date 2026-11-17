@@ -4,6 +4,7 @@ import { type ConnectorActionMeta, type Message, extractUrls } from '@nenochat/s
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import LinkCard from './LinkCard.vue'
+import LinkInline from './LinkInline.vue'
 import { connectorPresetOf } from '@/config/connectors'
 import { resolveFileUrl } from '@/api/http'
 import { resolveAttachmentUrl } from '@/platform/file-cache'
@@ -99,6 +100,9 @@ const isSticker = computed(() => props.message.type === 'sticker')
 
 /** 正文里的链接：每条都渲染卡片，失败时卡片组件自身降级为不显示 */
 const linkUrls = computed(() => extractUrls(props.message.content))
+
+/** 链接展示样式：card 正文后追加信息卡片，logo 正文里的链接直接替换为 LOGO + 标题 */
+const linkLogo = computed(() => ui.linkDisplay === 'logo')
 
 /** 命中本地缓存后用 blob URL 展示，离线也能看图；未命中时先用网络地址 */
 const cachedUrls = ref<Record<string, string>>({})
@@ -335,8 +339,14 @@ const liveConnectorLabel = computed(() => {
               ]"
             >
               <template v-for="(segment, index) in segments" :key="index">
+                <!-- LOGO 模式：正文里的链接直接替换成 LOGO + 标题（流式中的半截链接仍按普通链接显示） -->
+                <LinkInline
+                  v-if="segment.kind === 'link' && linkLogo && !streaming && !thinking"
+                  :url="segment.text"
+                  :inherit-color="qqOwn"
+                />
                 <a
-                  v-if="segment.kind === 'link'"
+                  v-else-if="segment.kind === 'link'"
                   :href="segment.text"
                   target="_blank"
                   rel="noreferrer"
@@ -355,9 +365,9 @@ const liveConnectorLabel = computed(() => {
               <span v-if="streaming" class="typing-caret ml-0.5" />
             </p>
 
-            <!-- 链接卡片：流式生成中的半截链接不请求元信息 -->
+            <!-- 链接卡片：仅卡片模式追加在正文后；流式生成中的半截链接不请求元信息 -->
             <div
-              v-if="linkUrls.length > 0 && !streaming && !thinking"
+              v-if="linkUrls.length > 0 && !streaming && !thinking && !linkLogo"
               class="mt-1.5 space-y-1.5"
             >
               <LinkCard v-for="url in linkUrls" :key="url" :url="url" />

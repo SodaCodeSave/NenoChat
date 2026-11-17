@@ -6,6 +6,7 @@ import { useMediaQuery } from '@vueuse/core'
 const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
 const MESSAGE_STYLE_KEY = 'nenochat.messageStyle'
+const LINK_DISPLAY_KEY = 'nenochat.linkDisplay'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
@@ -13,6 +14,8 @@ export type MobileTab = 'messages' | 'contacts' | 'moments' | 'me'
 export type RightPanel = 'none' | 'members' | 'memory' | 'detail'
 /** 消息排版风格：discord 扁平流式，qq 气泡式（自己靠右） */
 export type MessageStyle = 'discord' | 'qq'
+/** 链接展示样式：card 正文后追加信息卡片，logo 正文链接替换为 LOGO + 标题 */
+export type LinkDisplay = 'card' | 'logo'
 
 /**
  * 纯界面状态：主题、密度、导航位置、抽屉开关。
@@ -30,6 +33,10 @@ export const useUiStore = defineStore('ui', () => {
   /** 消息排版风格，纯本地偏好不进服务器设置 */
   const messageStyle = ref<MessageStyle>(
     localStorage.getItem(MESSAGE_STYLE_KEY) === 'qq' ? 'qq' : 'discord',
+  )
+  /** 链接展示样式，纯本地偏好不进服务器设置 */
+  const linkDisplay = ref<LinkDisplay>(
+    localStorage.getItem(LINK_DISPLAY_KEY) === 'logo' ? 'logo' : 'card',
   )
   /** 桌面端会话列表的手动收起状态，跨会话记住 */
   const conversationListCollapsed = ref(
@@ -84,6 +91,11 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(MESSAGE_STYLE_KEY, next)
   }
 
+  function setLinkDisplay(next: LinkDisplay): void {
+    linkDisplay.value = next
+    localStorage.setItem(LINK_DISPLAY_KEY, next)
+  }
+
   function toggleConversationList(): void {
     setConversationListCollapsed(!conversationListCollapsed.value)
   }
@@ -115,6 +127,7 @@ export const useUiStore = defineStore('ui', () => {
     reduceMotion,
     sendKey,
     messageStyle,
+    linkDisplay,
     conversationListCollapsed,
     navSection,
     mobileTab,
@@ -130,6 +143,7 @@ export const useUiStore = defineStore('ui', () => {
     toggleTheme,
     setAccent,
     setMessageStyle,
+    setLinkDisplay,
     setConversationListCollapsed,
     toggleConversationList,
     applyServerSettings,

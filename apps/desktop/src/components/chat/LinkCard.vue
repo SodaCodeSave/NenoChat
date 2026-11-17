@@ -3,22 +3,9 @@ import { onMounted, ref, watch } from 'vue'
 import type { LinkPreview } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
 import { connectorApi } from '@/api/connectors'
+import { loadLinkPreviewCached } from '@/composables/link-preview'
 
 const props = defineProps<{ url: string }>()
-
-/** 同一链接在列表里可能重复出现（历史消息、虚拟滚动重挂载），模块级缓存只请求一次 */
-const previewCache = new Map<string, Promise<LinkPreview | null>>()
-
-function loadPreview(url: string): Promise<LinkPreview | null> {
-  const cached = previewCache.get(url)
-  if (cached) return cached
-  const request = connectorApi
-    .linkPreview(url)
-    .then((result) => result.preview)
-    .catch(() => null)
-  previewCache.set(url, request)
-  return request
-}
 
 const preview = ref<LinkPreview | null>(null)
 const loaded = ref(false)
@@ -30,7 +17,7 @@ const summaryError = ref<string | null>(null)
 
 async function load(): Promise<void> {
   loaded.value = false
-  preview.value = await loadPreview(props.url)
+  preview.value = await loadLinkPreviewCached(props.url)
   loaded.value = true
 }
 

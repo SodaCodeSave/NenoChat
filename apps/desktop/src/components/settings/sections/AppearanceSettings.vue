@@ -4,7 +4,7 @@ import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Segmented from '@/components/ui/form/Segmented.vue'
 import Switch from '@/components/ui/form/Switch.vue'
-import { useUiStore, type MessageStyle } from '@/stores/ui'
+import { useUiStore, type LinkDisplay, type MessageStyle } from '@/stores/ui'
 
 const ui = useUiStore()
 
@@ -87,6 +87,19 @@ function setReduceMotion(value: boolean): void {
           ]"
           aria-label="消息样式"
           @update:model-value="ui.setMessageStyle($event as MessageStyle)"
+        />
+      </SettingRow>
+
+      <SettingRow label="链接展示" description="聊天里的网页与 B 站视频链接的显示方式" stacked>
+        <Segmented
+          :model-value="ui.linkDisplay"
+          full
+          :options="[
+            { value: 'card', label: '信息卡片' },
+            { value: 'logo', label: 'LOGO + 标题' },
+          ]"
+          aria-label="链接展示"
+          @update:model-value="ui.setLinkDisplay($event as LinkDisplay)"
         />
       </SettingRow>
 
