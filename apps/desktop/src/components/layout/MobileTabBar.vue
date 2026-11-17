@@ -34,21 +34,22 @@ function go(tab: { key: string; to: string }): void {
 
 <template>
   <nav
-    class="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface pb-[env(safe-area-inset-bottom)]"
+    class="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface/95 pb-[var(--safe-bottom)] backdrop-blur"
   >
     <button
       v-for="tab in tabs"
       :key="tab.key"
       type="button"
-      class="relative flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px]"
+      class="relative flex h-[var(--mobile-tab-h)] flex-1 flex-col items-center justify-center gap-0.5 text-[10.5px] transition-colors active:bg-surface-2"
       :class="active === tab.key ? 'text-accent' : 'text-muted'"
+      :aria-current="active === tab.key ? 'page' : undefined"
       @click="go(tab)"
     >
-      <Icon :name="tab.icon" :size="19" />
+      <Icon :name="tab.icon" :size="21" />
       <span>{{ tab.label }}</span>
       <span
         v-if="tab.key === 'messages' && conversations.totalUnread > 0"
-        class="absolute top-1 right-1/4"
+        class="absolute top-1.5 right-1/4"
       >
         <Badge :count="conversations.totalUnread" />
       </span>

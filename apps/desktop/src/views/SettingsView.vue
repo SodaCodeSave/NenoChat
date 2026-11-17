@@ -133,8 +133,8 @@ async function removeServer(id: string): Promise<void> {
 </script>
 
 <template>
-  <div class="flex h-full">
-    <aside class="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface-2 py-3">
+  <div class="flex h-full" :class="ui.isMobile ? 'flex-col' : ''">
+    <aside v-if="!ui.isMobile" class="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface-2 py-3">
       <div class="mb-2 flex items-center gap-2 px-4">
         <Avatar
           :name="auth.user?.displayName ?? '我'"
@@ -169,7 +169,46 @@ async function removeServer(id: string): Promise<void> {
       </nav>
     </aside>
 
-    <div class="scroll-area flex-1 px-6 py-6">
+    <!-- 手机端：顶部资料卡 + 横向分组导航，内容单栏铺满 -->
+    <header
+      v-else
+      class="shrink-0 border-b border-line bg-surface px-4 pb-2 pt-[calc(0.5rem+var(--safe-top))]"
+    >
+      <h1 class="mb-2 text-[19px] font-semibold text-text-strong">我的</h1>
+      <div class="flex items-center gap-2.5">
+        <Avatar
+          :name="auth.user?.displayName ?? '我'"
+          :src="auth.user?.avatarUrl ?? null"
+          :seed="auth.user?.id"
+          :size="42"
+        />
+        <div class="min-w-0">
+          <p class="truncate text-[14.5px] font-medium text-text-strong">
+            {{ auth.user?.displayName ?? '未登录' }}
+          </p>
+          <p class="truncate text-[11.5px] text-muted">@{{ auth.user?.username ?? '-' }}</p>
+        </div>
+      </div>
+      <nav class="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+        <button
+          v-for="section in sections"
+          :key="section.key"
+          type="button"
+          class="flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-[12.5px] transition-colors"
+          :class="
+            currentSection === section.key
+              ? 'border-accent bg-accent-soft font-medium text-accent'
+              : 'border-line bg-surface-2 text-muted active:bg-surface-3'
+          "
+          @click="activeSection = section.key"
+        >
+          <Icon :name="section.icon" :size="13" />
+          {{ section.label }}
+        </button>
+      </nav>
+    </header>
+
+    <div class="scroll-area flex-1 px-4 py-4 md:px-6 md:py-6">
       <div class="mx-auto max-w-xl">
         <!-- 账号 -->
         <section v-if="currentSection === 'account'">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import type { Channel } from '@nenochat/shared'
 import type { ConversationSummary } from '@/api/endpoints'
@@ -11,12 +12,15 @@ const props = defineProps<{
   groups: Array<{ category: string; channels: Channel[] }>
   activeChannelId?: string | null
   memberCount?: number
+  /** 手机端以抽屉形式出现，占满容器宽度 */
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select', channelId: string): void
   (e: 'open-settings'): void
   (e: 'create-channel'): void
+  (e: 'close'): void
 }>()
 
 const collapsed = ref<Record<string, boolean>>({})
@@ -31,26 +35,35 @@ function toggle(category: string): void {
 </script>
 
 <template>
-  <aside class="flex w-[236px] shrink-0 flex-col border-r border-line bg-surface-2">
+  <aside
+    class="flex flex-col bg-surface-2"
+    :class="props.mobile ? 'w-full' : 'w-[236px] shrink-0 border-r border-line'"
+  >
     <!-- 群头部 -->
-    <button
-      type="button"
-      class="flex items-center gap-2 border-b border-line px-3 py-3 text-left transition-colors hover:bg-surface-3"
-      @click="emit('open-settings')"
+    <div
+      class="flex items-center gap-1 border-b border-line px-3 py-3"
+      :class="props.mobile ? 'pt-[calc(0.75rem+var(--safe-top))]' : ''"
     >
-      <Avatar
-        :name="title"
-        :src="conversationAvatar(props.conversation)"
-        :seed="conversationSeed(props.conversation)"
-        :size="32"
-        square
-      />
-      <div class="min-w-0 flex-1">
-        <p class="truncate text-[13.5px] font-medium text-text-strong">{{ title }}</p>
-        <p class="text-[11px] text-muted">{{ memberCount ?? 0 }} 位成员</p>
-      </div>
-      <Icon name="chevronDown" :size="14" class="text-muted" />
-    </button>
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors active:opacity-70"
+        @click="emit('open-settings')"
+      >
+        <Avatar
+          :name="title"
+          :src="conversationAvatar(props.conversation)"
+          :seed="conversationSeed(props.conversation)"
+          :size="32"
+          square
+        />
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-[13.5px] font-medium text-text-strong">{{ title }}</p>
+          <p class="text-[11px] text-muted">{{ memberCount ?? 0 }} 位成员</p>
+        </div>
+        <Icon name="chevronDown" :size="14" class="text-muted" />
+      </button>
+      <IconButton v-if="props.mobile" icon="close" label="关闭" :size="16" @click="emit('close')" />
+    </div>
 
     <!-- 群公告 -->
     <div v-if="hasAnnouncement" class="border-b border-line px-2 py-2">
@@ -72,8 +85,8 @@ function toggle(category: string): void {
     </div>
 
     <!-- 频道列表 -->
-    <div class="scroll-area flex-1 px-2 py-2">
-      <div v-for="group in groups" :key="group.category || '__root'" class="mb-1">
+    <div class="scroll-area flex-1 px-2 py-2 pb-[var(--safe-bottom)]">
+      <div v-for="group in groups" :key="group.category || '__root'" class="group mb-1">
         <div class="flex items-center gap-1 px-1.5 py-1">
           <button
             type="button"
@@ -88,7 +101,8 @@ function toggle(category: string): void {
           </button>
           <button
             type="button"
-            class="rounded p-0.5 text-muted opacity-0 transition-opacity hover:text-text group-hover:opacity-100"
+            class="rounded p-1 text-muted transition-opacity hover:text-text"
+            :class="props.mobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
             title="新建频道"
             @click="emit('create-channel')"
           >

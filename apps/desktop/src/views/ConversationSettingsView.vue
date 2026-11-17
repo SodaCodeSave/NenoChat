@@ -10,6 +10,7 @@ import { conversationApi, userApi } from '@/api/endpoints'
 import { useAiStore } from '@/stores/ai'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMembersStore } from '@/stores/members'
+import { useUiStore } from '@/stores/ui'
 
 interface MemberWithUser extends Member {
   user: PublicUser | null
@@ -26,6 +27,7 @@ const router = useRouter()
 const conversations = useConversationsStore()
 const members = useMembersStore()
 const ai = useAiStore()
+const ui = useUiStore()
 
 const conversationId = computed(() => String(route.params.conversationId ?? ''))
 const detail = ref<Detail | null>(null)
@@ -277,16 +279,25 @@ function backToChat(): void {
 <template>
   <div class="flex h-full flex-col">
     <header
-      class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3"
+      class="flex shrink-0 items-center gap-2 border-b border-line px-3 pb-1"
+      :class="
+        ui.isMobile
+          ? 'min-h-[calc(3rem+var(--safe-top))] pt-[var(--safe-top)]'
+          : 'h-14'
+      "
       data-tauri-drag-region
     >
-      <button type="button" class="rounded-md p-1 text-muted hover:bg-surface-2" @click="backToChat">
-        <Icon name="arrowLeft" :size="18" />
+      <button
+        type="button"
+        class="rounded-md p-2 text-muted hover:bg-surface-2 active:bg-surface-3"
+        @click="backToChat"
+      >
+        <Icon name="arrowLeft" :size="19" />
       </button>
-      <h1 class="text-[14px] font-semibold text-text-strong">{{ pageTitle }}</h1>
+      <h1 class="text-[16px] font-semibold text-text-strong">{{ pageTitle }}</h1>
     </header>
 
-    <div class="scroll-area flex-1 px-5 py-5">
+    <div class="scroll-area flex-1 px-4 py-4 md:px-5 md:py-5">
       <div class="mx-auto max-w-2xl space-y-4">
         <p v-if="error" class="text-[12px] text-danger">{{ error }}</p>
         <p v-else-if="notice" class="text-[12px] text-accent">{{ notice }}</p>
@@ -406,7 +417,7 @@ function backToChat(): void {
                   </p>
                 </div>
 
-                <div v-if="canManage && member.userId !== me?.userId" class="flex items-center gap-0.5">
+                <div v-if="canManage && member.userId !== me?.userId" class="flex shrink-0 flex-wrap items-center justify-end gap-0.5">
                   <button
                     v-if="isOwner && member.role === 'member'"
                     type="button"

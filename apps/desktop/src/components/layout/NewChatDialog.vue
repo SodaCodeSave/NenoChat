@@ -147,11 +147,16 @@ async function submit(): Promise<void> {
 
 <template>
   <Teleport to="body">
-    <div class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-6" @click.self="emit('close')">
+    <div
+      class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 md:grid md:place-items-center md:p-6"
+      @click.self="emit('close')"
+    >
       <div
-        class="animate-fade-up w-full max-w-md overflow-hidden rounded-2xl border border-line bg-surface shadow-[var(--shadow-soft)]"
+        class="animate-fade-up flex max-h-[90dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-line bg-surface shadow-[var(--shadow-soft)] md:rounded-2xl"
       >
-        <header class="flex items-center justify-between border-b border-line px-4 py-3">
+        <header
+          class="flex shrink-0 items-center justify-between border-b border-line px-4 pb-3 pt-[calc(0.75rem+var(--safe-top))] md:py-3"
+        >
           <h2 class="text-[15px] font-semibold text-text-strong">发起新会话</h2>
           <button
             type="button"
@@ -162,7 +167,7 @@ async function submit(): Promise<void> {
           </button>
         </header>
 
-        <div class="flex gap-1 border-b border-line px-4 py-2">
+        <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-4 py-2">
           <button
             v-for="tab in [
               { key: 'direct', label: '私聊' },
@@ -186,7 +191,7 @@ async function submit(): Promise<void> {
           </button>
         </div>
 
-        <div v-if="mode === 'ai'" class="space-y-1 px-4 py-3">
+        <div v-if="mode === 'ai'" class="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-3">
           <p v-if="ai.personas.length === 0" class="py-6 text-center text-[12.5px] text-muted">
             还没有角色，先到「设置 → AI 与模型」创建一个
           </p>
@@ -210,7 +215,7 @@ async function submit(): Promise<void> {
           <p v-if="error" class="text-[12.5px] text-danger">{{ error }}</p>
         </div>
 
-        <div v-else class="space-y-3 px-4 py-3">
+        <div v-else class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           <input
             v-if="mode === 'group'"
             v-model="groupName"
@@ -307,7 +312,9 @@ async function submit(): Promise<void> {
           <p v-if="error" class="text-[12.5px] text-danger">{{ error }}</p>
         </div>
 
-        <footer class="flex justify-end gap-2 border-t border-line px-4 py-3">
+        <footer
+          class="flex shrink-0 justify-end gap-2 border-t border-line px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom))] md:pb-3"
+        >
           <button
             type="button"
             class="rounded-lg px-3 py-1.5 text-[13px] text-muted hover:bg-surface-2"

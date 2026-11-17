@@ -2,8 +2,16 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- user-scalable=no / maximum-scale：禁止双指与双击缩放，行为更接近原生 App -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1e1f22" media="(prefers-color-scheme: dark)" />
+    <meta name="format-detection" content="telephone=no,email=no,address=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>NenoChat</title>
     <script>
       // 在首帧渲染前应用主题，避免深色模式下闪白

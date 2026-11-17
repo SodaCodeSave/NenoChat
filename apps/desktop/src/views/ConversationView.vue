@@ -55,6 +55,15 @@ const replyTo = ref<Message | null>(null)
 const editing = ref<Message | null>(null)
 const showMembers = ref(true)
 const showMemory = ref(false)
+/** 手机端用抽屉承载频道、成员与记忆面板 */
+const mobileChannelsOpen = ref(false)
+const mobileMembersOpen = ref(false)
+const mobileMemoryOpen = ref(false)
+
+const membersPanelActive = computed(() =>
+  ui.isMobile ? mobileMembersOpen.value : showMembers.value,
+)
+const memoryPanelActive = computed(() => (ui.isMobile ? mobileMemoryOpen.value : showMemory.value))
 const aiError = ref<string | null>(null)
 
 const messageList = ref<{ scrollToBottom: (smooth?: boolean) => void } | null>(null)
@@ -188,7 +197,25 @@ watch(activeChannel, async (channel) => {
 })
 
 function selectChannel(channelId: string): void {
+  mobileChannelsOpen.value = false
   void router.push(`/c/${conversationId.value}/${channelId}`)
+}
+
+/** 手机端没有常驻侧栏，头部按钮改为开关抽屉 */
+function toggleMembers(): void {
+  if (ui.isMobile) {
+    mobileMembersOpen.value = !mobileMembersOpen.value
+    return
+  }
+  showMembers.value = !showMembers.value
+}
+
+function toggleMemory(): void {
+  if (ui.isMobile) {
+    mobileMemoryOpen.value = !mobileMemoryOpen.value
+    return
+  }
+  showMemory.value = !showMemory.value
 }
 
 /** AI 一轮生成可能跑十几秒，期间的重复提交直接丢掉，避免同一条被发两次 */
@@ -330,7 +357,19 @@ async function createChannel(): Promise<void> {
 }
 
 function goBack(): void {
-  void router.push('/')
+  // replace 掉会话记录，安卓返回键不会又退回同一个会话
+  void router.replace('/')
+}
+
+function openConversationSettings(): void {
+  mobileChannelsOpen.value = false
+  mobileMembersOpen.value = false
+  void router.push(`/settings/conversation/${conversationId.value}`)
+}
+
+function mentionFromMobile(userId: string, name: string): void {
+  mobileMembersOpen.value = false
+  messageInput.value?.insertMention(userId, name)
 }
 </script>
 
@@ -343,7 +382,7 @@ function goBack(): void {
       :active-channel-id="activeChannel?.id ?? null"
       :member-count="members.of(conversationId).length"
       @select="selectChannel"
-      @open-settings="router.push(`/settings/conversation/${conversationId}`)"
+      @open-settings="openConversationSettings"
       @create-channel="createChannel"
     />
 
@@ -354,10 +393,11 @@ function goBack(): void {
           :channel="activeChannel"
           :typing-names="typingNames"
           :member-count="members.of(conversationId).length"
-          :show-members="isAi ? showMemory : showMembers"
+          :show-members="isAi ? memoryPanelActive : membersPanelActive"
           :backable="ui.isMobile"
-          @toggle-members="showMembers = !showMembers"
-          @open-memory="showMemory = !showMemory"
+          @toggle-members="toggleMembers"
+          @open-memory="toggleMemory"
+          @open-channels="mobileChannelsOpen = true"
           @open-settings="router.push(`/settings/conversation/${conversationId}`)"
           @back="goBack"
         />
@@ -396,7 +436,9 @@ function goBack(): void {
             isGroup
               ? `发送到 #${activeChannel?.name ?? '频道'}`
               : isAi
-                ? '和 AI 说点什么，长回复会自动分条'
+                ? ui.isMobile
+                  ? '和 AI 说点什么'
+                  : '和 AI 说点什么，长回复会自动分条'
                 : '输入消息'
           "
           :ai-mode="isAi"
@@ -429,6 +471,56 @@ function goBack(): void {
       :conversation-id="conversationId"
       @close="showMemory = false"
     />
+
+    <!-- 手机端抽屉：频道 / 成员 / 记忆，替代常驻侧栏 -->
+    <Teleport to="body">
+      <div
+        v-if="ui.isMobile && mobileChannelsOpen && conversation"
+        class="fixed inset-0 z-40 flex bg-black/40"
+        @click.self="mobileChannelsOpen = false"
+      >
+        <ChannelSidebar
+          mobile
+          class="h-full w-[82vw] max-w-[320px] shadow-xl"
+          :conversation="conversation"
+          :groups="channelGroups"
+          :active-channel-id="activeChannel?.id ?? null"
+          :member-count="members.of(conversationId).length"
+          @select="selectChannel"
+          @open-settings="openConversationSettings"
+          @create-channel="createChannel"
+          @close="mobileChannelsOpen = false"
+        />
+      </div>
+
+      <div
+        v-if="ui.isMobile && mobileMembersOpen"
+        class="fixed inset-0 z-40 flex justify-end bg-black/40"
+        @click.self="mobileMembersOpen = false"
+      >
+        <MemberSidebar
+          mobile
+          class="h-full w-[82vw] max-w-[320px] shadow-xl"
+          :groups="memberGroups"
+          @open-profile="() => {}"
+          @mention="mentionFromMobile"
+          @close="mobileMembersOpen = false"
+        />
+      </div>
+
+      <div
+        v-if="ui.isMobile && isAi && mobileMemoryOpen"
+        class="fixed inset-0 z-40 flex justify-end bg-black/40"
+        @click.self="mobileMemoryOpen = false"
+      >
+        <MemoryPanel
+          mobile
+          class="h-full w-[88vw] max-w-[360px] shadow-xl"
+          :conversation-id="conversationId"
+          @close="mobileMemoryOpen = false"
+        />
+      </div>
+    </Teleport>
 
     <MessageContextMenu
       v-if="contextMenu"
@@ -466,7 +558,8 @@ function goBack(): void {
     <Transition name="fade">
       <div
         v-if="toast"
-        class="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-black/75 px-3 py-1.5 text-[12px] text-white"
+        class="fixed left-1/2 z-50 -translate-x-1/2 rounded-lg bg-black/75 px-3 py-1.5 text-[12px] text-white"
+        :class="ui.isMobile ? 'bottom-[calc(5.5rem+var(--safe-bottom))]' : 'bottom-24'"
       >
         {{ toast }}
       </div>

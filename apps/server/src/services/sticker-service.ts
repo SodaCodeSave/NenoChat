@@ -288,22 +288,19 @@ function uniquePackName(db: DB, userId: string, base: string): string {
  * 分类名进关键词，manifest 里的中文描述提取成短标签一起写进去。
  */
 export function importAstrbotPack(db: DB, userId: string, zip: Buffer): StickerPackImportResult {
-  // 第一遍：找 manifest、按上限预检图片数量（数据随读随丢，不驻留内存）
+  // 第一遍：只取 manifest（图片数据不解压，避免整包在内存里过一遍）
   const manifests: Array<{ path: string; data: Buffer }> = []
-  let imageCount = 0
   walkZip(
     zip,
-    (path) => path.endsWith('manifest.json') || isPackImage(path),
+    (path) => path.endsWith('manifest.json'),
     (path, data) => {
-      if (path.endsWith('manifest.json')) manifests.push({ path, data })
-      else imageCount += 1
+      manifests.push({ path, data })
     },
   )
 
   // 根目录下的 manifest 才是包描述，嵌套更深的可能是示例或子包
   const manifestEntry = manifests.sort((a, b) => a.path.length - b.path.length)[0]
   if (!manifestEntry) throw err.validation('压缩包里找不到 manifest.json，不是 AstrBot 表情包')
-  if (imageCount === 0) throw err.validation('压缩包里没有表情图片')
 
   let manifest: AstrbotManifest
   try {

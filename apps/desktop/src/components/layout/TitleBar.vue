@@ -3,11 +3,14 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import BrandLogo from '@/components/layout/BrandLogo.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   /** 左侧品牌区与导航栏同色融合，用于带 NavRail 的主布局 */
   withRail?: boolean
 }>()
+
+const ui = useUiStore()
 
 // 只有在 Tauri WebView 内运行时才渲染顶栏，纯浏览器开发时不显示
 const isTauri = '__TAURI_INTERNALS__' in window
@@ -36,7 +39,7 @@ function toggleMaximize(): void {
 
 <template>
   <header
-    v-if="isTauri"
+    v-if="isTauri && !ui.isMobile"
     class="flex h-9 shrink-0 select-none"
     data-tauri-drag-region
   >

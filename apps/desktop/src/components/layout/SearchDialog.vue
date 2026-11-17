@@ -183,10 +183,12 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div
       v-if="ui.commandOpen"
-      class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 pt-[10vh]"
+      class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-0 pt-[var(--safe-top)] md:px-4 md:pt-[10vh]"
       @click.self="close"
     >
-      <div class="w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+      <div
+        class="w-full max-w-xl overflow-hidden rounded-none border-0 bg-surface shadow-2xl md:rounded-2xl md:border md:border-line"
+      >
         <div class="flex items-center gap-2 border-b border-line px-3">
           <Icon name="search" :size="16" class="text-muted" />
           <input
@@ -197,10 +199,18 @@ onBeforeUnmount(() => {
             class="h-11 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-muted"
           />
           <span v-if="loading" class="text-[11px] text-muted">搜索中…</span>
-          <kbd class="rounded border border-line px-1.5 py-0.5 text-[10.5px] text-muted">Esc</kbd>
+          <kbd class="hidden rounded border border-line px-1.5 py-0.5 text-[10.5px] text-muted md:inline-block">Esc</kbd>
+          <button
+            type="button"
+            class="rounded-lg p-2 text-muted active:bg-surface-2 md:hidden"
+            aria-label="关闭搜索"
+            @click="close"
+          >
+            <Icon name="close" :size="17" />
+          </button>
         </div>
 
-        <div class="max-h-[60vh] overflow-y-auto">
+        <div class="max-h-[calc(100dvh-var(--safe-top)-3rem)] overflow-y-auto pb-[var(--safe-bottom)] md:max-h-[60vh] md:pb-0">
           <p v-if="error" class="px-4 py-3 text-[12px] text-danger">{{ error }}</p>
 
           <div v-else-if="keyword.trim().length === 0" class="px-4 py-8 text-center">

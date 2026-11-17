@@ -424,7 +424,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="border-t border-line bg-surface px-3 pt-2 pb-3">
+  <div
+    class="border-t border-line bg-surface px-3 pt-2"
+    :class="ui.isMobile ? 'pb-[calc(0.75rem+var(--safe-bottom))]' : 'pb-3'"
+  >
     <!-- 引用 / 编辑提示条 -->
     <div
       v-if="replyTo || editing"
@@ -488,7 +491,8 @@ onMounted(() => {
         rows="1"
         :disabled="disabled"
         :placeholder="placeholder ?? '输入消息，Enter 发送，Shift+Enter 换行'"
-        class="block max-h-[168px] w-full resize-none bg-transparent px-3 py-2.5 text-[13.5px] leading-[1.55] outline-none placeholder:text-muted"
+        class="block max-h-[168px] w-full resize-none bg-transparent px-3 py-2.5 leading-[1.55] outline-none placeholder:text-muted"
+        :class="ui.isMobile ? 'text-[15px]' : 'text-[13.5px]'"
         @input="autoGrow(); updateMention()"
         @click="updateMention"
         @keydown="onKeydown"
@@ -511,17 +515,18 @@ onMounted(() => {
           :size="17"
           @click="fileInput?.click()"
         />
-        <span class="ml-auto text-[11px] text-muted">
+        <span v-if="!ui.isMobile" class="ml-auto text-[11px] text-muted">
           {{ ui.sendKey === 'enter' ? 'Enter 发送' : 'Ctrl+Enter 发送' }}
         </span>
         <button
           type="button"
-          class="ml-1 flex items-center gap-1 rounded-lg px-2.5 py-1 text-[12.5px] font-medium transition-colors"
-          :class="
+          class="flex items-center gap-1 rounded-lg px-2.5 text-[12.5px] font-medium transition-colors"
+          :class="[
+            ui.isMobile ? 'ml-auto h-9 px-3 text-[13px]' : 'ml-1 py-1',
             canSend
               ? 'bg-accent text-accent-text hover:opacity-90'
-              : 'cursor-not-allowed bg-surface-3 text-muted'
-          "
+              : 'cursor-not-allowed bg-surface-3 text-muted',
+          ]"
           :disabled="!canSend"
           @click="submit"
         >
@@ -566,7 +571,7 @@ onMounted(() => {
       <!-- 表情 / 贴纸面板 -->
       <div
         v-if="emojiOpen"
-        class="absolute bottom-full left-2 mb-2 w-[320px] rounded-xl border border-line bg-surface shadow-[var(--shadow-soft)]"
+        class="absolute bottom-full left-2 mb-2 max-h-[50vh] w-[min(320px,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-line bg-surface shadow-[var(--shadow-soft)]"
       >
         <div class="flex items-center gap-1 overflow-x-auto border-b border-line px-2 py-1.5">
           <button

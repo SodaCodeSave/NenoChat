@@ -567,7 +567,7 @@ defineExpose({ scrollToBottom })
 </script>
 
 <template>
-  <div ref="scroller" class="scroll-area relative flex-1 px-0 py-2" @scroll.passive="onScroll">
+  <div ref="scroller" class="scroll-area relative flex-1 touch-pan-y px-0 py-2" @scroll.passive="onScroll">
     <div
       v-if="hasMoreOlder"
       class="mx-auto mb-2 w-fit rounded-full bg-surface-2 px-3 py-1 text-[11px] text-muted"

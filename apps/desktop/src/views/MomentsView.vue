@@ -7,9 +7,11 @@ import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useMomentsStore } from '@/stores/moments'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
 const moments = useMomentsStore()
+const ui = useUiStore()
 
 const draft = ref('')
 const pendingImages = ref<Array<{ id: string; url: string; name: string }>>([])
@@ -117,14 +119,19 @@ onMounted(() => {
 <template>
   <div class="flex h-full flex-col">
     <header
-      class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4"
+      class="flex shrink-0 items-center gap-2 border-b border-line px-4 pb-1"
+      :class="
+        ui.isMobile
+          ? 'min-h-[calc(3rem+var(--safe-top))] pt-[var(--safe-top)]'
+          : 'h-14'
+      "
       data-tauri-drag-region
     >
-      <h1 class="text-[14px] font-semibold text-text-strong">动态</h1>
+      <h1 class="text-[16px] font-semibold text-text-strong">动态</h1>
       <p class="text-[11.5px] text-muted">全服可见</p>
       <button
         type="button"
-        class="ml-auto rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-text"
+        class="ml-auto rounded-lg p-2 text-muted hover:bg-surface-2 hover:text-text active:bg-surface-3"
         title="刷新"
         @click="moments.load(true)"
       >
@@ -133,7 +140,7 @@ onMounted(() => {
     </header>
 
     <div class="scroll-area flex-1">
-      <div class="mx-auto w-full max-w-2xl px-4 py-4">
+      <div class="mx-auto w-full max-w-2xl px-3 py-3 md:px-4 md:py-4">
         <!-- 发布框 -->
         <section class="rounded-2xl border border-line bg-surface p-3">
           <div class="flex gap-3">
@@ -165,7 +172,8 @@ onMounted(() => {
               />
               <button
                 type="button"
-                class="absolute top-1 right-1 hidden rounded-full bg-black/60 p-1 text-white group-hover:block"
+                class="absolute top-1 right-1 rounded-full bg-black/60 p-1.5 text-white"
+                :class="ui.isMobile ? 'block' : 'hidden group-hover:block'"
                 @click="removePendingImage(image.id)"
               >
                 <Icon name="close" :size="12" />
@@ -332,7 +340,8 @@ onMounted(() => {
                   <button
                     v-if="comment.authorId === auth.user?.id || isMine(post)"
                     type="button"
-                    class="hidden p-0.5 text-muted hover:text-danger group-hover:block"
+                    class="p-1 text-muted hover:text-danger"
+                    :class="ui.isMobile ? 'block' : 'hidden group-hover:block'"
                     title="删除评论"
                     @click="removeComment(post.id, comment.id)"
                   >

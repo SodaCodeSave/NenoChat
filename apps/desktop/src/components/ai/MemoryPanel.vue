@@ -5,7 +5,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import { aiApi } from '@/api/ai'
 import type { AiMemoryFact, AiMemorySummary } from '@nenochat/shared'
 
-const props = defineProps<{ conversationId: string }>()
+const props = defineProps<{ conversationId: string; mobile?: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const summaries = ref<AiMemorySummary[]>([])
@@ -38,8 +38,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <aside class="flex w-[280px] shrink-0 flex-col border-l border-line bg-surface-2">
-    <header class="flex items-center gap-1.5 border-b border-line px-3 py-3">
+  <aside
+    class="flex flex-col bg-surface-2"
+    :class="props.mobile ? 'w-full' : 'w-[280px] shrink-0 border-l border-line'"
+  >
+    <header
+      class="flex items-center gap-1.5 border-b border-line px-3 py-3"
+      :class="props.mobile ? 'pt-[calc(0.75rem+var(--safe-top))]' : ''"
+    >
       <Icon name="memory" :size="15" class="text-mention" />
       <h2 class="text-[12.5px] font-medium text-text">AI 记忆</h2>
       <span class="ml-auto" />
@@ -47,7 +53,7 @@ onMounted(() => {
       <IconButton icon="close" label="关闭" :size="14" @click="emit('close')" />
     </header>
 
-    <div class="scroll-area flex-1 px-3 py-3">
+    <div class="scroll-area flex-1 px-3 py-3 pb-[calc(0.75rem+var(--safe-bottom))]">
       <p v-if="loading" class="text-[12px] text-muted">读取中…</p>
       <p v-else-if="error" class="text-[12px] text-danger">{{ error }}</p>
 

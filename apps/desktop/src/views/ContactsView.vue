@@ -9,11 +9,13 @@ import { aiApi } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 import { useContactsStore } from '@/stores/contacts'
 import { useConversationsStore } from '@/stores/conversations'
+import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 const contacts = useContactsStore()
 const conversations = useConversationsStore()
 const ai = useAiStore()
+const ui = useUiStore()
 
 const keyword = ref('')
 const results = ref<PublicUser[]>([])
@@ -181,10 +183,15 @@ watch(keyword, (value) => {
 <template>
   <div class="flex h-full flex-col">
     <header
-      class="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line px-4"
+      class="flex shrink-0 items-center justify-between gap-2 border-b border-line px-4 pb-1"
+      :class="
+        ui.isMobile
+          ? 'min-h-[calc(3rem+var(--safe-top))] pt-[var(--safe-top)]'
+          : 'h-14'
+      "
       data-tauri-drag-region
     >
-      <h1 class="text-[14px] font-semibold text-text-strong">
+      <h1 class="text-[16px] font-semibold text-text-strong">
         通讯录
         <span v-if="friends.length > 0" class="ml-1 text-[12px] font-normal text-muted">
           {{ friends.length }}
@@ -192,7 +199,7 @@ watch(keyword, (value) => {
       </h1>
       <button
         type="button"
-        class="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-[12px] text-text hover:bg-surface-2"
+        class="flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[12px] text-text hover:bg-surface-2 active:bg-surface-3"
         title="把 AI 角色加入通讯录"
         @click="showPersonaPicker = !showPersonaPicker"
       >
@@ -201,7 +208,7 @@ watch(keyword, (value) => {
       </button>
     </header>
 
-    <div class="scroll-area flex-1 px-5 py-5">
+    <div class="scroll-area flex-1 px-4 py-4 md:px-5 md:py-5">
       <div class="mx-auto max-w-2xl">
         <div class="relative">
           <span class="absolute top-1/2 left-3 -translate-y-1/2 text-muted">
@@ -408,7 +415,10 @@ watch(keyword, (value) => {
                 {{ subtitleOf(contact) || '点击开始聊天' }}
               </p>
             </button>
-            <div class="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <div
+              class="flex items-center gap-0.5 transition-opacity"
+              :class="ui.isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+            >
               <button
                 type="button"
                 class="rounded-md p-1 text-muted hover:bg-surface-3 hover:text-text"

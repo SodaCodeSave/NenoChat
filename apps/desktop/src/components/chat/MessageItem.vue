@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount } from 'vue'
 import type { Message } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { resolveFileUrl } from '@/api/http'
 import { formatMessageTime } from '@/composables/conversation'
+import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   message: Message
@@ -71,9 +72,43 @@ const attachments = computed(() =>
 function openContextMenu(event: MouseEvent): void {
   // 撤回后的消息没有操作项，临时占位消息也不该有菜单
   if (deleted.value || props.ephemeral) return
+  if (ui.isMobile) return
   event.preventDefault()
   emit('context', { id: props.message.id, x: event.clientX, y: event.clientY })
 }
+
+const ui = useUiStore()
+
+/* ------------------------- 手机端长按菜单 ------------------------- */
+
+let pressTimer = 0
+let startX = 0
+let startY = 0
+
+function clearPress(): void {
+  window.clearTimeout(pressTimer)
+  pressTimer = 0
+}
+
+function onTouchStart(event: TouchEvent): void {
+  if (!ui.isMobile || deleted.value || props.ephemeral) return
+  const touch = event.touches[0]
+  if (!touch) return
+  startX = touch.clientX
+  startY = touch.clientY
+  clearPress()
+  pressTimer = window.setTimeout(() => {
+    emit('context', { id: props.message.id, x: startX, y: startY })
+  }, 450)
+}
+
+function onTouchMove(event: TouchEvent): void {
+  const touch = event.touches[0]
+  if (!touch || !pressTimer) return
+  if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) clearPress()
+}
+
+onBeforeUnmount(clearPress)
 
 const statusLabel = computed(() => {
   if (props.failed) return '发送失败'
@@ -92,7 +127,7 @@ const showAiTail = computed(
     :class="[
       mentionMe ? 'bg-mention-soft/50' : '',
       showHeader ? 'mt-2 pt-1' : 'py-0',
-      isOwn && !mentionMe ? 'hover:bg-surface-2/70' : 'hover:bg-surface-2/70',
+      ui.isMobile ? 'active:bg-surface-2/70' : 'hover:bg-surface-2/70',
     ]"
   >
     <span
@@ -100,7 +135,14 @@ const showAiTail = computed(
       class="absolute top-0 bottom-0 left-0 w-[2px] bg-mention"
     />
 
-    <div class="flex gap-2.5" @contextmenu="openContextMenu">
+    <div
+      class="flex gap-2.5"
+      @contextmenu="openContextMenu"
+      @touchstart.passive="onTouchStart"
+      @touchmove.passive="onTouchMove"
+      @touchend="clearPress"
+      @touchcancel="clearPress"
+    >
       <!-- 头像列：同一组内只有首条显示 -->
       <div class="w-9 shrink-0">
         <Avatar
@@ -175,7 +217,7 @@ const showAiTail = computed(
             <img
               :src="attachment.thumbUrl || attachment.url"
               :alt="attachment.filename"
-              class="max-h-[300px] max-w-[400px] object-cover"
+              class="max-h-[300px] w-auto max-w-full object-cover"
               loading="lazy"
             />
           </button>
@@ -200,7 +242,7 @@ const showAiTail = computed(
             :key="attachment.id"
             :href="attachment.url"
             target="_blank"
-            class="flex max-w-[320px] items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
+            class="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
           >
             <Icon name="folder" :size="18" class="text-accent" />
             <div class="min-w-0">
@@ -226,7 +268,7 @@ const showAiTail = computed(
 
     <!-- hover 操作条 -->
     <div
-      v-if="!deleted && !ephemeral"
+      v-if="!ui.isMobile && !deleted && !ephemeral"
       class="absolute -top-3 right-4 hidden items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[var(--shadow-soft)] group-hover:flex"
     >
       <button

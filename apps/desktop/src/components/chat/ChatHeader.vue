@@ -5,6 +5,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import type { Channel } from '@nenochat/shared'
 import type { ConversationSummary } from '@/api/endpoints'
 import { conversationTitle } from '@/composables/conversation'
+import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   conversation: ConversationSummary
@@ -19,9 +20,11 @@ const emit = defineEmits<{
   (e: 'toggle-members'): void
   (e: 'open-memory'): void
   (e: 'open-settings'): void
+  (e: 'open-channels'): void
   (e: 'back'): void
 }>()
 
+const ui = useUiStore()
 const isGroup = computed(() => props.conversation.type === 'group')
 const isAi = computed(() => props.conversation.type === 'ai')
 
@@ -46,21 +49,37 @@ const subtitle = computed(() => {
 
 <template>
   <header
-    class="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-surface px-3"
+    class="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3"
+    :class="
+      ui.isMobile
+        ? 'min-h-[calc(3.25rem+var(--safe-top))] pt-[var(--safe-top)]'
+        : 'h-14'
+    "
     data-tauri-drag-region
   >
     <button
       v-if="backable"
       type="button"
-      class="rounded-md p-1 text-muted hover:bg-surface-2"
+      class="rounded-md p-1.5 text-muted active:bg-surface-2"
       title="返回"
       @click="emit('back')"
     >
-      <Icon name="arrowLeft" :size="18" />
+      <Icon name="arrowLeft" :size="20" />
     </button>
 
     <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-1.5">
+      <!-- 手机端群聊没有侧边频道栏，点头部切换频道 -->
+      <button
+        v-if="isGroup && ui.isMobile"
+        type="button"
+        class="flex min-w-0 items-center gap-1.5 text-left active:opacity-70"
+        @click="emit('open-channels')"
+      >
+        <Icon v-if="props.channel" name="hash" :size="15" class="text-muted" />
+        <h1 class="truncate text-[15px] font-semibold text-text-strong">{{ title }}</h1>
+        <Icon name="chevronDown" :size="13" class="shrink-0 text-muted" />
+      </button>
+      <div v-else class="flex items-center gap-1.5">
         <Icon v-if="isGroup && channel" name="hash" :size="15" class="text-muted" />
         <h1 class="truncate text-[14px] font-semibold text-text-strong">{{ title }}</h1>
         <span
@@ -82,7 +101,7 @@ const subtitle = computed(() => {
         :active="showMembers"
         @click="emit('open-memory')"
       />
-      <IconButton icon="search" label="搜索（即将开放）" :size="17" />
+      <IconButton v-if="!ui.isMobile" icon="search" label="搜索（即将开放）" :size="17" />
       <IconButton
         v-if="isGroup"
         icon="panelRight"

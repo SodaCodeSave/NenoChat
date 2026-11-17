@@ -24,6 +24,10 @@
   --shadow-soft: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px rgb(16 24 40 / 0.06);
   --radius-panel: 12px;
   --radius-bubble: 10px;
+  /* 移动端安全区：Android 原生已把内容让出系统栏，这里主要是 iOS/刘海屏兜底 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-tab-h: 3.5rem;
 }
 
 .dark {
@@ -121,6 +125,20 @@ body,
   height: 100%;
 }
 
+/* 移动端浏览器/WebView 的动态视口，键盘弹出时高度会跟着变 */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background-color: var(--surface);
@@ -131,10 +149,51 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  /* 去掉下拉刷新/边缘回弹与点击时的蓝色高亮 */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* 只有输入区域允许选中文字，其余界面按原生控件处理 */
+input,
+textarea,
+[contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* 可点击元素：去掉 300ms 延迟与双击缩放，并阻止长按拖影 */
+button,
+a,
+label,
+summary,
+[role='button'] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+img,
+a {
+  -webkit-user-drag: none;
+}
+
+/* 手机端把界面当原生控件：禁止长按选中与文字选择，输入框除外 */
+@media (max-width: 767px) {
+  body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  img,
+  a {
+    user-select: none;
+  }
 }
 
 /* 消息列表需要精细控制滚动位置，避免浏览器锚定干扰 */
@@ -143,6 +202,8 @@ body {
   overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .scroll-area::-webkit-scrollbar {
   width: 8px;
@@ -171,6 +232,17 @@ textarea {
 
 ::selection {
   background: var(--accent-soft);
+}
+
+/* 移动端隐藏滚动条，避免出现桌面浏览器式的灰色条 */
+@media (max-width: 767px) {
+  .scroll-area {
+    scrollbar-width: none;
+  }
+  .scroll-area::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
 }
 
 /* 减少动效偏好 */
