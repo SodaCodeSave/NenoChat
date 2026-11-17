@@ -24,6 +24,7 @@ import { useMembersStore } from './members'
 import { useTypingStore } from './typing'
 import { useMomentsStore } from './moments'
 import { useAiStore } from './ai'
+import { useDebugStore } from './debug'
 import { useContactsStore } from './contacts'
 
 /**
@@ -263,6 +264,11 @@ export const useSyncStore = defineStore('sync', () => {
 
       wsClient.on('ai.error', (payload) => {
         ai.applyServerError(payload)
+      }),
+
+      // 调试模式：群聊成员决策过程实时推送
+      wsClient.on('ai.debug.decision', (payload) => {
+        useDebugStore().applyDecision(payload.decision)
       }),
 
       wsClient.on('contact.updated', (payload) => {

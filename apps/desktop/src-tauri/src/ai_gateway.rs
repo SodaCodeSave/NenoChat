@@ -43,6 +43,7 @@ struct DonePayload {
     generation_id: String,
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,
+    cached_tokens: Option<i64>,
     model: Option<String>,
 }
 
@@ -52,6 +53,42 @@ struct ErrorPayload {
     message: String,
 }
 
+/// 流式与一次性补全共用的用量结构：上游没给的字段为 None
+#[derive(Debug, Clone, Serialize)]
+pub struct AiUsage {
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
+}
+
+/// 一次性补全的返回：正文 + 真实用量，供调试模式落库
+#[derive(Debug, Clone, Serialize)]
+pub struct AiCompleteResult {
+    pub content: String,
+    pub usage: Option<AiUsage>,
+}
+
+fn parse_usage(value: &serde_json::Value) -> Option<AiUsage> {
+    let usage = value.get("usage")?;
+    let num = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_i64());
+    let prompt_tokens = num(usage.get("prompt_tokens"));
+    let completion_tokens = num(usage.get("completion_tokens"));
+    // OpenAI 系在 prompt_tokens_details 里给缓存命中；个别站点直接给 cached_tokens
+    let cached_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|x| x.as_i64())
+        .or_else(|| num(usage.get("cached_tokens")));
+    if prompt_tokens.is_none() && completion_tokens.is_none() && cached_tokens.is_none() {
+        return None;
+    }
+    Some(AiUsage {
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+    })
+}
+
 /// 发起一次流式补全，增量通过 `ai://delta` 事件下发。
 #[tauri::command]
 pub async fn ai_generate(app: AppHandle, request: AiRequest) -> Result<(), String> {
@@ -59,14 +96,15 @@ pub async fn ai_generate(app: AppHandle, request: AiRequest) -> Result<(), Strin
     let result = run_stream(&app, &request).await;
 
     match result {
-        Ok(usage) => {
+        Ok((usage, model)) => {
             let _ = app.emit(
                 EVENT_DONE,
                 DonePayload {
                     generation_id,
-                    prompt_tokens: usage.0,
-                    completion_tokens: usage.1,
-                    model: usage.2,
+                    prompt_tokens: usage.as_ref().and_then(|u| u.prompt_tokens),
+                    completion_tokens: usage.as_ref().and_then(|u| u.completion_tokens),
+                    cached_tokens: usage.as_ref().and_then(|u| u.cached_tokens),
+                    model,
                 },
             );
             Ok(())
@@ -84,7 +122,7 @@ pub async fn ai_generate(app: AppHandle, request: AiRequest) -> Result<(), Strin
     }
 }
 
-async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<i64>, Option<i64>, Option<String>), String> {
+async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<AiUsage>, Option<String>), String> {
     let base = request.base_url.trim_end_matches('/');
     let url = if base.ends_with("/chat/completions") {
         base.to_string()
@@ -134,8 +172,7 @@ async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<i64>
         return Err(format!("上游返回 {status}: {brief}"));
     }
 
-    let mut prompt_tokens = None;
-    let mut completion_tokens = None;
+    let mut usage: Option<AiUsage> = None;
     let mut model = None;
     let mut buffer = String::new();
     let mut stream = response.bytes_stream();
@@ -155,7 +192,7 @@ async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<i64>
                 continue;
             }
             if data == "[DONE]" {
-                return Ok((prompt_tokens, completion_tokens, model));
+                return Ok((usage, model));
             }
 
             let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
@@ -165,12 +202,9 @@ async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<i64>
             if let Some(m) = value.get("model").and_then(|v| v.as_str()) {
                 model = Some(m.to_string());
             }
-            if let Some(usage) = value.get("usage") {
-                prompt_tokens = usage.get("prompt_tokens").and_then(|v| v.as_i64()).or(prompt_tokens);
-                completion_tokens = usage
-                    .get("completion_tokens")
-                    .and_then(|v| v.as_i64())
-                    .or(completion_tokens);
+            // usage 通常在最后一个 chunk，出现就覆盖
+            if let Some(parsed) = parse_usage(&value) {
+                usage = Some(parsed);
             }
 
             let delta = value
@@ -190,10 +224,11 @@ async fn run_stream(app: &AppHandle, request: &AiRequest) -> Result<(Option<i64>
         }
     }
 
-    Ok((prompt_tokens, completion_tokens, model))
+    Ok((usage, model))
 }
 
 /// 非流式的一次性补全，用于记忆压缩、主动消息这类不需要逐字展示的场景。
+/// 返回正文与真实 usage，调用方负责把用量上报给服务端落库。
 #[tauri::command]
 pub async fn ai_complete(
     base_url: String,
@@ -203,7 +238,7 @@ pub async fn ai_complete(
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     json_mode: Option<bool>,
-) -> Result<String, String> {
+) -> Result<AiCompleteResult, String> {
     let base = base_url.trim_end_matches('/');
     let url = if base.ends_with("/chat/completions") {
         base.to_string()
@@ -243,9 +278,14 @@ pub async fn ai_complete(
     }
 
     let value: serde_json::Value = response.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
-    value
+    let content = value
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "上游响应中没有内容".to_string())
+        .ok_or_else(|| "上游响应中没有内容".to_string())?;
+
+    Ok(AiCompleteResult {
+        content,
+        usage: parse_usage(&value),
+    })
 }

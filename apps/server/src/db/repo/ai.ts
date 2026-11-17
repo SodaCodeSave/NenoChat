@@ -24,6 +24,7 @@ export interface ProviderRow {
   key_location: string
   model: string
   vision_model: string | null
+  context_window: number | null
   temperature: number
   max_tokens: number
   extra_headers: string | null
@@ -46,6 +47,7 @@ export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null
     keyLocation: row.key_location as AiProvider['keyLocation'],
     model: row.model,
     visionModel: row.vision_model,
+    contextWindow: row.context_window,
     temperature: row.temperature,
     maxTokens: row.max_tokens,
     isDefault: row.is_default === 1,
@@ -77,6 +79,7 @@ export interface CreateProviderInput {
   keyLocation: 'local' | 'server'
   model: string
   visionModel?: string | null
+  contextWindow?: number | null
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
@@ -87,9 +90,9 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
   const id = ulid()
   db.prepare(
     `INSERT INTO ai_providers
-       (id, owner_id, name, base_url, api_key_enc, key_location, model, vision_model, temperature,
-        max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+       (id, owner_id, name, base_url, api_key_enc, key_location, model, vision_model, context_window,
+        temperature, max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
   ).run(
     id,
     input.ownerId,
@@ -99,6 +102,7 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
     input.keyLocation,
     input.model,
     input.visionModel ?? null,
+    input.contextWindow ?? null,
     input.temperature ?? 0.8,
     input.maxTokens ?? 2048,
     input.isDefault ? 1 : 0,
@@ -117,7 +121,7 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
   db.prepare(
     `UPDATE ai_providers
      SET name = ?, base_url = ?, api_key_enc = ?, key_location = ?, model = ?, vision_model = ?,
-         temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
+         context_window = ?, temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     patch.name ?? current.name,
@@ -126,6 +130,7 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
     patch.keyLocation ?? current.key_location,
     patch.model ?? current.model,
     patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
+    patch.contextWindow === undefined ? current.context_window : patch.contextWindow,
     patch.temperature ?? current.temperature,
     patch.maxTokens ?? current.max_tokens,
     patch.isDefault === undefined ? current.is_default : patch.isDefault ? 1 : 0,
@@ -459,6 +464,7 @@ export interface GlobalSettingsRow {
   segment_enabled: number
   segment_pattern: string
   stream_enabled: number
+  debug_mode: number
   updated_at: number
 }
 
@@ -494,6 +500,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
     segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
     streamEnabled: false,
+    debugMode: false,
     updatedAt: 0,
   }
   if (!row) return fallback
@@ -525,6 +532,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     segmentEnabled: row.segment_enabled === 1,
     segmentPattern: row.segment_pattern || fallback.segmentPattern,
     streamEnabled: row.stream_enabled === 1,
+    debugMode: row.debug_mode === 1,
     updatedAt: row.updated_at,
   }
 }
@@ -542,8 +550,8 @@ export function writeGlobalSettings(
     `INSERT INTO ai_global_settings
        (user_id, proactive_enabled, proactive_config, moments_enabled, moments_posts_per_day,
         moments_comments_per_day, moments_likes_per_day, group_enabled, group_replies_per_day,
-        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled, debug_mode, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        proactive_enabled = excluded.proactive_enabled,
        proactive_config = excluded.proactive_config,
@@ -557,6 +565,7 @@ export function writeGlobalSettings(
        segment_enabled = excluded.segment_enabled,
        segment_pattern = excluded.segment_pattern,
        stream_enabled = excluded.stream_enabled,
+       debug_mode = excluded.debug_mode,
        updated_at = excluded.updated_at`,
   ).run(
     userId,
@@ -581,6 +590,7 @@ export function writeGlobalSettings(
     next.segmentEnabled ? 1 : 0,
     next.segmentPattern,
     next.streamEnabled ? 1 : 0,
+    next.debugMode ? 1 : 0,
     ts,
   )
 

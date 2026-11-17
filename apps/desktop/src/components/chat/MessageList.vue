@@ -2,9 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AUTOSCROLL_THRESHOLD_PX, MESSAGE_GROUP_WINDOW_MS, type Message } from '@nenochat/shared'
 import MessageItem from './MessageItem.vue'
+import DecisionStrip from './DecisionStrip.vue'
+import { describeUsage } from './debug-labels'
 import { useAiStore } from '@/stores/ai'
 import { useAuthStore } from '@/stores/auth'
 import { useConversationsStore } from '@/stores/conversations'
+import { useDebugStore } from '@/stores/debug'
 import { useMembersStore } from '@/stores/members'
 import { collapseAccidentalDuplicates } from '@/composables/message-merge'
 
@@ -21,6 +24,8 @@ const props = defineProps<{
   unreadAfterSeq?: number
   /** 从搜索结果跳转过来时要定位的消息 id */
   highlightId?: string | null
+  /** 群聊调试：按当前频道过滤决策行的归属 */
+  debugChannelId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -41,6 +46,10 @@ const auth = useAuthStore()
 const members = useMembersStore()
 const ai = useAiStore()
 const conversations = useConversationsStore()
+const debug = useDebugStore()
+
+/** 调试模式开着才拉取/渲染决策与用量 */
+const debugOn = computed(() => ai.globalSettings?.debugMode ?? false)
 
 type Row =
   | { kind: 'day'; key: string; ts: number }
@@ -51,7 +60,9 @@ type Row =
       showHeader: boolean
       aiGroupSize?: number
       mentionMe: boolean
+      debugLine?: string | null
     }
+  | { kind: 'decision'; key: string; decision: import('@nenochat/shared').AiGroupDecision }
 
 /** 生成中占位行的固定 id，模板里用它区分临时行与真实消息 */
 const STREAMING_MESSAGE_ID = '__ai_streaming__'
@@ -97,6 +108,32 @@ function dayLabel(ts: number): string {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
 }
 
+/** 触发消息 id → 该消息后要插入的决策行（按当前频道过滤） */
+const decisionsByTrigger = computed(() => {
+  const map = new Map<string, import('@nenochat/shared').AiGroupDecision[]>()
+  if (!debugOn.value) return map
+  for (const decision of debug.decisions[props.conversationId] ?? []) {
+    if (decision.kind !== 'reply' || !decision.triggerMessageId) continue
+    if (props.debugChannelId && decision.channelId && decision.channelId !== props.debugChannelId) {
+      continue
+    }
+    const list = map.get(decision.triggerMessageId) ?? []
+    list.push(decision)
+    map.set(decision.triggerMessageId, list)
+  }
+  // 决策按时间正序插在触发消息后面
+  for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
+  return map
+})
+
+/** AI 消息内联调试行：该次调用的真实用量 */
+function debugLineOf(message: Message): string | null {
+  if (!debugOn.value) return null
+  const refId = message.meta?.ai?.generationId ?? message.aiGenerationId
+  if (!refId) return null
+  return describeUsage(debug.usageByRef[refId])
+}
+
 /** 连续同人、间隔小于 5 分钟、非引用消息 → 合并为一组，只显示一次头像 */
 const rows = computed<Row[]>(() => {
   const output: Row[] = []
@@ -127,8 +164,14 @@ const rows = computed<Row[]>(() => {
       message,
       showHeader: !grouped,
       mentionMe,
+      debugLine: debugLineOf(message),
     })
     prev = message
+
+    // 调试行紧跟触发消息：谁考虑过接话、谁为什么沉默
+    for (const decision of decisionsByTrigger.value.get(message.id) ?? []) {
+      output.push({ kind: 'decision', key: `dec-${decision.id}`, decision })
+    }
   }
 
   // 回填 AI 分条总数，供最后一条显示「共 N 条」
@@ -154,6 +197,7 @@ const rows = computed<Row[]>(() => {
       message: streamingRow,
       showHeader: true,
       mentionMe: false,
+      debugLine: null,
     })
   }
 
@@ -248,7 +292,7 @@ function replyViewOf(message: Message): { id: string; senderName: string; previe
  * 高度靠 ResizeObserver 实测缓存，未测量的行用估值，
  * 因此滚动条总量会随滚动逐步收敛到真实值。
  */
-const ESTIMATE = { message: 56, day: 34 }
+const ESTIMATE = { message: 56, day: 34, decision: 22 }
 const OVERSCAN_PX = 600
 
 const heights = ref<Record<string, number>>({})
@@ -257,7 +301,7 @@ const viewportHeight = ref(0)
 const highlighted = ref<string | null>(null)
 
 function heightOf(row: Row): number {
-  return heights.value[row.key] ?? (row.kind === 'day' ? ESTIMATE.day : ESTIMATE.message)
+  return heights.value[row.key] ?? ESTIMATE[row.kind]
 }
 
 const layout = computed(() => {
@@ -478,6 +522,21 @@ watch(
   { immediate: true },
 )
 
+/** 调试模式：为已加载的 AI 消息批量拉一次真实用量 */
+watch(
+  () => [debugOn.value, props.messages] as const,
+  () => {
+    if (!debugOn.value) return
+    const refIds = new Set<string>()
+    for (const message of props.messages) {
+      const refId = message.meta?.ai?.generationId ?? message.aiGenerationId
+      if (refId) refIds.add(refId)
+    }
+    if (refIds.size > 0) void debug.loadUsageByRefs([...refIds])
+  },
+  { immediate: true },
+)
+
 /** 切换会话/频道时重置滚动与高度缓存，避免沿用上一个会话的位置 */
 watch(
   () => props.conversationId,
@@ -536,6 +595,8 @@ defineExpose({ scrollToBottom })
         <span class="h-px flex-1 bg-line" />
       </div>
 
+      <DecisionStrip v-else-if="row.kind === 'decision'" :decision="row.decision" />
+
       <MessageItem
         v-else
         :message="row.message"
@@ -555,6 +616,7 @@ defineExpose({ scrollToBottom })
         :ephemeral="row.message.id === STREAMING_MESSAGE_ID"
         :ai-group-size="row.aiGroupSize"
         :reply="replyViewOf(row.message)"
+        :debug-line="row.debugLine"
         @reply="(id) => emit('reply', id)"
         @recall="(id) => emit('recall', id)"
         @edit="(id) => emit('edit', id)"

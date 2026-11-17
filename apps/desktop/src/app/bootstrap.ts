@@ -41,7 +41,9 @@ export async function bootstrap(
     const conversations = useConversationsStore()
     await conversations.hydrate()
     // 本地镜像先出，再后台刷新，保证列表不会空屏
-    void conversations.refresh().catch(() => undefined)
+    void conversations.refresh()
+      .catch(() => undefined)
+      .then(() => useMessagesStore().preload(conversations.ordered.map((c) => c.id)))
     // 角色列表供通讯录与 AI 分区使用，离线时读本地镜像
     void useAiStore().load().catch(() => undefined)
 

@@ -62,8 +62,9 @@ export const useMessagesStore = defineStore('messages', () => {
   function bucket(conversationId: string): ConversationMessages {
     let existing = buckets.value[conversationId]
     if (!existing) {
-      existing = emptyBucket()
-      buckets.value[conversationId] = existing
+      buckets.value[conversationId] = emptyBucket()
+      // 必须回读代理而不是沿用新建的原始对象，否则后续赋值不触发响应式更新
+      existing = buckets.value[conversationId]!
     }
     return existing
   }
@@ -115,6 +116,18 @@ export const useMessagesStore = defineStore('messages', () => {
       }
     } finally {
       target.loading = false
+    }
+  }
+
+  /** 启动后逐个会话预载最近一页消息，点开会话时直接用内存数据渲染 */
+  async function preload(conversationIds: string[]): Promise<void> {
+    for (const id of conversationIds) {
+      if (buckets.value[id]?.loaded) continue
+      try {
+        await loadInitial(id)
+      } catch {
+        // 单个会话预载失败不影响其余会话，点开时会按需重试
+      }
     }
   }
 
@@ -285,6 +298,7 @@ export const useMessagesStore = defineStore('messages', () => {
     messagesOf,
     lastMessageOf,
     loadInitial,
+    preload,
     loadOlder,
     loadAround,
     send,

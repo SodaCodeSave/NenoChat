@@ -34,6 +34,7 @@ const providerForm = ref<ProviderInput>({
   apiKey: '',
   keyLocation: 'local',
   visionModel: '',
+  contextWindow: null,
 })
 
 /** 角色列表以 ai store 为准，通讯录与消息分区读的是同一份 */
@@ -56,15 +57,42 @@ const streamSaved = ref(false)
 const streamError = ref<string | null>(null)
 let streamTimer: ReturnType<typeof setTimeout> | null = null
 
+/** 调试模式跟随全局设置；读不到时按默认关闭展示 */
+const DEBUG_FALLBACK = false
+const debugMode = ref(false)
+const debugSaving = ref(false)
+const debugSaved = ref(false)
+const debugError = ref<string | null>(null)
+let debugTimer: ReturnType<typeof setTimeout> | null = null
+
 watch(
   () => ai.globalSettings,
   (value) => {
     segment.enabled = value?.segmentEnabled ?? SEGMENT_FALLBACK.enabled
     segment.pattern = value?.segmentPattern ?? SEGMENT_FALLBACK.pattern
     streamEnabled.value = value?.streamEnabled ?? STREAM_FALLBACK
+    debugMode.value = value?.debugMode ?? DEBUG_FALLBACK
   },
   { immediate: true },
 )
+
+/** 调试模式开关即时保存：开了之后会话底栏与群聊决策条才会显示 */
+async function saveDebugMode(): Promise<void> {
+  debugError.value = null
+  debugSaving.value = true
+  try {
+    await ai.saveSettings({ debugMode: debugMode.value })
+    debugSaved.value = true
+    if (debugTimer) clearTimeout(debugTimer)
+    debugTimer = setTimeout(() => {
+      debugSaved.value = false
+    }, 1600)
+  } catch (e) {
+    debugError.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    debugSaving.value = false
+  }
+}
 
 /** 开关即时保存 */
 async function saveStream(): Promise<void> {
@@ -157,7 +185,14 @@ async function testConnection(): Promise<void> {
 async function addProvider(): Promise<void> {
   error.value = null
   try {
-    const form = { ...providerForm.value, visionModel: providerForm.value.visionModel?.trim() || null }
+    const form = {
+      ...providerForm.value,
+      visionModel: providerForm.value.visionModel?.trim() || null,
+      contextWindow:
+        providerForm.value.contextWindow && providerForm.value.contextWindow >= 256
+          ? providerForm.value.contextWindow
+          : null,
+    }
     const created = await aiApi.createProvider(form)
     // key 存本地钥匙串，服务端只保存「存哪里」这个标记
     if (providerForm.value.keyLocation === 'local' && providerForm.value.apiKey) {
@@ -181,6 +216,7 @@ function resetProviderForm(): void {
     apiKey: '',
     keyLocation: 'local',
     visionModel: '',
+    contextWindow: null,
   }
 }
 
@@ -259,6 +295,24 @@ async function saveVisionModel(provider: AiProvider, value: string): Promise<voi
     notice.value = visionModel ? `识图模型已设为 ${visionModel}` : '已清除识图模型'
   } catch (e) {
     error.value = e instanceof Error ? e.message : '保存识图模型失败'
+  }
+}
+
+/** 上下文窗口即时保存：留空表示未配置，水位条就不显示 */
+async function saveContextWindow(provider: AiProvider, value: string): Promise<void> {
+  const parsed = Number.parseInt(value, 10)
+  const contextWindow = Number.isFinite(parsed) && parsed >= 256 ? parsed : null
+  if ((provider.contextWindow ?? null) === contextWindow) return
+  try {
+    const result = await aiApi.updateProvider(provider.id, { contextWindow })
+    const updated = result.provider
+    providers.value = providers.value.map((p) => (p.id === updated.id ? updated : p))
+    ai.providers = ai.providers.map((p) => (p.id === updated.id ? updated : p))
+    notice.value = contextWindow
+      ? `上下文窗口已设为 ${contextWindow}`
+      : '已清除上下文窗口配置'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存上下文窗口失败'
   }
 }
 
@@ -412,6 +466,13 @@ onMounted(() => {
           placeholder="识图模型（可选，如 gpt-4o-mini / qwen-vl-plus，用于看懂聊天图片）"
           class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
         />
+        <input
+          v-model.number="providerForm.contextWindow"
+          type="number"
+          min="256"
+          placeholder="上下文窗口（可选，token 数，如 128000，调试模式算水位用）"
+          class="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-[12.5px] outline-none focus:border-accent"
+        />
         <div class="flex items-center gap-2">
           <select
             v-model="providerForm.keyLocation"
@@ -480,6 +541,15 @@ onMounted(() => {
           title="填一个多模态模型名，AI 就能看懂图片；留空则直接把图传给主模型"
           @change="saveVisionModel(provider, ($event.target as HTMLInputElement).value)"
         />
+        <input
+          class="h-7 w-24 shrink-0 rounded-md border border-line bg-surface-2 px-2 text-[11px] outline-none focus:border-accent"
+          :value="provider.contextWindow ?? ''"
+          type="number"
+          min="256"
+          placeholder="窗口 128k"
+          title="模型上下文窗口（token 数），调试模式的上下文水位按它计算"
+          @change="saveContextWindow(provider, ($event.target as HTMLInputElement).value)"
+        />
         <button
           type="button"
           class="rounded-md p-1 text-muted hover:bg-surface-3 hover:text-text disabled:opacity-50"
@@ -529,6 +599,35 @@ onMounted(() => {
           </span>
         </label>
         <p v-if="streamError" class="mt-1 pl-[22px] text-[11px] text-danger">{{ streamError }}</p>
+      </div>
+    </section>
+
+    <section class="mb-6">
+      <div class="mb-2 flex items-center justify-between">
+        <h3 class="text-[12.5px] font-medium text-text">调试模式</h3>
+        <span class="text-[11px] text-muted">
+          <span v-if="debugSaving">保存中…</span>
+          <span v-else-if="debugSaved" class="text-success">已保存</span>
+        </span>
+      </div>
+
+      <div class="rounded-xl border border-line bg-surface p-3">
+        <label class="flex items-start gap-2">
+          <input
+            v-model="debugMode"
+            type="checkbox"
+            class="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+            @change="saveDebugMode"
+          />
+          <span class="min-w-0">
+            <span class="block text-[12.5px] font-medium text-text-strong">显示 AI 调试信息</span>
+            <span class="block text-[11px] leading-relaxed text-muted">
+              开启后会话底部显示缓存命中率、token 消耗与上下文水位；群聊里能看到每个 AI
+              成员的决策过程（谁考虑过接话、谁为什么沉默）。仅本机可见。
+            </span>
+          </span>
+        </label>
+        <p v-if="debugError" class="mt-1 pl-[22px] text-[11px] text-danger">{{ debugError }}</p>
       </div>
     </section>
 

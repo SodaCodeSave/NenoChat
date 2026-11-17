@@ -12,6 +12,8 @@ export const ProviderSchema = z.object({
   isDefault: z.boolean().optional(),
   /** 识图模型：留空表示未配置，发图时直接把图传给主模型 */
   visionModel: z.string().trim().max(128).nullable().optional(),
+  /** 模型上下文窗口（token 数），调试模式算水位用 */
+  contextWindow: z.number().int().min(256).max(10_000_000).nullable().optional(),
 })
 
 export const ProviderPatchSchema = ProviderSchema.partial()
@@ -83,6 +85,7 @@ export const AiGlobalSettingsSchema = z.object({
   segmentEnabled: z.boolean(),
   segmentPattern: z.string().trim().min(1).max(200),
   streamEnabled: z.boolean(),
+  debugMode: z.boolean(),
 })
 
 export const AiGlobalSettingsPatchSchema = AiGlobalSettingsSchema.partial()
@@ -121,6 +124,29 @@ export const AppendGroupSegmentSchema = z.object({
 export const GroupAiSkipSchema = z.object({
   logId: z.string().min(1),
   reason: z.string().max(120).optional(),
+})
+
+/** 本机密钥代跑后把真实 usage 回传服务端落库 */
+export const UsageReportSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  personaId: z.string().min(1).optional(),
+  providerId: z.string().min(1).optional(),
+  kind: z.enum([
+    'chat',
+    'group_reply',
+    'group_autonomy',
+    'proactive',
+    'moment',
+    'summary',
+    'vision',
+    'title',
+    'client_report',
+  ]),
+  refId: z.string().max(128).optional(),
+  model: z.string().max(128).optional(),
+  promptTokens: z.number().int().min(0),
+  completionTokens: z.number().int().min(0),
+  cachedTokens: z.number().int().min(0).optional(),
 })
 
 export const StartGenerationSchema = z.object({

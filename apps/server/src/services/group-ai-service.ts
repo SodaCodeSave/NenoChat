@@ -15,6 +15,7 @@ import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as channelsRepo from '../db/repo/channels'
 import * as conversationsRepo from '../db/repo/conversations'
+import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
 import * as usersRepo from '../db/repo/users'
@@ -262,6 +263,28 @@ function finishLog(
   )
 }
 
+/** 决策落库后实时推给主人的在线客户端；客户端按 debugMode 决定是否显示 */
+function pushDecision(db: DB, ownerId: string, decision: debugRepo.InsertDecisionInput): void {
+  const row = debugRepo.insertDecision(db, decision)
+  hub().sendToUser(ownerId, 'ai.debug.decision', { decision: row })
+}
+
+/** 模型层产出（发出 / 沉默 / 失败）回填到规则层创建的决策记录上，并推送更新 */
+function resolveDecisionOutcome(
+  db: DB,
+  ownerId: string,
+  logId: string,
+  reason: string,
+  fired: boolean,
+): void {
+  const updated = debugRepo.updateDecisionOutcome(db, logId, {
+    stage: 'model',
+    reason,
+    fired,
+  })
+  if (updated) hub().sendToUser(ownerId, 'ai.debug.decision', { decision: updated })
+}
+
 /* ------------------------------ 提示词上下文 ------------------------------ */
 
 function rosterOf(db: DB, conversationId: string, selfBotId: string): Array<{ name: string; isSelf: boolean }> {
@@ -458,6 +481,7 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
   const provider = input.member.provider
   if (!provider) {
     finishLog(db, input.logId, 'skipped', { reason: 'no_provider' })
+    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
     return
   }
 
@@ -468,6 +492,7 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
   if (provider.key_location !== 'server') {
     if (!hub().isOnline(input.member.persona.owner_id)) {
       finishLog(db, input.logId, 'skipped', { reason: 'local_key_offline' })
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'local_key_offline', false)
       return
     }
     hub().sendToUser(input.member.persona.owner_id, 'ai.group.due', {
@@ -487,23 +512,37 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
 
   let reply: string
   try {
-    reply = await callUpstream({
-      baseUrl: provider.base_url,
-      apiKey: resolveServerApiKey(provider),
-      model,
-      temperature: input.member.persona.temperature ?? provider.temperature,
-      maxTokens: Math.min(provider.max_tokens, 300),
-      messages: prompt,
-    })
+    reply = (
+      await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey: resolveServerApiKey(provider),
+        model,
+        temperature: input.member.persona.temperature ?? provider.temperature,
+        maxTokens: Math.min(provider.max_tokens, 300),
+        messages: prompt,
+        record: {
+          db,
+          ownerId: input.member.persona.owner_id,
+          conversationId: input.conversationId,
+          personaId: input.member.persona.id,
+          providerId: provider.id,
+          kind: input.kind === 'reply' ? 'group_reply' : 'group_autonomy',
+          refId: input.logId,
+        },
+      })
+    )
+      .content
+      .trim()
   } catch (e) {
-    finishLog(db, input.logId, 'failed', {
-      reason: e instanceof Error ? e.message.slice(0, 160) : 'generate_failed',
-    })
+    const reason = e instanceof Error ? e.message.slice(0, 160) : 'generate_failed'
+    finishLog(db, input.logId, 'failed', { reason })
+    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
     return
   }
 
   if (isSkipReply(reply)) {
     finishLog(db, input.logId, 'skipped', { reason: 'skip' })
+    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
     return
   }
 
@@ -514,11 +553,13 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
   }).slice(0, 3)
   if (segments.length === 0) {
     finishLog(db, input.logId, 'skipped', { reason: 'empty_reply' })
+    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
     return
   }
 
   const firstId = appendSegments(db, input, segments, model)
   finishLog(db, input.logId, 'sent', { messageId: firstId })
+  resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
 
   if (input.kind === 'autonomy') {
     createNotification(db, {
@@ -582,7 +623,26 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       relevance: relevanceOf(trigger.content, mapped.name, mapped.interests),
       random: Math.random,
     })
-    if (!decision.fire) continue
+
+    // 调试模式的数据源：规则层没放行也记一条，让主人看到「谁为什么没接话」
+    if (!decision.fire) {
+      if (settings.groupEnabled) {
+        pushDecision(db, member.persona.owner_id, {
+          conversationId: trigger.conversationId,
+          personaId: member.persona.id,
+          personaName: mapped.name,
+          triggerMessageId: trigger.messageId,
+          channelId: trigger.channelId,
+          kind: 'reply',
+          fired: false,
+          stage: 'rules',
+          reason: decision.reason,
+          energy: state.energy,
+          mood: state.mood,
+        })
+      }
+      continue
+    }
 
     const reserved = reserveTurn(db, {
       conversationId: trigger.conversationId,
@@ -595,6 +655,21 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       replyToId: trigger.messageId,
     })
     if (!reserved) continue
+
+    pushDecision(db, member.persona.owner_id, {
+      conversationId: trigger.conversationId,
+      personaId: member.persona.id,
+      personaName: mapped.name,
+      triggerMessageId: trigger.messageId,
+      channelId: trigger.channelId,
+      kind: 'reply',
+      fired: true,
+      stage: 'rules',
+      reason: decision.reason,
+      energy: reserved.energy,
+      mood: reserved.mood,
+      logId: reserved.logId,
+    })
 
     fired += 1
     try {
@@ -699,6 +774,7 @@ export function appendClientGroupSegment(
 
   if (input.index === 0 && log && log.status !== 'sent') {
     finishLog(db, input.logId, 'sent', { messageId: message.id })
+    resolveDecisionOutcome(db, persona.owner_id, input.logId, 'sent', true)
   }
   return message
 }
@@ -714,7 +790,9 @@ export function skipClientGroupDue(db: DB, ownerId: string, logId: string, reaso
   if (!persona || persona.owner_id !== ownerId) throw err.forbidden('无权操作')
   if (log.status === 'sent') return
 
-  finishLog(db, logId, 'skipped', { reason: reason ?? 'client_skip' })
+  const skipReason = reason ?? 'client_skip'
+  finishLog(db, logId, 'skipped', { reason: skipReason })
+  resolveDecisionOutcome(db, ownerId, logId, skipReason, false)
 }
 
 /* ------------------------------ 自主开口 ------------------------------ */
@@ -781,7 +859,23 @@ export async function scanGroupAutonomyOnce(
       inQuietWindow: inQuietWindow(ts, settings.windowStart ?? undefined, settings.windowEnd ?? undefined, TZ_OFFSET_MIN),
       random,
     })
-    if (!decision.fire) continue
+    if (!decision.fire) {
+      // 规则层没放行也记一条：主人需要看到「谁为什么没主动开口」
+      pushDecision(db, candidate.persona.owner_id, {
+        conversationId: candidate.conversation_id,
+        personaId: candidate.persona.id,
+        personaName: candidate.persona.name,
+        triggerMessageId: null,
+        channelId: null,
+        kind: 'autonomy',
+        fired: false,
+        stage: 'rules',
+        reason: decision.reason,
+        energy: state.energy,
+        mood: state.mood,
+      })
+      continue
+    }
 
     const member: GroupPersonaMember = {
       persona: candidate.persona,
@@ -800,6 +894,21 @@ export async function scanGroupAutonomyOnce(
       replyToId: null,
     })
     if (!reserved) continue
+
+    pushDecision(db, candidate.persona.owner_id, {
+      conversationId: candidate.conversation_id,
+      personaId: candidate.persona.id,
+      personaName: candidate.persona.name,
+      triggerMessageId: null,
+      channelId: null,
+      kind: 'autonomy',
+      fired: true,
+      stage: 'rules',
+      reason: decision.reason,
+      energy: reserved.energy,
+      mood: reserved.mood,
+      logId: reserved.logId,
+    })
 
     spokenGroups.add(candidate.conversation_id)
     try {

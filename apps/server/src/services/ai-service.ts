@@ -9,8 +9,12 @@ import {
   splitSegments,
   type AiMemoryFact,
   type AiMemorySummary,
+  type AiDebugSummary,
+  type AiGroupDecision,
   type AiPersona,
   type AiProvider,
+  type AiUsageEntry,
+  type AiUsageKind,
   type ChatMessage,
   type Conversation,
   type Message,
@@ -29,6 +33,7 @@ import * as aiRepo from '../db/repo/ai'
 import * as attachmentsRepo from '../db/repo/attachments'
 import * as contactsRepo from '../db/repo/contacts'
 import * as conversationsRepo from '../db/repo/conversations'
+import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
 import * as usersRepo from '../db/repo/users'
@@ -75,6 +80,7 @@ export interface ProviderPayload {
   maxTokens?: number
   isDefault?: boolean
   visionModel?: string | null
+  contextWindow?: number | null
 }
 
 export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
@@ -90,6 +96,7 @@ export function createProvider(db: DB, ownerId: string, input: ProviderPayload):
       keyLocation: input.keyLocation,
       model: input.model,
       visionModel: input.visionModel,
+      contextWindow: input.contextWindow,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
       isDefault: input.isDefault,
@@ -115,6 +122,7 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
       baseUrl: input.baseUrl,
       model: input.model,
       visionModel: input.visionModel,
+      contextWindow: input.contextWindow,
       keyLocation: input.keyLocation,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
@@ -825,15 +833,24 @@ export async function generateOnServer(
   // 流式开关与自动分段任一开启就走流式上游：
   // 前者为了逐字打字气泡，后者为了「切好一段就立刻发出一段」
   if (!settings.streamEnabled && !settings.segmentEnabled) {
-    let reply = ''
+    let result: UpstreamResult
     try {
-      reply = await callUpstream({
+      result = await callUpstream({
         baseUrl: provider.base_url,
         apiKey,
         model,
         temperature: persona.temperature ?? provider.temperature,
         maxTokens: provider.max_tokens,
         messages: chatMessages,
+        record: {
+          db,
+          ownerId: input.userId,
+          conversationId: input.conversationId,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'chat',
+          refId: generationId,
+        },
       })
     } catch (e) {
       aiRepo.finishGeneration(db, generationId, {
@@ -842,6 +859,7 @@ export async function generateOnServer(
       })
       throw e
     }
+    const reply = result.content
 
     const segments = splitSegments(reply, rule)
     if (segments.length === 0) {
@@ -867,7 +885,12 @@ export async function generateOnServer(
           })
           messageIds.push(message.id)
           if (messageIds.length === segments.length) {
-            aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
+            aiRepo.finishGeneration(db, generationId, {
+              status: 'done',
+              messageIds,
+              promptTokens: result.usage?.promptTokens ?? null,
+              completionTokens: result.usage?.completionTokens ?? null,
+            })
           }
         } catch (e) {
           aiRepo.finishGeneration(db, generationId, {
@@ -949,7 +972,7 @@ export async function generateOnServer(
   }
 
   try {
-    await callUpstreamStream({
+    const { usage } = await callUpstreamStream({
       baseUrl: provider.base_url,
       apiKey,
       model,
@@ -961,10 +984,24 @@ export async function generateOnServer(
         if (settings.streamEnabled) emitDelta(delta)
         cutPending(false)
       },
+      record: {
+        db,
+        ownerId: input.userId,
+        conversationId: input.conversationId,
+        personaId: persona.id,
+        providerId: provider.id,
+        kind: 'chat',
+        refId: generationId,
+      },
     })
     cutPending(true)
     flushDelta()
-    aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
+    aiRepo.finishGeneration(db, generationId, {
+      status: 'done',
+      messageIds,
+      promptTokens: usage?.promptTokens ?? null,
+      completionTokens: usage?.completionTokens ?? null,
+    })
     emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds, model })
   } catch (e) {
     const message = e instanceof Error ? e.message : '上游失败'
@@ -1091,9 +1128,16 @@ async function describeAttachment(
           ],
         },
       ],
+      record: {
+        db,
+        ownerId: provider.owner_id,
+        providerId: provider.id,
+        kind: 'vision',
+        refId: attachmentId,
+      },
     })
   )
-    .trim()
+    .content.trim()
     .slice(0, 1000)
   if (!description) return null
 
@@ -1206,6 +1250,71 @@ export function saveImageDescriptionToMessage(
   writeAttachmentDescriptions(db, message, { [input.attachmentId]: input.description })
 }
 
+/** 上游返回的真实 token 用量；上游不给时字段为 null */
+export interface UpstreamUsage {
+  promptTokens: number | null
+  completionTokens: number | null
+  cachedTokens: number | null
+}
+
+export interface UpstreamResult {
+  content: string
+  usage: UpstreamUsage | null
+}
+
+/** 传入后这次调用的 usage 会写进 ai_usage_log，供调试模式聚合 */
+export interface UpstreamRecordContext {
+  db: DB
+  ownerId: string
+  conversationId?: string | null
+  personaId?: string | null
+  providerId?: string | null
+  kind: AiUsageKind
+  refId?: string | null
+}
+
+interface UpstreamUsagePayload {
+  usage?: {
+    prompt_tokens?: unknown
+    completion_tokens?: unknown
+    cached_tokens?: unknown
+    prompt_tokens_details?: { cached_tokens?: unknown }
+  } | null
+}
+
+function parseUpstreamUsage(payload: UpstreamUsagePayload): UpstreamUsage | null {
+  const usage = payload.usage
+  if (!usage) return null
+  const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+  const promptTokens = num(usage.prompt_tokens)
+  const completionTokens = num(usage.completion_tokens)
+  const cachedTokens =
+    num(usage.prompt_tokens_details?.cached_tokens) ?? num(usage.cached_tokens)
+  if (promptTokens === null && completionTokens === null && cachedTokens === null) return null
+  return { promptTokens, completionTokens, cachedTokens }
+}
+
+/** 解析出的 usage 落库；没有 usage 时什么都不写 */
+function recordUpstreamUsage(
+  context: UpstreamRecordContext,
+  usage: UpstreamUsage | null,
+  model: string,
+): void {
+  if (!usage) return
+  debugRepo.insertUsage(context.db, {
+    ownerId: context.ownerId,
+    conversationId: context.conversationId ?? null,
+    personaId: context.personaId ?? null,
+    providerId: context.providerId ?? null,
+    kind: context.kind,
+    refId: context.refId ?? null,
+    model,
+    promptTokens: usage.promptTokens ?? 0,
+    completionTokens: usage.completionTokens ?? 0,
+    cachedTokens: usage.cachedTokens ?? 0,
+  })
+}
+
 /** 非流式调用一次 OpenAI 兼容端点。主动消息等场景也复用它。 */
 export async function callUpstream(input: {
   baseUrl: string
@@ -1214,7 +1323,8 @@ export async function callUpstream(input: {
   temperature: number
   maxTokens: number
   messages: ChatMessage[]
-}): Promise<string> {
+  record?: UpstreamRecordContext
+}): Promise<UpstreamResult> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
 
@@ -1244,10 +1354,13 @@ export async function callUpstream(input: {
 
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>
-    }
+    } & UpstreamUsagePayload
     const content = payload.choices?.[0]?.message?.content
     if (!content) throw err.upstreamAi('上游没有返回内容')
-    return content
+
+    const usage = parseUpstreamUsage(payload)
+    if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+    return { content, usage }
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
     throw e
@@ -1258,7 +1371,7 @@ export async function callUpstream(input: {
 
 /**
  * 流式调用 OpenAI 兼容端点：解析 SSE，把每个增量交给 onDelta，
- * 同时返回完整回复。上游不支持流式时会在读到的内容里找不到增量，按失败处理。
+ * 同时返回完整回复与真实 usage。上游不支持流式时会在读到的内容里找不到增量，按失败处理。
  */
 export async function callUpstreamStream(input: {
   baseUrl: string
@@ -1268,7 +1381,8 @@ export async function callUpstreamStream(input: {
   maxTokens: number
   messages: ChatMessage[]
   onDelta: (delta: string) => void
-}): Promise<string> {
+  record?: UpstreamRecordContext
+}): Promise<UpstreamResult> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
 
@@ -1295,6 +1409,7 @@ export async function callUpstreamStream(input: {
         temperature: input.temperature,
         max_tokens: input.maxTokens,
         stream: true,
+        stream_options: { include_usage: true },
       }),
       signal: controller.signal,
     })
@@ -1309,11 +1424,13 @@ export async function callUpstreamStream(input: {
     if (!contentType.includes('text/event-stream')) {
       const payload = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>
-      }
+      } & UpstreamUsagePayload
       const content = payload.choices?.[0]?.message?.content
       if (!content) throw err.upstreamAi('上游没有返回内容')
       input.onDelta(content)
-      return content
+      const usage = parseUpstreamUsage(payload)
+      if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+      return { content, usage }
     }
 
     if (!response.body) throw err.upstreamAi('上游没有返回流式内容')
@@ -1322,6 +1439,7 @@ export async function callUpstreamStream(input: {
     const decoder = new TextDecoder()
     let sseBuffer = ''
     let full = ''
+    let usage: UpstreamUsage | null = null
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -1341,7 +1459,10 @@ export async function callUpstreamStream(input: {
         try {
           const payload = JSON.parse(data) as {
             choices?: Array<{ delta?: { content?: string } }>
-          }
+          } & UpstreamUsagePayload
+          // usage 通常在最后一个 chunk；出现就覆盖，拿到的永远是最新一份
+          const parsedUsage = parseUpstreamUsage(payload)
+          if (parsedUsage) usage = parsedUsage
           const piece = payload.choices?.[0]?.delta?.content
           if (piece) {
             full += piece
@@ -1354,7 +1475,8 @@ export async function callUpstreamStream(input: {
     }
 
     if (!full.trim()) throw err.upstreamAi('上游没有返回内容')
-    return full
+    if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+    return { content: full, usage }
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
     throw e
@@ -1589,4 +1711,102 @@ export async function refreshProviderBalance(
   const updated = aiRepo.findProvider(db, providerId)
   if (!updated) throw err.notFound('服务商不存在')
   return toPublicProvider(updated)
+}
+
+/* ------------------------------- 调试模式 ------------------------------- */
+
+/** 校验用户确实是该会话的成员，调试数据只给会话内的人看 */
+function assertConversationMember(db: DB, userId: string, conversationId: string): void {
+  const conversation = conversationsRepo.findById(db, conversationId)
+  if (!conversation || conversation.deleted_at !== null) throw err.notFound('会话不存在')
+  if (!membersRepo.findActive(db, conversationId, userId)) {
+    throw err.forbidden('不在该会话中')
+  }
+}
+
+/** 上下文窗口取最近一次调用用的服务商配置；没配置就当 null */
+function resolveContextWindow(
+  db: DB,
+  conversationId: string,
+  lastProviderId: string | null,
+): number | null {
+  const session = aiRepo.findSession(db, conversationId)
+  const providerId = lastProviderId ?? session?.provider_id ?? null
+  if (!providerId) return null
+  const provider = aiRepo.findProvider(db, providerId)
+  return provider?.context_window ?? null
+}
+
+/** 会话维度的调试汇总：用量聚合 + 上下文水位 + 压缩进度 */
+export function debugSummary(db: DB, userId: string, conversationId: string): AiDebugSummary {
+  assertConversationMember(db, userId, conversationId)
+
+  // 聚合里带上最近的模型与窗口来源
+  const lastUsage = db
+    .prepare(
+      'SELECT provider_id FROM ai_usage_log WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1',
+    )
+    .get(conversationId) as { provider_id: string | null } | undefined
+
+  const session = aiRepo.findSession(db, conversationId)
+  return debugRepo.debugSummary(db, conversationId, {
+    contextWindow: resolveContextWindow(db, conversationId, lastUsage?.provider_id ?? null),
+    lastCompactedSeq: session?.last_compacted_seq ?? null,
+    tokenEstimate: session?.token_estimate ?? null,
+  })
+}
+
+/** 本机密钥代跑后客户端回传的真实 usage */
+export function reportClientUsage(
+  db: DB,
+  userId: string,
+  input: {
+    conversationId?: string
+    personaId?: string
+    providerId?: string
+    kind: AiUsageKind
+    refId?: string
+    model?: string
+    promptTokens: number
+    completionTokens: number
+    cachedTokens?: number
+  },
+): void {
+  if (input.conversationId) assertConversationMember(db, userId, input.conversationId)
+  if (input.personaId) {
+    const persona = aiRepo.findPersona(db, input.personaId)
+    if (!persona || persona.owner_id !== userId) throw err.forbidden('无权使用该角色')
+  }
+  debugRepo.insertUsage(db, {
+    ownerId: userId,
+    conversationId: input.conversationId ?? null,
+    personaId: input.personaId ?? null,
+    providerId: input.providerId ?? null,
+    kind: input.kind,
+    refId: input.refId ?? null,
+    model: input.model ?? null,
+    promptTokens: input.promptTokens,
+    completionTokens: input.completionTokens,
+    cachedTokens: input.cachedTokens ?? 0,
+  })
+}
+
+/** 按 refId 批量查最近一次 usage（消息内联调试条用） */
+export function usageByRefs(
+  db: DB,
+  userId: string,
+  refIds: string[],
+): Record<string, AiUsageEntry> {
+  return debugRepo.findUsageByRefs(db, refIds.slice(0, 200))
+}
+
+/** 会话最近的群聊决策记录 */
+export function listGroupDecisions(
+  db: DB,
+  userId: string,
+  conversationId: string,
+  limit: number,
+): AiGroupDecision[] {
+  assertConversationMember(db, userId, conversationId)
+  return debugRepo.listDecisions(db, conversationId, Math.min(Math.max(limit, 1), 500))
 }

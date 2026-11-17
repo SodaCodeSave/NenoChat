@@ -281,6 +281,8 @@ export interface AiProvider {
   model: string
   /** 识图模型名：把聊天图片转成文字描述，让不支持多模态的主模型也能看懂图片 */
   visionModel?: string | null
+  /** 模型上下文窗口大小（token 数），调试模式用它算上下文水位；空表示未配置 */
+  contextWindow?: number | null
   temperature: number
   maxTokens: number
   isDefault: boolean
@@ -377,7 +379,80 @@ export interface AiGlobalSettings {
   segmentPattern: string
   /** AI 回复逐字流式输出；关掉时只要开了分段，仍然按流式增量出段落 */
   streamEnabled: boolean
+  /** 调试模式：显示 token 消耗、缓存命中率、群聊成员决策过程等信息 */
+  debugMode: boolean
   updatedAt: number
+}
+
+/** 一次上游 AI 调用的用途分类 */
+export type AiUsageKind =
+  | 'chat'
+  | 'group_reply'
+  | 'group_autonomy'
+  | 'proactive'
+  | 'moment'
+  | 'summary'
+  | 'vision'
+  | 'title'
+  | 'client_report'
+
+/** 一次上游 AI 调用的真实 token 用量 */
+export interface AiUsageEntry {
+  id: string
+  ownerId: string
+  conversationId: string | null
+  personaId: string | null
+  providerId: string | null
+  kind: AiUsageKind
+  /** 关联对象：私聊 generationId / 群聊 logId 等 */
+  refId: string | null
+  model: string | null
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+  createdAt: number
+}
+
+/** 群聊成员的一次决策记录：规则层判定或模型层产出 */
+export interface AiGroupDecision {
+  id: string
+  conversationId: string
+  personaId: string
+  /** 展示用的角色名，记录快照避免角色改名后历史失真 */
+  personaName: string
+  triggerMessageId: string | null
+  channelId: string | null
+  kind: 'reply' | 'autonomy'
+  /** 规则层是否放行 */
+  fired: boolean
+  /** rules = 规则层判定；model = 模型产出（含 SKIP） */
+  stage: 'rules' | 'model'
+  reason: string | null
+  energy: number | null
+  mood: string | null
+  logId: string | null
+  usage: { promptTokens: number; completionTokens: number; cachedTokens: number } | null
+  createdAt: number
+}
+
+/** 会话维度的调试汇总：用量统计 + 上下文水位 */
+export interface AiDebugSummary {
+  calls: number
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+  /** 缓存命中率 = cachedTokens / promptTokens；没有数据时为 null */
+  hitRate: number | null
+  lastPromptTokens: number | null
+  lastModel: string | null
+  lastUsageAt: number | null
+  contextWindow: number | null
+  /** 最近一次 prompt_tokens 占上下文窗口的比例（0-1），缺窗口配置时为 null */
+  contextLevel: number | null
+  /** 私聊：已压缩摘要覆盖到的消息 seq */
+  lastCompactedSeq: number | null
+  /** 私聊：session 记录的粗略 token 估算 */
+  tokenEstimate: number | null
 }
 
 /** 角色在某个群里的心情与体力，决定它愿不愿意接话 */

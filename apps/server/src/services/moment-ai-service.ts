@@ -170,22 +170,34 @@ async function commentOnPost(
   }))
 
   try {
-    const reply = await callUpstream({
-      baseUrl: provider.base_url,
-      apiKey: resolveServerApiKey(provider),
-      model: persona.model_override ?? provider.model,
-      temperature: 0.95,
-      maxTokens: 120,
-      messages: buildMomentCommentPrompt({
-        persona: mapped,
-        postAuthor: target.author_name,
-        postContent: target.content,
-        imageCount: target.image_count,
-        minutesAgo: Math.max(0, Math.round((now - target.created_at) / 60_000)),
-        comments,
-        localTime: formatLocalTime(now, TZ_OFFSET_MIN),
-      }),
-    })
+    const reply = (
+      await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey: resolveServerApiKey(provider),
+        model: persona.model_override ?? provider.model,
+        temperature: 0.95,
+        maxTokens: 120,
+        messages: buildMomentCommentPrompt({
+          persona: mapped,
+          postAuthor: target.author_name,
+          postContent: target.content,
+          imageCount: target.image_count,
+          minutesAgo: Math.max(0, Math.round((now - target.created_at) / 60_000)),
+          comments,
+          localTime: formatLocalTime(now, TZ_OFFSET_MIN),
+        }),
+        record: {
+          db,
+          ownerId: userId,
+          conversationId: null,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'moment',
+        },
+      })
+    )
+      .content
+      .trim()
 
     if (isSkipReply(reply)) {
       momentRepo.markStatus(db, {
@@ -251,19 +263,31 @@ async function publishMoment(
     .map((post) => ({ author: post.author_name, content: post.content.slice(0, 120) }))
 
   try {
-    const reply = await callUpstream({
-      baseUrl: provider.base_url,
-      apiKey: resolveServerApiKey(provider),
-      model: persona.model_override ?? provider.model,
-      temperature: 1,
-      maxTokens: 200,
-      messages: buildMomentPostPrompt({
-        persona: mapped,
-        memoryDigest: buildMemoryDigest(db, persona.id),
-        recentMoments,
-        localTime: formatLocalTime(now, TZ_OFFSET_MIN),
-      }),
-    })
+    const reply = (
+      await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey: resolveServerApiKey(provider),
+        model: persona.model_override ?? provider.model,
+        temperature: 1,
+        maxTokens: 200,
+        messages: buildMomentPostPrompt({
+          persona: mapped,
+          memoryDigest: buildMemoryDigest(db, persona.id),
+          recentMoments,
+          localTime: formatLocalTime(now, TZ_OFFSET_MIN),
+        }),
+        record: {
+          db,
+          ownerId: userId,
+          conversationId: null,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'moment',
+        },
+      })
+    )
+      .content
+      .trim()
 
     if (isSkipReply(reply)) {
       momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'skipped' })

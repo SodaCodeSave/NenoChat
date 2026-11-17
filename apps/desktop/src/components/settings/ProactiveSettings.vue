@@ -37,6 +37,7 @@ const DEFAULTS: Editable = {
   groupEnabled: true,
   groupRepliesPerDay: GROUP_AI_DEFAULTS.repliesPerDay,
   groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
+  debugMode: false,
   segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
   segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
   streamEnabled: false,

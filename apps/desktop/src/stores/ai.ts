@@ -49,12 +49,23 @@ interface StreamDone {
   generation_id: string
   prompt_tokens: number | null
   completion_tokens: number | null
+  cached_tokens: number | null
   model: string | null
 }
 
 interface StreamError {
   generation_id: string
   message: string
+}
+
+/** Rust ai_complete 的返回：正文 + 真实用量 */
+interface AiCompleteResult {
+  content: string
+  usage: {
+    prompt_tokens: number | null
+    completion_tokens: number | null
+    cached_tokens: number | null
+  } | null
 }
 
 const MEMORY_COMPACT_THRESHOLD = 20
@@ -93,6 +104,37 @@ export const useAiStore = defineStore('ai', () => {
       enabled: settings?.segmentEnabled ?? SEGMENT_REPLY_DEFAULTS.enabled,
       pattern: settings?.segmentPattern ?? SEGMENT_REPLY_DEFAULTS.pattern,
     }
+  }
+
+  /** 调试开关：全局设置里的 debugMode */
+  function debugEnabled(): boolean {
+    return globalSettings.value?.debugMode ?? false
+  }
+
+  /** 本机代跑的真实 usage 上报服务端；失败静默，调试数据不影响主流程 */
+  function reportUsage(input: {
+    conversationId?: string
+    personaId?: string
+    providerId?: string
+    kind: 'chat' | 'group_reply' | 'group_autonomy' | 'proactive' | 'moment' | 'summary' | 'vision'
+    refId?: string
+    model?: string
+    usage: AiCompleteResult['usage']
+  }): void {
+    if (!input.usage || input.usage.prompt_tokens == null) return
+    void aiApi
+      .reportUsage({
+        conversationId: input.conversationId,
+        personaId: input.personaId,
+        providerId: input.providerId,
+        kind: input.kind,
+        refId: input.refId,
+        model: input.model,
+        promptTokens: input.usage.prompt_tokens ?? 0,
+        completionTokens: input.usage.completion_tokens ?? 0,
+        cachedTokens: input.usage.cached_tokens ?? 0,
+      })
+      .catch(() => undefined)
   }
 
   /** 全局自动互动设置；读取失败时保持 null，界面按默认值渲染 */
@@ -268,7 +310,7 @@ export const useAiStore = defineStore('ai', () => {
       const dataUrl = await fetchImageDataUrl(attachment.url)
       if (!dataUrl) continue
       try {
-        const raw = await invoke<string>('ai_complete', {
+        const result = await invoke<AiCompleteResult>('ai_complete', {
           baseUrl: provider.baseUrl,
           apiKey,
           model: provider.visionModel,
@@ -285,7 +327,15 @@ export const useAiStore = defineStore('ai', () => {
           maxTokens: 400,
           jsonMode: false,
         })
-        const description = raw.trim().slice(0, 1000)
+        reportUsage({
+          conversationId,
+          providerId: provider.id,
+          kind: 'vision',
+          refId: attachment.id,
+          model: provider.visionModel ?? undefined,
+          usage: result.usage,
+        })
+        const description = result.content.trim().slice(0, 1000)
         if (!description) continue
         await aiApi
           .saveImageDescription({
@@ -403,6 +453,19 @@ export const useAiStore = defineStore('ai', () => {
         if (event.payload.generation_id !== generationId || finished) return
         finished = true
         cleanup()
+        reportUsage({
+          conversationId,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'chat',
+          refId: generationId,
+          model: event.payload.model ?? persona.modelOverride ?? provider.model,
+          usage: {
+            prompt_tokens: event.payload.prompt_tokens,
+            completion_tokens: event.payload.completion_tokens,
+            cached_tokens: event.payload.cached_tokens,
+          },
+        })
         resolve()
       }).then((off) => unlisteners.push(off))
 
@@ -616,7 +679,7 @@ export const useAiStore = defineStore('ai', () => {
         transcript,
       })
 
-      const raw = await invoke<string>('ai_complete', {
+      const result = await invoke<AiCompleteResult>('ai_complete', {
         baseUrl: provider.baseUrl,
         apiKey,
         model: persona.modelOverride ?? provider.model,
@@ -625,8 +688,16 @@ export const useAiStore = defineStore('ai', () => {
         maxTokens: 800,
         jsonMode: true,
       })
+      reportUsage({
+        conversationId,
+        personaId: persona.id,
+        providerId: provider.id,
+        kind: 'summary',
+        model: persona.modelOverride ?? provider.model,
+        usage: result.usage,
+      })
 
-      const parsed = JSON.parse(raw) as {
+      const parsed = JSON.parse(result.content) as {
         summary?: string
         facts?: Array<{ subject: string; key: string; value: string; confidence?: number }>
       }
@@ -715,7 +786,7 @@ export const useAiStore = defineStore('ai', () => {
       localTime: new Date().toLocaleString(),
     })
 
-    const raw = await invoke<string>('ai_complete', {
+    const result = await invoke<AiCompleteResult>('ai_complete', {
       baseUrl: provider.baseUrl,
       apiKey,
       model: persona.modelOverride ?? provider.model,
@@ -724,8 +795,16 @@ export const useAiStore = defineStore('ai', () => {
       maxTokens: 200,
       jsonMode: false,
     })
+    reportUsage({
+      conversationId,
+      personaId: persona.id,
+      providerId: provider.id,
+      kind: 'proactive',
+      model: persona.modelOverride ?? provider.model,
+      usage: result.usage,
+    })
 
-    const segments = splitSegments(raw, currentSegmentRule()).slice(0, 2)
+    const segments = splitSegments(result.content, currentSegmentRule()).slice(0, 2)
     if (segments.length === 0) return
 
     const generationId = `proactive-local-${conversationId}-${Date.now()}`
@@ -873,7 +952,7 @@ export const useAiStore = defineStore('ai', () => {
         localTime: new Date().toLocaleString(),
       })
 
-      const raw = await invoke<string>('ai_complete', {
+      const groupResult = await invoke<AiCompleteResult>('ai_complete', {
         baseUrl: provider.baseUrl,
         apiKey,
         model: persona.modelOverride ?? provider.model,
@@ -882,6 +961,17 @@ export const useAiStore = defineStore('ai', () => {
         maxTokens: 300,
         jsonMode: false,
       })
+      reportUsage({
+        conversationId: payload.conversationId,
+        personaId: persona.id,
+        providerId: provider.id,
+        kind: payload.kind === 'reply' ? 'group_reply' : 'group_autonomy',
+        refId: payload.logId,
+        model: persona.modelOverride ?? provider.model,
+        usage: groupResult.usage,
+      })
+
+      const raw = groupResult.content
 
       if (isSkipReply(raw)) {
         await aiApi.skipGroup(payload.logId, 'client_skip')
@@ -968,7 +1058,7 @@ export const useAiStore = defineStore('ai', () => {
           postApi.get(payload.postId),
           postApi.comments(payload.postId),
         ])
-        const raw = await invoke<string>('ai_complete', {
+        const result = await invoke<AiCompleteResult>('ai_complete', {
           baseUrl: provider.baseUrl,
           apiKey,
           model: persona.modelOverride ?? provider.model,
@@ -989,16 +1079,23 @@ export const useAiStore = defineStore('ai', () => {
           maxTokens: 120,
           jsonMode: false,
         })
-        if (isSkipReply(raw)) return
+        reportUsage({
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'moment',
+          model: persona.modelOverride ?? provider.model,
+          usage: result.usage,
+        })
+        if (isSkipReply(result.content)) return
         await postApi.comment(payload.postId, {
-          content: cleanGenerated(raw, 200),
+          content: cleanGenerated(result.content, 200),
           personaId: persona.id,
         })
         return
       }
 
       const { posts } = await postApi.feed(undefined, 6)
-      const raw = await invoke<string>('ai_complete', {
+      const result = await invoke<AiCompleteResult>('ai_complete', {
         baseUrl: provider.baseUrl,
         apiKey,
         model: persona.modelOverride ?? provider.model,
@@ -1015,9 +1112,16 @@ export const useAiStore = defineStore('ai', () => {
         maxTokens: 200,
         jsonMode: false,
       })
-      if (isSkipReply(raw)) return
+      reportUsage({
+        personaId: persona.id,
+        providerId: provider.id,
+        kind: 'moment',
+        model: persona.modelOverride ?? provider.model,
+        usage: result.usage,
+      })
+      if (isSkipReply(result.content)) return
       await postApi.create({
-        content: cleanGenerated(raw, 500),
+        content: cleanGenerated(result.content, 500),
         attachmentIds: [],
         visibility: 'friends',
         personaId: persona.id,

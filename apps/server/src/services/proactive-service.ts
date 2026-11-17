@@ -288,14 +288,26 @@ async function fireOnServer(
 
   let reply: string
   try {
-    reply = await callUpstream({
-      baseUrl: provider.base_url,
-      apiKey: resolveServerApiKey(provider),
-      model: persona.model_override ?? provider.model,
-      temperature: persona.temperature ?? provider.temperature,
-      maxTokens: Math.min(provider.max_tokens, 400),
-      messages,
-    })
+    reply = (
+      await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey: resolveServerApiKey(provider),
+        model: persona.model_override ?? provider.model,
+        temperature: persona.temperature ?? provider.temperature,
+        maxTokens: Math.min(provider.max_tokens, 400),
+        messages,
+        record: {
+          db,
+          ownerId: candidate.owner_id,
+          conversationId: candidate.conversation_id,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'proactive',
+        },
+      })
+    )
+      .content
+      .trim()
   } catch (e) {
     log.warn({ err: e, personaId: persona.id }, '主动消息生成失败')
     finishSlot(db, {

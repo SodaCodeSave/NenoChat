@@ -1,6 +1,7 @@
 import type {
   AppNotification,
   Attachment,
+  AiGroupDecision,
   Channel,
   Contact,
   Conversation,
@@ -125,6 +126,8 @@ export interface ServerEventPayloads {
     model?: string
   }
   'ai.error': { generationId: string; conversationId: string; code: string; message: string }
+  /** 调试模式：群聊成员的一次决策（规则层判定或模型层产出），推给开启调试的主人 */
+  'ai.debug.decision': { decision: AiGroupDecision }
   'ai.proactive.due': { conversationId: string; personaId: string; hint?: string; dueAt: number }
   /**
    * 群聊里轮到某个角色说话，但它的密钥在本机。

@@ -8,12 +8,14 @@ import MemberSidebar from '@/components/chat/MemberSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageContextMenu from '@/components/chat/MessageContextMenu.vue'
+import DebugInfoBar from '@/components/chat/DebugInfoBar.vue'
 import MemoryPanel from '@/components/ai/MemoryPanel.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useAiStore } from '@/stores/ai'
 import { useChannelsStore } from '@/stores/channels'
 import { useConversationsStore } from '@/stores/conversations'
+import { useDebugStore } from '@/stores/debug'
 import { useMembersStore } from '@/stores/members'
 import { useMessagesStore } from '@/stores/messages'
 import { useTypingStore } from '@/stores/typing'
@@ -28,6 +30,7 @@ const conversations = useConversationsStore()
 const channels = useChannelsStore()
 const members = useMembersStore()
 const messages = useMessagesStore()
+const debug = useDebugStore()
 const typing = useTypingStore()
 const ui = useUiStore()
 
@@ -85,6 +88,19 @@ const visibleMessages = computed(() => {
 
 const memberGroups = computed(() => members.groupedOf(conversationId.value))
 
+/** 调试模式开着时预取本会话的用量汇总与群聊决策记录 */
+const debugMode = computed(() => ai.globalSettings?.debugMode ?? false)
+
+watch(
+  () => [conversationId.value, debugMode.value, isGroup.value] as const,
+  ([id, on, group]) => {
+    if (!id || !on) return
+    void debug.loadSummary(id)
+    if (group) void debug.loadDecisions(id)
+  },
+  { immediate: true },
+)
+
 /** AI 生成中的占位行状态：思考阶段灰字，流式出字后跟着长 */
 const aiStreamRow = computed(() => {
   if (!isAi.value) return null
@@ -140,7 +156,8 @@ async function loadConversation(): Promise<void> {
 
   await messages.loadInitial(id, {
     channelId: isGroup.value ? activeChannel.value?.id ?? null : null,
-    force: true,
+    // 群聊按频道拉取需要强制刷新；私聊与 AI 会话已预载时直接用内存数据，新消息由 WS 同步
+    force: isGroup.value,
   })
 
   // 从搜索结果跳进来：目标消息不在最近一页时，把它所在的上下文补进来
@@ -353,6 +370,7 @@ function goBack(): void {
           :has-more-older="hasMoreOlder"
           :highlight-id="highlightId"
           :streaming="aiStreamRow"
+          :debug-channel-id="isGroup ? activeChannel?.id ?? null : null"
           @load-older="loadOlder"
           @load-around="handleLoadAround"
           @visible-last="handleVisibleLast"
@@ -390,6 +408,8 @@ function goBack(): void {
           @cancel-reply="replyTo = null"
           @cancel-edit="editing = null"
         />
+
+        <DebugInfoBar v-if="debugMode" :conversation-id="conversationId" />
       </template>
 
       <div v-else class="grid flex-1 place-items-center">

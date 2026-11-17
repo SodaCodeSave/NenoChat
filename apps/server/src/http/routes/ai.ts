@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import {
   AiGlobalSettingsPatchSchema,
   AppendAiSegmentSchema,
@@ -14,6 +15,7 @@ import {
   ProviderSchema,
   StartGenerationSchema,
   TestProviderSchema,
+  UsageReportSchema,
 } from '@nenochat/shared'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
@@ -171,8 +173,46 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true }
   })
 
-  /* ------------------------------ 记忆 ------------------------------ */
+  /* ------------------------------ 调试模式 ------------------------------ */
 
+  /** 本机密钥代跑后回传真实 usage */
+  app.post('/ai/usage', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(UsageReportSchema, request.body)
+    aiService.reportClientUsage(db, userId, input)
+    return { ok: true }
+  })
+
+  /** 会话用量汇总：缓存命中率、token 消耗、上下文水位 */
+  app.get('/ai/debug/summary', async (request) => {
+    const userId = await requireUserId(request)
+    const query = parse(z.object({ conversationId: z.string().min(1) }), request.query)
+    return { summary: aiService.debugSummary(db, userId, query.conversationId) }
+  })
+
+  /** 会话最近的群聊决策记录（含规则层未放行与 SKIP） */
+  app.get('/ai/debug/decisions', async (request) => {
+    const userId = await requireUserId(request)
+    const query = parse(
+      z.object({
+        conversationId: z.string().min(1),
+        limit: z.coerce.number().int().min(1).max(500).optional(),
+      }),
+      request.query,
+    )
+    return {
+      decisions: aiService.listGroupDecisions(db, userId, query.conversationId, query.limit ?? 200),
+    }
+  })
+
+  /** 按 refId 批量查最近一次 usage（消息内联调试条） */
+  app.post('/ai/debug/usage-batch', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(z.object({ refIds: z.array(z.string().min(1)).max(200) }), request.body)
+    return { usage: aiService.usageByRefs(db, userId, input.refIds) }
+  })
+
+  /* ------------------------------ 记忆 ------------------------------ */
   app.get<{ Params: { id: string } }>('/ai/conversations/:id/memory', async (request) => {
     const userId = await requireUserId(request)
     return aiService.listMemory(db, userId, request.params.id)

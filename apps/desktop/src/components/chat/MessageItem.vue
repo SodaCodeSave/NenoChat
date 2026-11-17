@@ -25,6 +25,8 @@ const props = defineProps<{
   ephemeral?: boolean
   /** 被引用消息的摘要：优先取快照，缺失时由列表从已加载消息解析 */
   reply?: { id: string; senderName: string; preview: string } | null
+  /** 调试模式：该条 AI 消息的真实用量摘要，空则不显示 */
+  debugLine?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -215,6 +217,9 @@ const showAiTail = computed(
             {{ statusLabel }}
           </span>
           <span v-if="showAiTail" class="text-[11px] text-muted">共 {{ aiGroupSize }} 条</span>
+          <span v-if="debugLine" class="truncate font-mono text-[10px] text-muted/70">
+            {{ debugLine }}
+          </span>
         </div>
       </div>
     </div>

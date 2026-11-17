@@ -1,10 +1,13 @@
 import {
   API_PREFIX,
+  type AiDebugSummary,
   type AiGlobalSettings,
+  type AiGroupDecision,
   type AiMemoryFact,
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type AiUsageEntry,
   type Conversation,
 } from '@nenochat/shared'
 import { http } from './http'
@@ -22,6 +25,8 @@ export interface ProviderInput {
   isDefault?: boolean
   /** 识图模型：把聊天图片转成文字描述，留空则发图时直接传给主模型 */
   visionModel?: string | null
+  /** 模型上下文窗口（token 数），调试模式算水位用 */
+  contextWindow?: number | null
 }
 
 export interface PersonaInput {
@@ -130,6 +135,39 @@ export const aiApi = {
   }) => http.post<{ message: unknown }>(p('/ai/group/messages'), body),
   skipGroup: (logId: string, reason?: string) =>
     http.post<{ ok: boolean }>(p('/ai/group/skip'), { logId, reason }),
+
+  /* ------------------------------ 调试模式 ------------------------------ */
+
+  /** 本机代跑的真实 usage 回传服务端落库 */
+  reportUsage: (body: {
+    conversationId?: string
+    personaId?: string
+    providerId?: string
+    kind: string
+    refId?: string
+    model?: string
+    promptTokens: number
+    completionTokens: number
+    cachedTokens?: number
+  }) => http.post<{ ok: boolean }>(p('/ai/usage'), body),
+
+  /** 会话用量汇总：缓存命中率、token 消耗、上下文水位 */
+  debugSummary: (conversationId: string) =>
+    http.get<{ summary: AiDebugSummary }>(
+      p(`/ai/debug/summary?conversationId=${encodeURIComponent(conversationId)}`),
+    ),
+
+  /** 会话最近的群聊决策记录 */
+  debugDecisions: (conversationId: string, limit = 200) =>
+    http.get<{ decisions: AiGroupDecision[] }>(
+      p(
+        `/ai/debug/decisions?conversationId=${encodeURIComponent(conversationId)}&limit=${limit}`,
+      ),
+    ),
+
+  /** 按 refId 批量查最近一次 usage（消息内联调试条） */
+  usageByRefs: (refIds: string[]) =>
+    http.post<{ usage: Record<string, AiUsageEntry> }>(p('/ai/debug/usage-batch'), { refIds }),
 
   writeMemory: (
     conversationId: string,
