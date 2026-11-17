@@ -133,6 +133,10 @@ export const useAiStore = defineStore('ai', () => {
     if (!isTauri()) throw new Error('本机密钥需要桌面客户端生成日程')
     const provider = providerOf(persona)
     if (!provider) throw new Error('还没有配置 AI 服务商')
+    // 服务端已判定需要本机生成，这里再确认一次密钥确实在本机
+    if (provider.keyLocation !== 'local') {
+      throw new Error('当前角色使用的是云端密钥，日程应由服务端生成，请稍后重试')
+    }
     const apiKey = await loadProviderKey(provider.id)
     if (!apiKey) throw new Error('本机没有找到该服务商的密钥，请到设置里重新填写')
 

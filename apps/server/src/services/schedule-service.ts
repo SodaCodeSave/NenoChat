@@ -54,9 +54,20 @@ export function saveSchedule(
   return scheduleRepo.mapSchedule(scheduleRepo.upsertSchedule(db, input))
 }
 
+/**
+ * 角色当前实际使用的服务商。
+ * 与客户端的 providerOf 保持一致：角色指定的服务商可能已被删除，
+ * 这时要回退到默认服务商，再回退到最早创建的那个，否则云端密钥明明存在也会被判成本机密钥。
+ */
 function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
-  const providerId = persona.provider_id ?? aiRepo.defaultProvider(db, persona.owner_id)?.id
-  return providerId ? aiRepo.findProvider(db, providerId) : undefined
+  if (persona.provider_id) {
+    const explicit = aiRepo.findProvider(db, persona.provider_id)
+    if (explicit) return explicit
+  }
+  return (
+    aiRepo.defaultProvider(db, persona.owner_id) ??
+    aiRepo.listProviders(db, persona.owner_id)[0]
+  )
 }
 
 /** 用服务端托管的密钥调用上游，生成并保存某天的日程 */
