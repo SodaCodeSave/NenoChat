@@ -55,6 +55,7 @@ const showMemory = ref(false)
 const aiError = ref<string | null>(null)
 
 const messageList = ref<{ scrollToBottom: (smooth?: boolean) => void } | null>(null)
+const messageInput = ref<InstanceType<typeof MessageInput> | null>(null)
 const contextMenu = ref<{ message: Message; x: number; y: number } | null>(null)
 const previewUrl = ref<string | null>(null)
 const toast = ref<string | null>(null)
@@ -84,10 +85,15 @@ const visibleMessages = computed(() => {
 
 const memberGroups = computed(() => members.groupedOf(conversationId.value))
 
-/** AI 生成中的临时气泡内容（逐字增长），生成结束后清空并转为正式消息 */
-const streamingText = computed(() => (isAi.value ? ai.streamTextOf(conversationId.value) : ''))
-const aiGenerating = computed(() => (isAi.value ? ai.isGenerating(conversationId.value) : false))
-const aiPersonaName = computed(() => ai.personaOf(conversationId.value)?.name ?? 'AI')
+/** AI 生成中的占位行状态：思考阶段灰字，流式出字后跟着长 */
+const aiStreamRow = computed(() => {
+  if (!isAi.value) return null
+  const stream = ai.streaming[conversationId.value]
+  const text = stream?.text ?? ''
+  const generating = ai.isGenerating(conversationId.value)
+  if (!generating && !text) return null
+  return { generationId: stream?.generationId ?? '', text, pending: !text }
+})
 
 const typingNames = computed(() => {
   const ids = typing.activeIn(conversationId.value).filter((id) => id !== auth.user?.id)
@@ -171,7 +177,10 @@ function selectChannel(channelId: string): void {
 /** AI 一轮生成可能跑十几秒，期间的重复提交直接丢掉，避免同一条被发两次 */
 const turnBusy = ref(false)
 
-async function handleSend(content: string): Promise<void> {
+async function handleSend(
+  content: string,
+  mentions?: { userIds: string[]; mentionAll: boolean },
+): Promise<void> {
   const id = conversationId.value
   if (editing.value) {
     const target = editing.value
@@ -201,6 +210,10 @@ async function handleSend(content: string): Promise<void> {
     conversationId: id,
     channelId,
     content,
+    meta:
+      mentions && (mentions.mentionAll || mentions.userIds.length > 0)
+        ? { mentions: mentions.userIds, mentionAll: mentions.mentionAll }
+        : undefined,
     replyToId: replyTo.value?.id ?? null,
   })
   replyTo.value = null
@@ -338,6 +351,7 @@ function goBack(): void {
           :loading="messagesLoading"
           :has-more-older="hasMoreOlder"
           :highlight-id="highlightId"
+          :streaming="aiStreamRow"
           @load-older="loadOlder"
           @load-around="handleLoadAround"
           @visible-last="handleVisibleLast"
@@ -349,24 +363,12 @@ function goBack(): void {
           @preview="(url) => (previewUrl = url)"
         />
 
-        <!-- AI 逐字生成中的临时气泡，生成完成后拆成正式消息 -->
-        <div v-if="isAi && (aiGenerating || streamingText)" class="border-t border-line px-4 py-2">
-          <div class="mb-1 flex items-center gap-1.5">
-            <span class="text-[12.5px] font-medium text-text-strong">{{ aiPersonaName }}</span>
-            <span class="text-[10.5px] text-muted">
-              {{ streamingText ? '正在输入…' : '思考中…' }}
-            </span>
-          </div>
-          <p class="max-h-32 overflow-hidden text-[13.5px] leading-[1.6] whitespace-pre-wrap text-text">
-            {{ streamingText }}<span class="typing-caret ml-0.5" />
-          </p>
-        </div>
-
         <p v-if="aiError" class="border-t border-line bg-danger/10 px-4 py-2 text-[12px] text-danger">
           {{ aiError }}
         </p>
 
         <MessageInput
+          ref="messageInput"
           :conversation-id="conversationId"
           :channel-id="isGroup ? activeChannel?.id ?? null : null"
           :reply-to="replyTo"
@@ -379,6 +381,7 @@ function goBack(): void {
                 : '输入消息'
           "
           :ai-mode="isAi"
+          :mention-all-enabled="isGroup"
           @send="handleSend"
           @typing="typing.notifyTyping(conversationId)"
           @attachment="handleAttachment"
@@ -397,7 +400,7 @@ function goBack(): void {
       v-if="conversation && isGroup && showMembers && !ui.isMobile"
       :groups="memberGroups"
       @open-profile="() => {}"
-      @mention="() => {}"
+      @mention="(userId: string, name: string) => messageInput?.insertMention(userId, name)"
     />
 
     <MemoryPanel

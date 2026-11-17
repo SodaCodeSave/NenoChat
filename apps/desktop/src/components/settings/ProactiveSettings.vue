@@ -35,6 +35,7 @@ const DEFAULTS: Editable = {
   groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
   segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
   segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
+  streamEnabled: false,
 }
 
 const form = reactive<Editable>({ ...DEFAULTS })

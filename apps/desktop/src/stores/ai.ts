@@ -9,6 +9,7 @@ import {
   buildMomentCommentPrompt,
   buildMomentPostPrompt,
   buildProactivePrompt,
+  cutStreamingSegments,
   estimateTokens,
   isSkipReply,
   segmentDelay,
@@ -58,7 +59,8 @@ const MEMORY_COMPACT_THRESHOLD = 20
 /**
  * AI 会话编排。
  * 密钥在本机时走 Rust 流式网关（真正的逐字打字感），
- * 密钥托管在服务端时由服务端生成、按普通消息下发。
+ * 密钥托管在服务端时由服务端生成：开了流式就逐字推送，
+ * 开了分段就切好一段发一段，均通过 WS 事件实时驱动界面。
  */
 export const useAiStore = defineStore('ai', () => {
   const providers = ref<AiProvider[]>([])
@@ -228,8 +230,32 @@ export const useAiStore = defineStore('ai', () => {
     generating.value[conversationId] = true
 
     const unlisteners: UnlistenFn[] = []
-    let buffer = ''
     let finished = false
+
+    const rule = currentSegmentRule()
+    let pending = ''
+    let segIndex = 0
+    let appendChain: Promise<unknown> = Promise.resolve()
+
+    /** 切好的段落按序落库；用串行链保证 index 顺序不会乱 */
+    const pushSegment = (text: string): void => {
+      const index = segIndex++
+      appendChain = appendChain.then(() =>
+        aiApi.appendMessage(conversationId, {
+          generationId,
+          index,
+          content: text,
+          clientNonce: ulid(),
+        }),
+      )
+    }
+
+    /** 流式增量切分：能切就先落库，气泡里只留还没切出去的半截话 */
+    const cutNow = (atEnd: boolean): void => {
+      const { ready, rest } = cutStreamingSegments(pending, rule, atEnd)
+      pending = rest
+      for (const piece of ready) pushSegment(piece)
+    }
 
     const cleanup = (): void => {
       for (const off of unlisteners) off()
@@ -239,9 +265,10 @@ export const useAiStore = defineStore('ai', () => {
     await new Promise<void>((resolve, reject) => {
       void listen<StreamDelta>('ai://delta', (event) => {
         if (event.payload.generation_id !== generationId) return
-        buffer += event.payload.delta
+        pending += event.payload.delta
+        cutNow(false)
         const current = streaming.value[conversationId]
-        if (current) current.text = buffer
+        if (current) current.text = pending
       }).then((off) => unlisteners.push(off))
 
       void listen<StreamDone>('ai://done', (event) => {
@@ -279,26 +306,14 @@ export const useAiStore = defineStore('ai', () => {
       generating.value[conversationId] = false
     })
 
-    const segments = splitSegments(buffer, currentSegmentRule())
-    if (segments.length === 0) return
-
-    for (let index = 0; index < segments.length; index++) {
-      const text = segments[index]!
-      if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, segmentDelay(text)))
-      }
-      await aiApi.appendMessage(conversationId, {
-        generationId,
-        index,
-        content: text,
-        clientNonce: ulid(),
-      })
-    }
+    // 流结束：把剩余部分全部切出，并等排队中的段落都落库完
+    cutNow(true)
+    await appendChain.catch(() => undefined)
 
     void maybeCompact(conversationId, persona, provider)
   }
 
-  /** 服务端密钥模式：交给服务端生成，消息以普通事件下发 */
+  /** 服务端密钥模式：交给服务端生成，进度靠 WS 事件推进，结束后由 ai.done 收尾 */
   async function generateOnServer(
     conversationId: string,
     persona: AiPersona,
@@ -307,6 +322,7 @@ export const useAiStore = defineStore('ai', () => {
     clientNonce: string,
   ): Promise<void> {
     generating.value[conversationId] = true
+    armServerWatchdog(conversationId)
     try {
       await aiApi.startGeneration({
         conversationId,
@@ -314,9 +330,75 @@ export const useAiStore = defineStore('ai', () => {
         clientNonce,
         providerId: provider.id,
       })
-    } finally {
+    } catch (e) {
+      disarmServerWatchdog(conversationId)
       generating.value[conversationId] = false
+      throw e
     }
+  }
+
+  /* ------------------- 服务端流式回复：WS 事件驱动 ------------------- */
+
+  /** 服务端异常没发 ai.done 时的兜底，避免「生成中」状态卡死 */
+  const serverWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function armServerWatchdog(conversationId: string): void {
+    disarmServerWatchdog(conversationId)
+    serverWatchdogs.set(
+      conversationId,
+      setTimeout(() => {
+        serverWatchdogs.delete(conversationId)
+        generating.value[conversationId] = false
+        delete streaming.value[conversationId]
+      }, 180000),
+    )
+  }
+
+  function disarmServerWatchdog(conversationId: string): void {
+    const timer = serverWatchdogs.get(conversationId)
+    if (timer) {
+      clearTimeout(timer)
+      serverWatchdogs.delete(conversationId)
+    }
+  }
+
+  /** 服务端逐字推送：增量接到打字气泡上 */
+  function applyServerDelta(payload: {
+    generationId: string
+    conversationId: string
+    index: number
+    delta: string
+  }): void {
+    const target = streaming.value[payload.conversationId]
+    if (!target || target.generationId !== payload.generationId) {
+      streaming.value[payload.conversationId] = { generationId: payload.generationId, text: payload.delta }
+      return
+    }
+    target.text += payload.delta
+  }
+
+  /** 一段话切好了：清掉气泡里的半截话，正式消息随后由 message.created 下发 */
+  function applyServerSegment(payload: {
+    generationId: string
+    conversationId: string
+    index: number
+    text: string
+  }): void {
+    const target = streaming.value[payload.conversationId]
+    if (target && target.generationId === payload.generationId) target.text = ''
+  }
+
+  function applyServerDone(payload: { generationId: string; conversationId: string }): void {
+    const target = streaming.value[payload.conversationId]
+    if (target && target.generationId !== payload.generationId) return
+    disarmServerWatchdog(payload.conversationId)
+    delete streaming.value[payload.conversationId]
+    generating.value[payload.conversationId] = false
+  }
+
+  function applyServerError(payload: { generationId: string; conversationId: string; message: string }): void {
+    applyServerDone(payload)
+    lastError.value = payload.message
   }
 
   /** 同一句话的重复提交（双击/旧事件处理器）在 700ms 内只放行一次 */
@@ -831,6 +913,10 @@ export const useAiStore = defineStore('ai', () => {
     isGenerating,
     sendTurn,
     maybeCompact,
+    applyServerDelta,
+    applyServerSegment,
+    applyServerDone,
+    applyServerError,
     handleProactiveDue,
     handleMomentDue,
     handleGroupDue,

@@ -179,6 +179,38 @@ export function splitIncremental(
   return { ready, rest }
 }
 
+/**
+ * 流式场景的增量切分：从缓冲里只切出已经确定完整的段落，
+ * 剩余部分继续留在缓冲区等待更多 token；finished 时把剩余部分全部吐出。
+ * 切点取最后一个分隔符命中位置，且要求命中后还有至少一个字符，
+ * 避免多字符正则跨边界匹配时切早了。
+ */
+export function cutStreamingSegments(
+  pending: string,
+  rule: SegmentRule,
+  finished: boolean,
+): { ready: string[]; rest: string } {
+  if (!rule.enabled) {
+    if (!finished) return { ready: [], rest: pending }
+    const whole = splitSegments(pending, rule)
+    return { ready: whole, rest: '' }
+  }
+
+  if (!finished) {
+    const regex = compilePattern(rule.pattern)
+    let lastEnd: number | null = null
+    for (const match of pending.matchAll(regex)) {
+      if (match[0].length === 0) continue
+      const end = (match.index ?? 0) + match[0].length
+      if (end < pending.length) lastEnd = end
+    }
+    if (lastEnd === null) return { ready: [], rest: pending }
+    return { ready: splitSegments(pending.slice(0, lastEnd), rule), rest: pending.slice(lastEnd) }
+  }
+
+  return { ready: splitSegments(pending, rule), rest: '' }
+}
+
 /** 两条消息之间的间隔：文字越长停顿越久，模拟真人打字节奏 */
 export function segmentDelay(segment: string): number {
   const base = 320 + 12 * segment.length

@@ -3,6 +3,7 @@ import {
   ConversationType,
   Role,
   buildChatMessages,
+  cutStreamingSegments,
   estimateTokens,
   segmentDelay,
   splitSegments,
@@ -14,6 +15,7 @@ import {
   type Message,
   type MessageMeta,
   type ReplyStyle,
+  type SegmentRule,
   type SenderType,
 } from '@nenochat/shared'
 import type { DB } from '../db'
@@ -28,7 +30,15 @@ import { writeChange } from './change-log'
 import { err } from '../util/errors'
 import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
 import { appendSystemMessage } from './message-service'
-import { emitConversationUpdated, emitMemberRemoved, emitMessageCreated } from '../ws/emitter'
+import {
+  emitAiDelta,
+  emitAiDone,
+  emitAiError,
+  emitAiSegment,
+  emitConversationUpdated,
+  emitMemberRemoved,
+  emitMessageCreated,
+} from '../ws/emitter'
 
 /* ------------------------------ 服务商 ------------------------------ */
 
@@ -696,8 +706,9 @@ export interface ServerGenerationResult {
 
 /**
  * 密钥托管在服务端时由服务端调用上游。
- * 不逐 token 推送，而是拿到完整回复后按分条策略拆开、
- * 逐条延迟落库，客户端通过普通 message.created 事件看到「像真人分批发消息」。
+ * 开了流式或自动分段时走 SSE 流式上游：逐字推送 ai.delta，
+ * 分段切好一段就落库一条，客户端靠 message.created 实时看到每一段；
+ * 两个开关都关时保持旧行为，拿到完整回复后延迟逐条落库。
  */
 export async function generateOnServer(
   db: DB,
@@ -779,6 +790,13 @@ export async function generateOnServer(
     quoted,
   })
 
+  const settings = aiRepo.readGlobalSettings(db, input.userId)
+  const rule: SegmentRule = {
+    enabled: settings.segmentEnabled,
+    pattern: settings.segmentPattern,
+  }
+  const model = persona.model_override ?? provider.model
+
   const generationId = aiRepo.createGeneration(db, {
     conversationId: input.conversationId,
     userId: input.userId,
@@ -786,66 +804,168 @@ export async function generateOnServer(
     providerId: provider.id,
     personaId: persona.id,
     runLocation: 'server',
-    model: persona.model_override ?? provider.model,
+    model,
   })
 
-  let reply = ''
+  // 流式开关与自动分段任一开启就走流式上游：
+  // 前者为了逐字打字气泡，后者为了「切好一段就立刻发出一段」
+  if (!settings.streamEnabled && !settings.segmentEnabled) {
+    let reply = ''
+    try {
+      reply = await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey,
+        model,
+        temperature: persona.temperature ?? provider.temperature,
+        maxTokens: provider.max_tokens,
+        messages: chatMessages,
+      })
+    } catch (e) {
+      aiRepo.finishGeneration(db, generationId, {
+        status: 'error',
+        error: e instanceof Error ? e.message : '上游失败',
+      })
+      throw e
+    }
+
+    const segments = splitSegments(reply, rule)
+    if (segments.length === 0) {
+      aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds: [] })
+      emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds: [], model })
+      return { generationId, segments: 0 }
+    }
+
+    // 逐条延迟投递，模拟真人打字节奏；第一条立即发出
+    let delay = 0
+    const messageIds: string[] = []
+    segments.forEach((segment, index) => {
+      delay += index === 0 ? 0 : segmentDelay(segment)
+      setTimeout(() => {
+        try {
+          const message = appendAiSegment(db, input.conversationId, {
+            generationId,
+            index,
+            content: segment,
+            model,
+            totalSegments: segments.length,
+            personaId: persona.id,
+          })
+          messageIds.push(message.id)
+          if (messageIds.length === segments.length) {
+            aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
+          }
+        } catch (e) {
+          aiRepo.finishGeneration(db, generationId, {
+            status: 'error',
+            error: e instanceof Error ? e.message : '落库失败',
+          })
+        }
+      }, delay)
+    })
+
+    // 让客户端把「生成中」状态收掉；正文仍靠 message.created 逐条下发
+    emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds: [], model })
+    return { generationId, segments: segments.length }
+  }
+
+  /* ----------------------- 流式模式：边生成边下发 ----------------------- */
+
+  const messageIds: string[] = []
+  let segIndex = 0
+  let pending = ''
+
+  // 逐字增量做节流：把上游的小片段攒 60ms 再推，避免 WS 被刷屏
+  let pendingDelta = ''
+  let deltaTimer: ReturnType<typeof setTimeout> | null = null
+  const flushDelta = (): void => {
+    if (!pendingDelta) return
+    const text = pendingDelta
+    pendingDelta = ''
+    emitAiDelta(db, {
+      generationId,
+      conversationId: input.conversationId,
+      index: segIndex,
+      delta: text,
+    })
+  }
+  const emitDelta = (delta: string): void => {
+    pendingDelta += delta
+    if (deltaTimer === null) {
+      deltaTimer = setTimeout(() => {
+        deltaTimer = null
+        flushDelta()
+      }, 60)
+    }
+  }
+
+  const appendReady = (segments: string[]): void => {
+    for (const segment of segments) {
+      const message = appendAiSegment(db, input.conversationId, {
+        generationId,
+        index: segIndex,
+        content: segment,
+        model,
+        personaId: persona.id,
+      })
+      messageIds.push(message.id)
+      segIndex += 1
+    }
+  }
+
+  /** 切缓冲：能切就先清客户端气泡、发 ai.segment、再把正式段落落库下发 */
+  const cutPending = (finished: boolean): void => {
+    const { ready, rest } = cutStreamingSegments(pending, rule, finished)
+    if (ready.length === 0) return
+    pending = rest
+    if (deltaTimer !== null) {
+      clearTimeout(deltaTimer)
+      deltaTimer = null
+    }
+    pendingDelta = ''
+    for (let i = 0; i < ready.length; i++) {
+      emitAiSegment(db, {
+        generationId,
+        conversationId: input.conversationId,
+        index: segIndex + i,
+        text: ready[i]!,
+      })
+    }
+    appendReady(ready)
+  }
+
   try {
-    reply = await callUpstream({
+    await callUpstreamStream({
       baseUrl: provider.base_url,
       apiKey,
-      model: persona.model_override ?? provider.model,
+      model,
       temperature: persona.temperature ?? provider.temperature,
       maxTokens: provider.max_tokens,
       messages: chatMessages,
+      onDelta: (delta) => {
+        pending += delta
+        if (settings.streamEnabled) emitDelta(delta)
+        cutPending(false)
+      },
     })
+    cutPending(true)
+    flushDelta()
+    aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
+    emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds, model })
   } catch (e) {
-    aiRepo.finishGeneration(db, generationId, {
-      status: 'error',
-      error: e instanceof Error ? e.message : '上游失败',
+    const message = e instanceof Error ? e.message : '上游失败'
+    aiRepo.finishGeneration(db, generationId, { status: 'error', error: message })
+    emitAiError(db, {
+      generationId,
+      conversationId: input.conversationId,
+      code: 'UPSTREAM_AI_ERROR',
+      message,
     })
     throw e
+  } finally {
+    if (deltaTimer !== null) clearTimeout(deltaTimer)
   }
 
-  const settings = aiRepo.readGlobalSettings(db, input.userId)
-  const segments = splitSegments(reply, {
-    enabled: settings.segmentEnabled,
-    pattern: settings.segmentPattern,
-  })
-  if (segments.length === 0) {
-    aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds: [] })
-    return { generationId, segments: 0 }
-  }
-
-  // 逐条延迟投递，模拟真人打字节奏；第一条立即发出
-  let delay = 0
-  const messageIds: string[] = []
-  segments.forEach((segment, index) => {
-    delay += index === 0 ? 0 : segmentDelay(segment)
-    setTimeout(() => {
-      try {
-        const message = appendAiSegment(db, input.conversationId, {
-          generationId,
-          index,
-          content: segment,
-          model: persona.model_override ?? provider.model,
-          totalSegments: segments.length,
-          personaId: persona.id,
-        })
-        messageIds.push(message.id)
-        if (messageIds.length === segments.length) {
-          aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
-        }
-      } catch (e) {
-        aiRepo.finishGeneration(db, generationId, {
-          status: 'error',
-          error: e instanceof Error ? e.message : '落库失败',
-        })
-      }
-    }, delay)
-  })
-
-  return { generationId, segments: segments.length }
+  return { generationId, segments: Math.max(messageIds.length, 1) }
 }
 
 function appendUserMessage(
@@ -953,6 +1073,113 @@ export async function callUpstream(input: {
     throw e
   } finally {
     clearTimeout(timer)
+  }
+}
+
+/**
+ * 流式调用 OpenAI 兼容端点：解析 SSE，把每个增量交给 onDelta，
+ * 同时返回完整回复。上游不支持流式时会在读到的内容里找不到增量，按失败处理。
+ */
+export async function callUpstreamStream(input: {
+  baseUrl: string
+  apiKey: string
+  model: string
+  temperature: number
+  maxTokens: number
+  messages: Array<{ role: string; content: string }>
+  onDelta: (delta: string) => void
+}): Promise<string> {
+  const base = input.baseUrl.trimEnd().replace(/\/$/, '')
+  const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+
+  const controller = new AbortController()
+  // 空闲超时：每收到一段数据就重置，长回复不会被总时长掐断
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const armIdleTimeout = (): void => {
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => controller.abort(), 120000)
+  }
+
+  try {
+    armIdleTimeout()
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${input.apiKey}`,
+        accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: input.messages,
+        temperature: input.temperature,
+        max_tokens: input.maxTokens,
+        stream: true,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw err.upstreamAi(`上游返回 ${response.status}`, text.slice(0, 300))
+    }
+
+    // 上游不支持流式（忽略 stream 参数直接回 JSON）时退回一次性读取
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.includes('text/event-stream')) {
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>
+      }
+      const content = payload.choices?.[0]?.message?.content
+      if (!content) throw err.upstreamAi('上游没有返回内容')
+      input.onDelta(content)
+      return content
+    }
+
+    if (!response.body) throw err.upstreamAi('上游没有返回流式内容')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let sseBuffer = ''
+    let full = ''
+
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      armIdleTimeout()
+      sseBuffer += decoder.decode(value, { stream: true })
+
+      let newlineAt = sseBuffer.indexOf('\n')
+      while (newlineAt >= 0) {
+        const line = sseBuffer.slice(0, newlineAt).trim()
+        sseBuffer = sseBuffer.slice(newlineAt + 1)
+        newlineAt = sseBuffer.indexOf('\n')
+
+        if (!line.startsWith('data:')) continue
+        const data = line.slice(5).trim()
+        if (!data || data === '[DONE]') continue
+        try {
+          const payload = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string } }>
+          }
+          const piece = payload.choices?.[0]?.delta?.content
+          if (piece) {
+            full += piece
+            input.onDelta(piece)
+          }
+        } catch {
+          /* 忽略解析不了的行，上游偶尔会混入注释或心跳 */
+        }
+      }
+    }
+
+    if (!full.trim()) throw err.upstreamAi('上游没有返回内容')
+    return full
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
+    throw e
+  } finally {
+    if (timer !== null) clearTimeout(timer)
   }
 }
 

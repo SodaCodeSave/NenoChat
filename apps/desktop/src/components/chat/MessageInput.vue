@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import type { AttachmentRef, Message, Sticker } from '@nenochat/shared'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
+import { useAuthStore } from '@/stores/auth'
+import { useMembersStore } from '@/stores/members'
 import { useStickersStore } from '@/stores/stickers'
 import { useUiStore } from '@/stores/ui'
 
@@ -17,10 +20,18 @@ const props = defineProps<{
   placeholder?: string
   /** AI 会话里上传附件意义不大，隐藏附件按钮 */
   aiMode?: boolean
+  /** 群聊才显示「全体成员」提及项 */
+  mentionAllEnabled?: boolean
 }>()
 
+/** 发送时从正文解析出的提及信息 */
+export interface MentionSummary {
+  userIds: string[]
+  mentionAll: boolean
+}
+
 const emit = defineEmits<{
-  (e: 'send', content: string): void
+  (e: 'send', content: string, mentions?: MentionSummary): void
   (e: 'typing'): void
   (e: 'cancel-reply'): void
   (e: 'cancel-edit'): void
@@ -29,7 +40,9 @@ const emit = defineEmits<{
 }>()
 
 const ui = useUiStore()
+const auth = useAuthStore()
 const stickers = useStickersStore()
+const members = useMembersStore()
 
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -61,19 +74,168 @@ function autoGrow(): void {
 /** 双击发送按钮 / 连按两次 Enter 时挡住第二次，避免一条内容发两遍 */
 let lastSubmitAt = 0
 
+/* --------------------------- @ 提及 --------------------------- */
+
+interface MentionCandidate {
+  /** null 表示「全体成员」 */
+  userId: string | null
+  name: string
+  avatarUrl?: string | null
+  seed?: string
+}
+
+const mentionOpen = ref(false)
+const mentionIndex = ref(0)
+/** '@' 在正文中的起始位置，-1 表示未在输入提及 */
+const mentionStart = ref(-1)
+const mentionQuery = ref('')
+const mentionList = ref<HTMLElement | null>(null)
+
+const memberCandidates = computed<MentionCandidate[]>(() =>
+  members
+    .of(props.conversationId)
+    .filter((m) => m.userId !== auth.user?.id)
+    .map((m) => ({
+      userId: m.userId,
+      name: members.displayName(m),
+      avatarUrl: m.user?.avatarUrl ?? null,
+      seed: m.userId,
+    })),
+)
+
+const mentionCandidates = computed<MentionCandidate[]>(() => {
+  const query = mentionQuery.value.toLowerCase()
+  const matched = memberCandidates.value.filter((m) => m.name.toLowerCase().includes(query))
+  if (props.mentionAllEnabled && '全体成员'.toLowerCase().includes(query)) {
+    return [{ userId: null, name: '全体成员', avatarUrl: null, seed: 'all' }, ...matched]
+  }
+  return matched
+})
+
+/** 根据光标位置判断是否正在输入 @ 提及，是则打开候选弹窗 */
+function updateMention(): void {
+  const el = textarea.value
+  if (!el || props.disabled || props.aiMode) {
+    closeMention()
+    return
+  }
+  const caret = el.selectionStart ?? text.value.length
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(text.value.slice(0, caret))
+  if (!match) {
+    closeMention()
+    return
+  }
+  mentionStart.value = caret - match[1]!.length - 1
+  mentionQuery.value = match[1]!
+  if (mentionCandidates.value.length === 0) {
+    closeMention()
+    return
+  }
+  mentionOpen.value = true
+  mentionIndex.value = 0
+}
+
+function closeMention(): void {
+  mentionOpen.value = false
+  mentionIndex.value = 0
+  mentionStart.value = -1
+  mentionQuery.value = ''
+}
+
+/** 把选中的候选替换进正文，@xxx 变成一个完整提及 */
+function pickMention(candidate: MentionCandidate): void {
+  if (mentionStart.value < 0) return
+  const start = mentionStart.value
+  const end = start + 1 + mentionQuery.value.length
+  const insertion = `@${candidate.name} `
+  text.value = text.value.slice(0, start) + insertion + text.value.slice(end)
+  closeMention()
+  void nextTick(() => {
+    const el = textarea.value
+    if (!el) return
+    const caret = start + insertion.length
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    autoGrow()
+  })
+}
+
+watch(mentionIndex, async () => {
+  await nextTick()
+  mentionList.value?.querySelector('.mention-active')?.scrollIntoView({ block: 'nearest' })
+})
+
+/** 成员侧栏点击成员时插入 @ 提及 */
+function insertMention(_userId: string, displayName: string): void {
+  const el = textarea.value
+  const caret = el?.selectionStart ?? text.value.length
+  const insertion = `@${displayName} `
+  text.value = text.value.slice(0, caret) + insertion + text.value.slice(caret)
+  void nextTick(() => {
+    const target = textarea.value
+    if (!target) return
+    const next = caret + insertion.length
+    target.focus()
+    target.setSelectionRange(next, next)
+    autoGrow()
+  })
+}
+
+defineExpose({ insertMention })
+
+/** 从正文解析 @ 提及：按显示名匹配成员，@全体成员 触发全体提醒 */
+function collectMentions(): MentionSummary | null {
+  const list = members.of(props.conversationId)
+  const userIds = new Set<string>()
+  let mentionAll = false
+  for (const match of text.value.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
+    const name = match[1]!
+    if (props.mentionAllEnabled && '全体成员'.startsWith(name)) mentionAll = true
+    const member = list.find((m) => {
+      const displayName = members.displayName(m)
+      return displayName === name || displayName.startsWith(name)
+    })
+    if (member) userIds.add(member.userId)
+  }
+  if (!mentionAll && userIds.size === 0) return null
+  return { userIds: [...userIds], mentionAll }
+}
+
 function submit(): void {
   if (!canSend.value) return
   const now = Date.now()
   if (now - lastSubmitAt < 300) return
   lastSubmitAt = now
-  emit('send', text.value.trim())
+  emit('send', text.value.trim(), collectMentions() ?? undefined)
   text.value = ''
+  closeMention()
   void nextTick(autoGrow)
 }
 
 function onKeydown(event: KeyboardEvent): void {
   // 中文输入法组词中的 Enter 是「选词」，不能当成发送
   if (event.isComposing || event.keyCode === 229) return
+
+  // 提及弹窗打开时，方向键 / Enter / Tab 先服务于选人
+  if (mentionOpen.value && mentionCandidates.value.length > 0) {
+    const total = mentionCandidates.value.length
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      const delta = event.key === 'ArrowUp' ? -1 : 1
+      mentionIndex.value = (mentionIndex.value + delta + total) % total
+      return
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      pickMention(mentionCandidates.value[mentionIndex.value]!)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMention()
+      return
+    }
+  }
 
   const sendWithEnter = ui.sendKey === 'enter'
 
@@ -181,6 +343,7 @@ function onPaste(event: ClipboardEvent): void {
 watch(
   () => props.editing,
   async (message) => {
+    closeMention()
     if (message) {
       text.value = message.content
       await nextTick()
@@ -190,6 +353,13 @@ watch(
       text.value = ''
       void nextTick(autoGrow)
     }
+  },
+)
+
+watch(
+  () => props.conversationId,
+  () => {
+    closeMention()
   },
 )
 
@@ -246,7 +416,8 @@ onMounted(() => {
         :disabled="disabled"
         :placeholder="placeholder ?? '输入消息，Enter 发送，Shift+Enter 换行'"
         class="block max-h-[168px] w-full resize-none bg-transparent px-3 py-2.5 text-[13.5px] leading-[1.55] outline-none placeholder:text-muted"
-        @input="autoGrow"
+        @input="autoGrow(); updateMention()"
+        @click="updateMention"
         @keydown="onKeydown"
         @paste="onPaste"
       />
@@ -285,6 +456,39 @@ onMounted(() => {
           <Icon name="send" :size="14" />
           发送
         </button>
+      </div>
+
+      <!-- @ 提及候选弹窗：↑↓ 选择，Enter/Tab 或左键确认，Esc 关闭 -->
+      <div
+        v-if="mentionOpen && mentionCandidates.length > 0"
+        class="absolute bottom-full left-2 mb-2 w-[248px] overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-soft)]"
+      >
+        <p class="border-b border-line px-3 py-1.5 text-[10.5px] text-muted">提及成员</p>
+        <div ref="mentionList" class="scroll-area max-h-[220px] py-1">
+          <button
+            v-for="(candidate, index) in mentionCandidates"
+            :key="candidate.userId ?? 'all'"
+            type="button"
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors"
+            :class="index === mentionIndex ? 'mention-active bg-surface-2' : 'hover:bg-surface-2'"
+            @mouseenter="mentionIndex = index"
+            @mousedown.prevent="pickMention(candidate)"
+          >
+            <Avatar
+              :name="candidate.name"
+              :src="candidate.avatarUrl ?? null"
+              :seed="candidate.seed ?? candidate.name"
+              :size="22"
+            />
+            <span class="min-w-0 flex-1 truncate text-[12.5px] text-text">{{ candidate.name }}</span>
+            <span
+              v-if="candidate.userId === null"
+              class="rounded bg-accent-soft px-1 text-[10px] text-accent"
+            >
+              全体
+            </span>
+          </button>
+        </div>
       </div>
 
       <!-- 表情 / 贴纸面板 -->

@@ -421,6 +421,7 @@ export interface GlobalSettingsRow {
   group_autonomy_per_day: number
   segment_enabled: number
   segment_pattern: string
+  stream_enabled: number
   updated_at: number
 }
 
@@ -451,6 +452,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
     segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
     segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
+    streamEnabled: false,
     updatedAt: 0,
   }
   if (!row) return fallback
@@ -477,6 +479,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     groupAutonomyPerDay: row.group_autonomy_per_day,
     segmentEnabled: row.segment_enabled === 1,
     segmentPattern: row.segment_pattern || fallback.segmentPattern,
+    streamEnabled: row.stream_enabled === 1,
     updatedAt: row.updated_at,
   }
 }
@@ -494,8 +497,8 @@ export function writeGlobalSettings(
     `INSERT INTO ai_global_settings
        (user_id, proactive_enabled, proactive_config, moments_enabled, moments_posts_per_day,
         moments_comments_per_day, moments_likes_per_day, group_enabled, group_replies_per_day,
-        group_autonomy_per_day, segment_enabled, segment_pattern, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        proactive_enabled = excluded.proactive_enabled,
        proactive_config = excluded.proactive_config,
@@ -508,6 +511,7 @@ export function writeGlobalSettings(
        group_autonomy_per_day = excluded.group_autonomy_per_day,
        segment_enabled = excluded.segment_enabled,
        segment_pattern = excluded.segment_pattern,
+       stream_enabled = excluded.stream_enabled,
        updated_at = excluded.updated_at`,
   ).run(
     userId,
@@ -527,6 +531,7 @@ export function writeGlobalSettings(
     next.groupAutonomyPerDay,
     next.segmentEnabled ? 1 : 0,
     next.segmentPattern,
+    next.streamEnabled ? 1 : 0,
     ts,
   )
 

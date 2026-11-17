@@ -19,6 +19,10 @@ const props = defineProps<{
   streaming?: boolean
   /** 同一次 AI 回复的总条数，仅在最后一条显示 */
   aiGroupSize?: number
+  /** 生成中的占位行：还没出字时正文按灰字显示 */
+  thinking?: boolean
+  /** 生成中的临时占位：不出右键菜单与 hover 操作条 */
+  ephemeral?: boolean
   /** 被引用消息的摘要：优先取快照，缺失时由列表从已加载消息解析 */
   reply?: { id: string; senderName: string; preview: string } | null
 }>()
@@ -63,8 +67,8 @@ const attachments = computed(() =>
 )
 
 function openContextMenu(event: MouseEvent): void {
-  // 撤回后的消息没有操作项，交给浏览器默认菜单
-  if (deleted.value) return
+  // 撤回后的消息没有操作项，临时占位消息也不该有菜单
+  if (deleted.value || props.ephemeral) return
   event.preventDefault()
   emit('context', { id: props.message.id, x: event.clientX, y: event.clientY })
 }
@@ -133,7 +137,10 @@ const showAiTail = computed(
         <p
           v-else-if="message.type === 'text' || message.type === 'system'"
           class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words text-text"
-          :class="message.type === 'system' ? 'text-[12px] text-muted' : ''"
+          :class="[
+            message.type === 'system' ? 'text-[12px] text-muted' : '',
+            thinking ? 'text-muted italic' : '',
+          ]"
         >
           <template v-for="(segment, index) in segments" :key="index">
             <a
@@ -214,7 +221,7 @@ const showAiTail = computed(
 
     <!-- hover 操作条 -->
     <div
-      v-if="!deleted"
+      v-if="!deleted && !ephemeral"
       class="absolute -top-3 right-4 hidden items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[var(--shadow-soft)] group-hover:flex"
     >
       <button

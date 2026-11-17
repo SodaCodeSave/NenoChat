@@ -15,6 +15,8 @@ const props = defineProps<{
   hasMoreOlder?: boolean
   /** 正在流式生成的 generationId，用于显示光标 */
   streamingId?: string | null
+  /** AI 生成中的占位行状态：pending 表示还没出字（显示灰字思考中） */
+  streaming?: { generationId: string; text: string; pending: boolean } | null
   /** 未读分隔线插入位置（该 seq 之后） */
   unreadAfterSeq?: number
   /** 从搜索结果跳转过来时要定位的消息 id */
@@ -50,6 +52,26 @@ type Row =
       aiGroupSize?: number
       mentionMe: boolean
     }
+
+/** 生成中占位行的固定 id，模板里用它区分临时行与真实消息 */
+const STREAMING_MESSAGE_ID = '__ai_streaming__'
+
+/** 生成中的占位消息：思考阶段灰字，出字后跟着流式文本长 */
+const streamingMessage = computed<Message | null>(() => {
+  const stream = props.streaming
+  if (!stream) return null
+  return {
+    id: STREAMING_MESSAGE_ID,
+    conversationId: props.conversationId,
+    senderType: 'ai',
+    type: 'text',
+    content: stream.pending ? '正在思考中…' : stream.text,
+    meta: { ai: { generationId: stream.generationId, index: Number.MAX_SAFE_INTEGER } },
+    seq: (props.messages[props.messages.length - 1]?.seq ?? 0) + 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+})
 
 function dayKey(ts: number): string {
   const date = new Date(ts)
@@ -121,6 +143,18 @@ const rows = computed<Row[]>(() => {
     if (row.kind !== 'message') continue
     const gid = row.message.aiGenerationId
     if (gid) row.aiGroupSize = generationCount.get(gid)
+  }
+
+  // 生成中的占位行挂在列表末尾：思考阶段灰字，流式出字后跟着长，结束自动消失
+  const streamingRow = streamingMessage.value
+  if (streamingRow) {
+    output.push({
+      kind: 'message',
+      key: STREAMING_MESSAGE_ID,
+      message: streamingRow,
+      showHeader: true,
+      mentionMe: false,
+    })
   }
 
   return output
@@ -423,6 +457,16 @@ watch(
   },
 )
 
+/** 流式文本增长时跟随贴底，占位行高度随内容变化需要重新测量 */
+watch(
+  () => props.streaming?.text,
+  async () => {
+    await nextTick()
+    scheduleMeasure()
+    if (stickBottom) scrollToBottom()
+  },
+)
+
 /** 从搜索结果跳进来：滚到目标消息并短暂高亮 */
 watch(
   () => [props.highlightId, rows.value.length] as const,
@@ -503,7 +547,12 @@ defineExpose({ scrollToBottom })
         :mention-me="row.mentionMe"
         :pending="row.message.localStatus === 'pending'"
         :failed="row.message.localStatus === 'failed'"
-        :streaming="Boolean(streamingId && row.message.aiGenerationId === streamingId)"
+        :streaming="
+          row.message.id === STREAMING_MESSAGE_ID ||
+          Boolean(streamingId && row.message.aiGenerationId === streamingId)
+        "
+        :thinking="row.message.id === STREAMING_MESSAGE_ID && Boolean(streaming?.pending)"
+        :ephemeral="row.message.id === STREAMING_MESSAGE_ID"
         :ai-group-size="row.aiGroupSize"
         :reply="replyViewOf(row.message)"
         @reply="(id) => emit('reply', id)"

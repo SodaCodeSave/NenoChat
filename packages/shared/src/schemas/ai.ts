@@ -71,6 +71,7 @@ export const AiGlobalSettingsSchema = z.object({
   groupAutonomyPerDay: z.number().int().min(0).max(10),
   segmentEnabled: z.boolean(),
   segmentPattern: z.string().trim().min(1).max(200),
+  streamEnabled: z.boolean(),
 })
 
 export const AiGlobalSettingsPatchSchema = AiGlobalSettingsSchema.partial()

@@ -98,3 +98,46 @@ export function emitPostCommentCreated(userIds: string[], comment: PostComment):
 export function emitContactUpdated(userId: string, contact: Contact): void {
   hub().sendToUser(userId, 'contact.updated', { contact })
 }
+
+/* ------------------------- AI 生成进度事件 ------------------------- */
+
+type AiGenerationId = string
+type AiConversationId = string
+
+export function emitAiDelta(
+  db: DB,
+  payload: { generationId: AiGenerationId; conversationId: AiConversationId; index: number; delta: string },
+): void {
+  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.delta', payload)
+}
+
+export function emitAiSegment(
+  db: DB,
+  payload: { generationId: AiGenerationId; conversationId: AiConversationId; index: number; text: string },
+): void {
+  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.segment', payload)
+}
+
+export function emitAiDone(
+  db: DB,
+  payload: {
+    generationId: AiGenerationId
+    conversationId: AiConversationId
+    messageIds: string[]
+    model?: string
+  },
+): void {
+  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.done', payload)
+}
+
+export function emitAiError(
+  db: DB,
+  payload: {
+    generationId: AiGenerationId
+    conversationId: AiConversationId
+    code: string
+    message: string
+  },
+): void {
+  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.error', payload)
+}

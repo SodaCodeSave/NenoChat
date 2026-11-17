@@ -6,6 +6,7 @@ import NavRail from '@/components/layout/NavRail.vue'
 import ConversationList from '@/components/layout/ConversationList.vue'
 import MobileTabBar from '@/components/layout/MobileTabBar.vue'
 import SearchDialog from '@/components/layout/SearchDialog.vue'
+import TitleBar from '@/components/layout/TitleBar.vue'
 
 const ui = useUiStore()
 const route = useRoute()
@@ -27,17 +28,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <div class="flex h-full w-full overflow-hidden bg-surface text-text">
-    <NavRail v-if="!ui.isMobile" />
+  <div class="flex h-full w-full flex-col overflow-hidden bg-surface text-text">
+    <TitleBar :with-rail="!ui.isMobile" />
 
-    <ConversationList v-if="showList" />
+    <div class="flex min-h-0 flex-1 overflow-hidden">
+      <NavRail v-if="!ui.isMobile" />
 
-    <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-      <slot />
-    </main>
+      <ConversationList v-if="showList" />
 
-    <MobileTabBar v-if="ui.isMobile && !isConversation" />
+      <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <slot />
+      </main>
 
-    <SearchDialog />
+      <MobileTabBar v-if="ui.isMobile && !isConversation" />
+
+      <SearchDialog />
+    </div>
   </div>
 </template>

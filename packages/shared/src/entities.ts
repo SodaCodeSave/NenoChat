@@ -354,6 +354,8 @@ export interface AiGlobalSettings {
   segmentEnabled: boolean
   /** 分段用的分隔符正则，默认命中句号、感叹号、问号和换行 */
   segmentPattern: string
+  /** AI 回复逐字流式输出；关掉时只要开了分段，仍然按流式增量出段落 */
+  streamEnabled: boolean
   updatedAt: number
 }
 

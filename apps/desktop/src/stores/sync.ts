@@ -248,6 +248,23 @@ export const useSyncStore = defineStore('sync', () => {
         void ai.handleGroupDue(payload)
       }),
 
+      // 服务端流式生成进度：逐字增量 / 切好一段 / 结束 / 失败
+      wsClient.on('ai.delta', (payload) => {
+        ai.applyServerDelta(payload)
+      }),
+
+      wsClient.on('ai.segment', (payload) => {
+        ai.applyServerSegment(payload)
+      }),
+
+      wsClient.on('ai.done', (payload) => {
+        ai.applyServerDone(payload)
+      }),
+
+      wsClient.on('ai.error', (payload) => {
+        ai.applyServerError(payload)
+      }),
+
       wsClient.on('contact.updated', (payload) => {
         useContactsStore().upsert(payload.contact)
       }),

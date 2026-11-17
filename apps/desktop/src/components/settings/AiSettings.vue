@@ -47,14 +47,41 @@ const segmentSaved = ref(false)
 const segmentError = ref<string | null>(null)
 let segmentTimer: ReturnType<typeof setTimeout> | null = null
 
+/** 流式输出跟随全局设置；读不到时按默认关闭展示 */
+const STREAM_FALLBACK = false
+const streamEnabled = ref(false)
+const streamSaving = ref(false)
+const streamSaved = ref(false)
+const streamError = ref<string | null>(null)
+let streamTimer: ReturnType<typeof setTimeout> | null = null
+
 watch(
   () => ai.globalSettings,
   (value) => {
     segment.enabled = value?.segmentEnabled ?? SEGMENT_FALLBACK.enabled
     segment.pattern = value?.segmentPattern ?? SEGMENT_FALLBACK.pattern
+    streamEnabled.value = value?.streamEnabled ?? STREAM_FALLBACK
   },
   { immediate: true },
 )
+
+/** 开关即时保存 */
+async function saveStream(): Promise<void> {
+  streamError.value = null
+  streamSaving.value = true
+  try {
+    await ai.saveSettings({ streamEnabled: streamEnabled.value })
+    streamSaved.value = true
+    if (streamTimer) clearTimeout(streamTimer)
+    streamTimer = setTimeout(() => {
+      streamSaved.value = false
+    }, 1600)
+  } catch (e) {
+    streamError.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    streamSaving.value = false
+  }
+}
 
 /** 开关与正则都即时保存，保存前先校验正则能不能编译 */
 async function saveSegment(): Promise<void> {
@@ -444,6 +471,34 @@ onMounted(() => {
         >
           <Icon name="trash" :size="13" />
         </button>
+      </div>
+    </section>
+
+    <section class="mb-6">
+      <div class="mb-2 flex items-center justify-between">
+        <h3 class="text-[12.5px] font-medium text-text">流式输出</h3>
+        <span class="text-[11px] text-muted">
+          <span v-if="streamSaving">保存中…</span>
+          <span v-else-if="streamSaved" class="text-success">已保存</span>
+        </span>
+      </div>
+
+      <div class="rounded-xl border border-line bg-surface p-3">
+        <label class="flex items-start gap-2">
+          <input
+            v-model="streamEnabled"
+            type="checkbox"
+            class="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+            @change="saveStream"
+          />
+          <span class="min-w-0">
+            <span class="block text-[12.5px] font-medium text-text-strong">AI 回复流式输出</span>
+            <span class="block text-[11px] leading-relaxed text-muted">
+              回复逐字生成，像打字一样实时显示。关闭后只要开了下面的「回复分段」，切好的一段仍会立刻显示出来。
+            </span>
+          </span>
+        </label>
+        <p v-if="streamError" class="mt-1 pl-[22px] text-[11px] text-danger">{{ streamError }}</p>
       </div>
     </section>
 

@@ -49,6 +49,9 @@ export const iconPaths = {
   comment: 'M20 12a7 7 0 0 1-7 7H9l-4 3v-4.5A7 7 0 0 1 11 5h2a7 7 0 0 1 7 7Z',
   folder: 'M4 6h5l2 2h9v11H4z',
   copy: 'M9 9h10v11H9zM5 15H4V4h11v1',
+  minus: 'M5 12h14',
+  maximize: 'M5.5 5.5h13v13h-13z',
+  restore: 'M16 8V4H4v12h4M8.5 8.5H20V20H8.5z',
   globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM3 12h18M12 3c2.5 2.4 2.5 15.6 0 18M12 3c-2.5 2.4-2.5 15.6 0 18',
 } as const
 
