@@ -1,6 +1,7 @@
 import type {
   Attachment,
   AiGroupDecision,
+  ConnectorActionMeta,
   Contact,
   Conversation,
   Member,
@@ -112,6 +113,12 @@ export interface ServerEventPayloads {
 
   'ai.delta': { generationId: string; conversationId: string; index: number; delta: string }
   'ai.segment': { generationId: string; conversationId: string; index: number; text: string }
+  /** 连接器动作的实时进度：在流式生成开始前逐个动作推送 */
+  'ai.connector.status': {
+    conversationId: string
+    kind: ConnectorActionMeta['kind']
+    phase: 'start' | 'done'
+  }
   'ai.done': {
     generationId: string
     conversationId: string

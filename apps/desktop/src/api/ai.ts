@@ -10,6 +10,7 @@ import {
   type AiSchedule,
   type AiScheduleItem,
   type AiUsageEntry,
+  type ConnectorActionMeta,
   type Conversation,
 } from '@nenochat/shared'
 import { http } from './http'
@@ -125,6 +126,7 @@ export const aiApi = {
       model?: string
       totalSegments?: number
       proactive?: boolean
+      connector?: ConnectorActionMeta[]
     },
   ) => http.post<{ message: unknown }>(p(`/ai/conversations/${conversationId}/messages`), body),
 

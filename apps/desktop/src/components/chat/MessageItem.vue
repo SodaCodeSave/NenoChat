@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { type Message, extractUrls } from '@nenochat/shared'
+import { type ConnectorActionMeta, type Message, extractUrls } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import LinkCard from './LinkCard.vue'
+import { connectorPresetOf } from '@/config/connectors'
 import { resolveFileUrl } from '@/api/http'
 import { resolveAttachmentUrl } from '@/platform/file-cache'
 import { formatMessageTime } from '@/composables/conversation'
@@ -22,6 +23,10 @@ const props = defineProps<{
   streaming?: boolean
   /** 同一次 AI 回复的总条数，仅在最后一条显示 */
   aiGroupSize?: number
+  /** 是否为该次 AI 生成的第一条：连接器提示只在这里显示一次 */
+  aiGroupStart?: boolean
+  /** 生成中正在执行的连接器动作，用于占位气泡的实时提示 */
+  liveConnector?: ConnectorActionMeta['kind'] | null
   /** 生成中的占位行：还没出字时正文按灰字显示 */
   thinking?: boolean
   /** 生成中的临时占位：不出右键菜单与 hover 操作条 */
@@ -152,6 +157,34 @@ const statusLabel = computed(() => {
 const showAiTail = computed(
   () => Boolean(props.aiGroupSize && props.aiGroupSize > 1 && props.message.aiIndex === props.aiGroupSize - 1),
 )
+
+/* --------------------------- 连接器调用提示 --------------------------- */
+
+const bilibiliIcon = connectorPresetOf('bilibili')?.icon ?? null
+
+/** 固化提示：本次回复用过的连接器动作，仅在该次生成的第一条消息上显示 */
+const connectorHints = computed(() => {
+  if (!props.aiGroupStart) return []
+  return (props.message.meta?.ai?.connector ?? []).map((action) => ({
+    kind: action.kind,
+    label:
+      action.kind === 'web_search'
+        ? '已联网搜索'
+        : action.kind === 'fetch'
+          ? `已阅读${action.detail ? ` ${action.detail}` : '网页'}`
+          : `已获取 B 站视频${action.detail ? `《${action.detail}》` : '资料'}`,
+  }))
+})
+
+/** 实时提示：占位气泡阶段正在执行的连接器动作 */
+const liveConnectorLabel = computed(() => {
+  if (!props.liveConnector || !props.thinking) return ''
+  return props.liveConnector === 'web_search'
+    ? '正在联网搜索…'
+    : props.liveConnector === 'fetch'
+      ? '正在阅读网页…'
+      : '正在获取 B 站视频资料…'
+})
 </script>
 
 <template>
@@ -212,6 +245,35 @@ const showAiTail = computed(
 
         <!-- 文本 -->
         <template v-else-if="message.type === 'text' || message.type === 'system'">
+          <!-- 连接器提示：本次回复用过的资料来源 -->
+          <div
+            v-if="connectorHints.length > 0"
+            class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted"
+          >
+            <template v-for="(hint, index) in connectorHints" :key="hint.kind">
+              <span v-if="index > 0" class="text-muted/50">·</span>
+              <span class="flex items-center gap-1">
+                <img
+                  v-if="hint.kind === 'bilibili' && bilibiliIcon"
+                  :src="bilibiliIcon"
+                  class="h-3 w-3 object-contain"
+                  alt=""
+                />
+                <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
+                {{ hint.label }}
+              </span>
+            </template>
+          </div>
+
+          <!-- 连接器实时提示：思考阶段正在执行的动作 -->
+          <div
+            v-if="liveConnectorLabel"
+            class="mt-1 flex items-center gap-1 text-[11px] text-muted"
+          >
+            <Icon name="refresh" :size="12" class="animate-spin" />
+            {{ liveConnectorLabel }}
+          </div>
+
           <p
             class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words text-text"
             :class="[

@@ -57,6 +57,7 @@ type Row =
       message: Message
       showHeader: boolean
       aiGroupSize?: number
+      aiGroupStart?: boolean
       mentionMe: boolean
       debugLine?: string | null
     }
@@ -135,6 +136,8 @@ const rows = computed<Row[]>(() => {
   /** 渲染层最后一道兜底：同一个 id 只画一次（上游合并逻辑出错也不该出现双份气泡） */
   let lastDay = ''
   let prev: Message | null = null
+  /** 已出现过的 AI 生成 id：组首行显示连接器提示 */
+  const seenGenerations = new Set<string>()
 
   for (const message of collapseAccidentalDuplicates(props.messages)) {
 
@@ -153,11 +156,16 @@ const rows = computed<Row[]>(() => {
       message.meta?.mentions?.includes(auth.user?.id ?? '') || message.meta?.mentionAll,
     )
 
+    const gid = message.aiGenerationId
+    const aiGroupStart = Boolean(gid && !seenGenerations.has(gid))
+    if (gid && aiGroupStart) seenGenerations.add(gid)
+
     output.push({
       kind: 'message',
       key: message.id,
       message,
       showHeader: !grouped,
+      aiGroupStart,
       mentionMe,
       debugLine: debugLineOf(message),
     })
@@ -610,6 +618,12 @@ defineExpose({ scrollToBottom })
         :thinking="row.message.id === STREAMING_MESSAGE_ID && Boolean(streaming?.pending)"
         :ephemeral="row.message.id === STREAMING_MESSAGE_ID"
         :ai-group-size="row.aiGroupSize"
+        :ai-group-start="row.aiGroupStart"
+        :live-connector="
+          row.message.id === STREAMING_MESSAGE_ID
+            ? (ai.connectorLive[props.conversationId] ?? null)
+            : null
+        "
         :reply="replyViewOf(row.message)"
         :debug-line="row.debugLine"
         @reply="(id) => emit('reply', id)"

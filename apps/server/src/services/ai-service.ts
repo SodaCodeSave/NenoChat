@@ -18,6 +18,7 @@ import {
   type AiUsageEntry,
   type AiUsageKind,
   type ChatMessage,
+  type ConnectorActionMeta,
   type Conversation,
   type AttachmentRef,
   type Message,
@@ -50,6 +51,7 @@ import { err } from '../util/errors'
 import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
 import { appendSystemMessage } from './message-service'
 import {
+  emitAiConnectorStatus,
   emitAiDelta,
   emitAiDone,
   emitAiError,
@@ -673,6 +675,7 @@ export function appendAiSegment(
     totalSegments?: number
     personaId?: string
     proactive?: boolean
+    connector?: ConnectorActionMeta[]
   },
 ): Message {
   const conv = conversationsRepo.findById(db, conversationId)
@@ -703,6 +706,7 @@ export function appendAiSegment(
       personaId,
       totalSegments: input.totalSegments,
       ...(input.proactive ? { proactive: true } : {}),
+      ...(input.connector?.length ? { connector: input.connector } : {}),
     },
   })
 
@@ -922,6 +926,16 @@ export async function generateOnServer(
   // 连接器资料（网页搜索 / B 站视频 / 消息内链接正文）只进提示词，失败不影响回复
   const summaryModel = persona.model_override ?? provider.model
   const connector = await buildConnectorContext(db, input.userId, input.content, {
+    onActionStart: (kind) => {
+      emitAiConnectorStatus(db, { conversationId: input.conversationId, kind, phase: 'start' })
+    },
+    onActionDone: (action) => {
+      emitAiConnectorStatus(db, {
+        conversationId: input.conversationId,
+        kind: action.kind,
+        phase: 'done',
+      })
+    },
     summarize: async (prompt) => {
       const result = await callUpstream({
         baseUrl: provider.base_url,
@@ -1030,6 +1044,7 @@ export async function generateOnServer(
             model,
             totalSegments: segments.length,
             personaId: persona.id,
+            connector: connector.actions,
           })
           messageIds.push(message.id)
           if (messageIds.length === segments.length) {
@@ -1092,6 +1107,7 @@ export async function generateOnServer(
         content: segment,
         model,
         personaId: persona.id,
+        connector: connector.actions,
       })
       messageIds.push(message.id)
       segIndex += 1

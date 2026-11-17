@@ -40,6 +40,7 @@ import {
   type AiScheduleItem,
   type AttachmentRef,
   type ChatMessage,
+  type ConnectorActionMeta,
   type Message,
   type SegmentRule,
   type TurnImage,
@@ -107,6 +108,8 @@ export const useAiStore = defineStore('ai', () => {
   const globalSettings = ref<AiGlobalSettings | null>(null)
   const streaming = ref<Record<string, { generationId: string; text: string }>>({})
   const generating = ref<Record<string, boolean>>({})
+  /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索），用于占位气泡的实时提示 */
+  const connectorLive = ref<Record<string, ConnectorActionMeta['kind'] | null>>({})
   const lastError = ref<string | null>(null)
 
   const auth = useAuthStore()
@@ -115,6 +118,12 @@ export const useAiStore = defineStore('ai', () => {
 
   const providerById = computed(() => new Map(providers.value.map((p) => [p.id, p])))
   const personaById = computed(() => new Map(personas.value.map((p) => [p.id, p])))
+
+  /** 记录/清除某会话正在执行的连接器动作；kind 传 null 表示结束 */
+  function setConnectorLive(conversationId: string, kind: ConnectorActionMeta['kind'] | null): void {
+    if (kind) connectorLive.value = { ...connectorLive.value, [conversationId]: kind }
+    else delete connectorLive.value[conversationId]
+  }
 
   /* ------------------------------- 角色日程 ------------------------------- */
 
@@ -382,7 +391,12 @@ export const useAiStore = defineStore('ai', () => {
     includeImages?: boolean,
     provider?: AiProvider | null,
     apiKey?: string | null,
-  ): Promise<{ chat: ChatMessage[]; memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } }> {
+  ): Promise<{
+    chat: ChatMessage[]
+    memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] }
+    /** 成功执行的连接器动作，随消息 meta 落库供界面展示 */
+    connectorActions: ConnectorActionMeta[]
+  }> {
     let memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } = { summaries: [], facts: [] }
     try {
       memories = await aiApi.memory(conversationId)
@@ -434,9 +448,12 @@ export const useAiStore = defineStore('ai', () => {
       }
     }
 
+    const connectorActions: ConnectorActionMeta[] = []
+
     const videoInput = findBilibiliInput(userInput)
     if (videoInput) {
       try {
+        setConnectorLive(conversationId, 'bilibili')
         const { material } = await connectorApi.prepareBilibili(videoInput)
         // 服务端没有缓存时用本机密钥总结一次，结果回传服务端按视频去重
         if (!material.summary?.trim()) {
@@ -456,8 +473,11 @@ export const useAiStore = defineStore('ai', () => {
           }
         }
         contextBlocks.push(renderBilibiliContext(material))
+        connectorActions.push({ kind: 'bilibili', detail: material.video.title })
       } catch {
         /* 抓取失败不注入 */
+      } finally {
+        setConnectorLive(conversationId, null)
       }
     }
 
@@ -467,6 +487,7 @@ export const useAiStore = defineStore('ai', () => {
       .filter((url) => !isBilibiliUrl(url))
       .slice(0, 3)
     if (pageUrls.length > 0 && provider && apiKey) {
+      setConnectorLive(conversationId, 'fetch')
       const summaries: Array<{ url: string; title: string; summary: string }> = []
       for (const url of pageUrls) {
         try {
@@ -478,15 +499,25 @@ export const useAiStore = defineStore('ai', () => {
         }
       }
       connectorFetchContext = renderFetchedPagesContext(summaries) || null
+      if (summaries.length > 0) {
+        connectorActions.push({ kind: 'fetch', detail: `${summaries.length} 个网页` })
+      }
+      setConnectorLive(conversationId, null)
     }
 
     if (shouldSearchWeb(userInput)) {
       try {
+        setConnectorLive(conversationId, 'web_search')
         const { results } = await connectorApi.search(userInput)
         const block = renderWebSearchContext(userInput, results)
-        if (block) contextBlocks.push(block)
+        if (block) {
+          contextBlocks.push(block)
+          connectorActions.push({ kind: 'web_search' })
+        }
       } catch {
         /* 搜索失败不注入 */
+      } finally {
+        setConnectorLive(conversationId, null)
       }
     }
     const connectorContext = contextBlocks.length > 0 ? contextBlocks.join('\n\n') : null
@@ -508,7 +539,7 @@ export const useAiStore = defineStore('ai', () => {
       connectorFetchContext,
     })
 
-    return { chat, memories }
+    return { chat, memories, connectorActions }
   }
 
   /* ------------------------------- 图片识图 ------------------------------- */
@@ -641,7 +672,7 @@ export const useAiStore = defineStore('ai', () => {
     }
 
     const generationId = ulid()
-    const { chat } = await collectContext(
+    const { chat, connectorActions } = await collectContext(
       conversationId,
       persona,
       userInput,
@@ -673,6 +704,7 @@ export const useAiStore = defineStore('ai', () => {
           index,
           content: text,
           clientNonce: ulid(),
+          connector: connectorActions.length > 0 ? connectorActions : undefined,
         }),
       )
     }
@@ -744,6 +776,7 @@ export const useAiStore = defineStore('ai', () => {
     }).finally(() => {
       delete streaming.value[conversationId]
       generating.value[conversationId] = false
+      setConnectorLive(conversationId, null)
     })
 
     // 流结束：把剩余部分全部切出，并等排队中的段落都落库完
@@ -834,6 +867,7 @@ export const useAiStore = defineStore('ai', () => {
     disarmServerWatchdog(payload.conversationId)
     delete streaming.value[payload.conversationId]
     generating.value[payload.conversationId] = false
+    setConnectorLive(payload.conversationId, null)
   }
 
   function applyServerError(payload: { generationId: string; conversationId: string; message: string }): void {
@@ -1390,6 +1424,8 @@ export const useAiStore = defineStore('ai', () => {
     globalSettings,
     streaming,
     generating,
+    connectorLive,
+    setConnectorLive,
     lastError,
     load,
     loadSettings,

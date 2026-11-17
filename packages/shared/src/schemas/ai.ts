@@ -99,6 +99,7 @@ export const AiGlobalSettingsSchema = z.object({
   momentsLikesPerDay: z.number().int().min(0).max(20),
   groupEnabled: z.boolean(),
   groupRepliesPerDay: z.number().int().min(-1).max(50),
+  groupRepliesPerMessage: z.number().int().min(1).max(5),
   groupReplyProbability: z.number().int().min(0).max(100).nullable().optional(),
   groupReplyCooldownMinutes: z.number().int().min(0).max(1440).nullable().optional(),
   groupAutonomyPerDay: z.number().int().min(0).max(10),
@@ -117,6 +118,11 @@ export const OpenAiConversationSchema = z.object({
   title: z.string().trim().max(64).optional(),
 })
 
+export const ConnectorActionMetaSchema = z.object({
+  kind: z.enum(['web_search', 'fetch', 'bilibili']),
+  detail: z.string().max(200).optional(),
+})
+
 export const AppendAiSegmentSchema = z.object({
   generationId: z.string().min(1),
   index: z.number().int().min(0),
@@ -125,6 +131,7 @@ export const AppendAiSegmentSchema = z.object({
   model: z.string().max(128).optional(),
   totalSegments: z.number().int().min(1).max(50).optional(),
   proactive: z.boolean().optional(),
+  connector: z.array(ConnectorActionMetaSchema).max(10).optional(),
 })
 
 /** 本机密钥代跑：客户端把群聊回复交回服务端落库 */

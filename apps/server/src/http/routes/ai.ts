@@ -197,6 +197,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       model: input.model,
       totalSegments: input.totalSegments,
       proactive: input.proactive,
+      connector: input.connector,
     })
     return { message }
   })

@@ -7,6 +7,7 @@ import {
   renderFetchedPagesContext,
   renderWebSearchContext,
   shouldSearchWeb,
+  type ConnectorActionMeta,
   type FetchedPageSummary,
 } from '@nenochat/shared'
 import type { DB } from '../db'
@@ -16,6 +17,10 @@ import * as bilibiliService from './bilibili-service'
 export interface ConnectorContextOptions {
   /** 总结模型通道：服务端用托管密钥；客户端模式不传（由客户端自己总结） */
   summarize?: bilibiliService.VideoSummarizer
+  /** 动作开始时回调：服务端用来推送实时进度 */
+  onActionStart?: (kind: ConnectorActionMeta['kind']) => void
+  /** 动作成功完成时回调：带回展示用的细节 */
+  onActionDone?: (action: ConnectorActionMeta) => void
 }
 
 export interface ConnectorContextResult {
@@ -23,6 +28,8 @@ export interface ConnectorContextResult {
   context: string | null
   /** 用户消息里链接的网页正文摘要，独立 token 预算 */
   fetchContext: string | null
+  /** 成功执行的连接器动作，随消息 meta 落库供界面展示 */
+  actions: ConnectorActionMeta[]
 }
 
 /**
@@ -36,17 +43,22 @@ export async function buildConnectorContext(
   options: ConnectorContextOptions = {},
 ): Promise<ConnectorContextResult> {
   const blocks: string[] = []
+  const actions: ConnectorActionMeta[] = []
   let fetchContext: string | null = null
 
   const videoInput = findBilibiliInput(text)
   if (videoInput) {
     try {
+      options.onActionStart?.('bilibili')
       const material = await bilibiliService.prepareVideoMaterial(db, ownerId, videoInput)
       if (material) {
         if (options.summarize) {
           await bilibiliService.ensureVideoSummary(db, ownerId, material, options.summarize)
         }
         blocks.push(renderBilibiliContext(material))
+        const action: ConnectorActionMeta = { kind: 'bilibili', detail: material.video.title }
+        actions.push(action)
+        options.onActionDone?.(action)
       }
     } catch {
       /* 抓取或总结失败不阻断对话 */
@@ -61,6 +73,7 @@ export async function buildConnectorContext(
     try {
       const row = connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
       if (row) {
+        options.onActionStart?.('fetch')
         connectorService.takeRateLimit(`ai-fetch:${ownerId}`, 20, 60_000)
         const summaries: FetchedPageSummary[] = []
         for (const url of pageUrls) {
@@ -77,6 +90,14 @@ export async function buildConnectorContext(
           }
         }
         fetchContext = renderFetchedPagesContext(summaries) || null
+        if (summaries.length > 0) {
+          const action: ConnectorActionMeta = {
+            kind: 'fetch',
+            detail: `${summaries.length} 个网页`,
+          }
+          actions.push(action)
+          options.onActionDone?.(action)
+        }
       }
     } catch {
       /* 连接器不可用或限流时静默跳过 */
@@ -88,10 +109,16 @@ export async function buildConnectorContext(
     try {
       const row = connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
       if (row) {
+        options.onActionStart?.('web_search')
         connectorService.takeRateLimit(`ai-search:${ownerId}`, 20, 60_000)
         const results = await connectorService.searchDeepSeek(row, text)
         const block = renderWebSearchContext(text, results)
-        if (block) blocks.push(block)
+        if (block) {
+          blocks.push(block)
+          const action: ConnectorActionMeta = { kind: 'web_search' }
+          actions.push(action)
+          options.onActionDone?.(action)
+        }
       }
     } catch {
       /* 搜索失败降级为不注入 */
@@ -101,5 +128,6 @@ export async function buildConnectorContext(
   return {
     context: blocks.length > 0 ? blocks.join('\n\n') : null,
     fetchContext,
+    actions,
   }
 }

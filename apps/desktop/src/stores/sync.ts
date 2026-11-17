@@ -244,6 +244,11 @@ export const useSyncStore = defineStore('sync', () => {
         ai.applyServerError(payload)
       }),
 
+      // 连接器动作实时进度：流式生成前的搜索/抓取阶段
+      wsClient.on('ai.connector.status', (payload) => {
+        ai.setConnectorLive(payload.conversationId, payload.phase === 'start' ? payload.kind : null)
+      }),
+
       // 调试模式：群聊成员决策过程实时推送
       wsClient.on('ai.debug.decision', (payload) => {
         useDebugStore().applyDecision(payload.decision)

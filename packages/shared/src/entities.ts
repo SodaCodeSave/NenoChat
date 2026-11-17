@@ -91,6 +91,13 @@ export interface AttachmentRef {
   description?: string | null
 }
 
+/** 一次回复里连接器做过的动作，供聊天界面展示资料来源 */
+export interface ConnectorActionMeta {
+  kind: 'web_search' | 'fetch' | 'bilibili'
+  /** 简要细节：抓取的网页数、视频标题等 */
+  detail?: string
+}
+
 /** AI 相关元信息，仅 AI 会话的消息携带 */
 export interface AiMessageMeta {
   generationId: string
@@ -103,6 +110,8 @@ export interface AiMessageMeta {
   cancelled?: boolean
   /** 由服务端定时任务（或客户端代跑）主动发起的消息 */
   proactive?: boolean
+  /** 本次回复用到的连接器动作（B 站 / 网页抓取 / 联网搜索） */
+  connector?: ConnectorActionMeta[]
 }
 
 /** 引用回复的快照：发送时定稿，跨分页、离线与重启后仍能还原引用块 */
@@ -375,6 +384,8 @@ export interface AiGlobalSettings {
   groupEnabled: boolean
   /** 每个角色在每个群里每天最多插话几条；-1 表示无上限，0 表示不插话 */
   groupRepliesPerDay: number
+  /** 一条群消息最多几个角色排队接话（1-5）；后接话的角色能看到前面角色的发言 */
+  groupRepliesPerMessage: number
   /** 固定接话概率（0-100）；不配置时走体力与话题相关度的公式 */
   groupReplyProbability?: number | null
   /** 两次插话最少隔几分钟；不配置用默认 45 秒，0 表示不限制（被点名始终必回） */

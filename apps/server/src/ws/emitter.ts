@@ -1,4 +1,13 @@
-import type { Contact, Conversation, Member, Message, Post, PostComment, User } from '@nenochat/shared'
+import type {
+  ConnectorActionMeta,
+  Contact,
+  Conversation,
+  Member,
+  Message,
+  Post,
+  PostComment,
+  User,
+} from '@nenochat/shared'
 import type { DB } from '../db'
 import * as membersRepo from '../db/repo/members'
 import { hub } from './hub'
@@ -107,6 +116,17 @@ export function emitAiSegment(
   payload: { generationId: AiGenerationId; conversationId: AiConversationId; index: number; text: string },
 ): void {
   hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.segment', payload)
+}
+
+export function emitAiConnectorStatus(
+  db: DB,
+  payload: {
+    conversationId: AiConversationId
+    kind: ConnectorActionMeta['kind']
+    phase: 'start' | 'done'
+  },
+): void {
+  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.connector.status', payload)
 }
 
 export function emitAiDone(
