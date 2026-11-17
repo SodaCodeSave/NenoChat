@@ -80,7 +80,6 @@ export async function removeServerCascade(serverId: string): Promise<void> {
     'users',
     'conversations',
     'members',
-    'channels',
     'messages',
     'read_cursors',
     'contacts',

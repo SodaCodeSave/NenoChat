@@ -35,7 +35,6 @@ function emptyBucket(): ConversationMessages {
 
 export interface SendOptions {
   conversationId: string
-  channelId?: string | null
   content: string
   type?: MessageTypeT
   meta?: MessageMeta
@@ -83,7 +82,7 @@ export const useMessagesStore = defineStore('messages', () => {
   }
 
   /** 首次进入会话：本地镜像立即可用，网络结果回来后再合并 */
-  async function loadInitial(conversationId: string, options: { channelId?: string | null; force?: boolean } = {}): Promise<void> {
+  async function loadInitial(conversationId: string, options: { force?: boolean } = {}): Promise<void> {
     const target = bucket(conversationId)
     if (target.loaded && !options.force) return
     target.loading = true
@@ -92,7 +91,6 @@ export const useMessagesStore = defineStore('messages', () => {
       if (hasLocalDb() && serverId.value) {
         const local = await listMessages(serverId.value, {
           conversationId,
-          channelId: options.channelId ?? null,
           limit: 50,
         })
         if (local.messages.length > 0) {
@@ -101,10 +99,7 @@ export const useMessagesStore = defineStore('messages', () => {
         }
       }
 
-      const remote = await messageApi.page(conversationId, {
-        channelId: options.channelId ?? undefined,
-        limit: 50,
-      })
+      const remote = await messageApi.page(conversationId, { limit: 50 })
       target.messages = merge(target.messages, remote.messages)
       target.hasMoreOlder = remote.hasMore
       target.loaded = true
@@ -131,7 +126,7 @@ export const useMessagesStore = defineStore('messages', () => {
     }
   }
 
-  async function loadOlder(conversationId: string, channelId?: string | null): Promise<void> {
+  async function loadOlder(conversationId: string): Promise<void> {
     const target = bucket(conversationId)
     if (target.loading || !target.hasMoreOlder) return
     const oldest = target.messages.find((m) => m.seq > 0)
@@ -140,7 +135,6 @@ export const useMessagesStore = defineStore('messages', () => {
     target.loading = true
     try {
       const remote = await messageApi.page(conversationId, {
-        channelId: channelId ?? undefined,
         before: oldest.seq,
         limit: 50,
       })
@@ -181,7 +175,6 @@ export const useMessagesStore = defineStore('messages', () => {
     const optimistic: Message = {
       id: ulid(),
       conversationId,
-      channelId: options.channelId ?? null,
       senderId: myId.value,
       senderType: 'user',
       type: options.type ?? MessageType.Text,
@@ -211,7 +204,6 @@ export const useMessagesStore = defineStore('messages', () => {
     try {
       const payload = {
         conversationId,
-        channelId: options.channelId ?? null,
         clientNonce: nonce,
         type: options.type ?? MessageType.Text,
         content: options.content,

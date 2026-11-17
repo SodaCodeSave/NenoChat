@@ -2,12 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import {
   AddMembersSchema,
   ConversationType,
-  CreateChannelSchema,
   CreateConversationSchema,
   PinConversationSchema,
-  ReorderChannelsSchema,
   TransferOwnerSchema,
-  UpdateChannelSchema,
   UpdateConversationSchema,
   UpdateMemberSchema,
 } from '@nenochat/shared'
@@ -15,7 +12,6 @@ import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import * as conversationService from '../../services/conversation-service'
-import * as channelService from '../../services/channel-service'
 import { err } from '../../util/errors'
 import { toMemberPatch } from './member-patch'
 
@@ -108,42 +104,5 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(TransferOwnerSchema, request.body)
     return conversationService.transferOwner(db, request.params.id, userId, input.userId)
-  })
-
-  app.get<{ Params: { id: string } }>('/conversations/:id/channels', async (request) => {
-    const userId = await requireUserId(request)
-    return { channels: channelService.list(db, request.params.id, userId) }
-  })
-
-  app.post<{ Params: { id: string } }>('/conversations/:id/channels', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(CreateChannelSchema, request.body)
-    return {
-      channel: channelService.create(db, request.params.id, userId, {
-        name: input.name,
-        topic: input.topic ?? null,
-        kind: input.kind,
-        category: input.category ?? null,
-      }),
-    }
-  })
-
-  app.patch<{ Params: { channelId: string } }>('/channels/:channelId', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(UpdateChannelSchema, request.body)
-    return { channel: channelService.update(db, request.params.channelId, userId, input) }
-  })
-
-  app.delete<{ Params: { channelId: string } }>('/channels/:channelId', async (request) => {
-    const userId = await requireUserId(request)
-    channelService.remove(db, request.params.channelId, userId)
-    return { ok: true }
-  })
-
-  app.post<{ Params: { id: string } }>('/conversations/:id/channels/reorder', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(ReorderChannelsSchema, request.body)
-    channelService.reorder(db, request.params.id, userId, input.items)
-    return { ok: true }
   })
 }

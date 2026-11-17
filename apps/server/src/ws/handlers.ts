@@ -49,7 +49,6 @@ export async function handleRequest(
         const input = SendMessageSchema.parse(rawPayload)
         const result = messageService.send(db, {
           conversationId: input.conversationId,
-          channelId: input.channelId ?? null,
           senderId: userId,
           clientNonce: input.clientNonce,
           type: input.type,
@@ -62,7 +61,6 @@ export async function handleRequest(
         if (!result.duplicated && input.type === 'text') {
           scheduleGroupResponse(db, {
             conversationId: input.conversationId,
-            channelId: input.channelId ?? null,
             messageId: result.message.id,
             senderId: userId,
             content: result.message.content,

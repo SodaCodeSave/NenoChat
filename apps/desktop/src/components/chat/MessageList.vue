@@ -24,8 +24,6 @@ const props = defineProps<{
   unreadAfterSeq?: number
   /** 从搜索结果跳转过来时要定位的消息 id */
   highlightId?: string | null
-  /** 群聊调试：按当前频道过滤决策行的归属 */
-  debugChannelId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -108,15 +106,12 @@ function dayLabel(ts: number): string {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
 }
 
-/** 触发消息 id → 该消息后要插入的决策行（按当前频道过滤） */
+/** 触发消息 id → 该消息后要插入的决策行 */
 const decisionsByTrigger = computed(() => {
   const map = new Map<string, import('@nenochat/shared').AiGroupDecision[]>()
   if (!debugOn.value) return map
   for (const decision of debug.decisions[props.conversationId] ?? []) {
     if (decision.kind !== 'reply' || !decision.triggerMessageId) continue
-    if (props.debugChannelId && decision.channelId && decision.channelId !== props.debugChannelId) {
-      continue
-    }
     const list = map.get(decision.triggerMessageId) ?? []
     list.push(decision)
     map.set(decision.triggerMessageId, list)

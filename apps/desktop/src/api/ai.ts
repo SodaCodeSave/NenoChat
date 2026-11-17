@@ -149,7 +149,6 @@ export const aiApi = {
     logId: string
     personaId: string
     conversationId: string
-    channelId?: string | null
     generationId: string
     index: number
     content: string

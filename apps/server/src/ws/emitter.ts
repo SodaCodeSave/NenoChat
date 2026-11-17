@@ -1,4 +1,4 @@
-import type { Channel, Contact, Conversation, Member, Message, Post, PostComment, User } from '@nenochat/shared'
+import type { Contact, Conversation, Member, Message, Post, PostComment, User } from '@nenochat/shared'
 import type { DB } from '../db'
 import * as membersRepo from '../db/repo/members'
 import { hub } from './hub'
@@ -12,7 +12,6 @@ export function emitMessageCreated(db: DB, message: Message, tempId: string | nu
   hub().sendToUsers(memberIds(db, message.conversationId), 'message.created', {
     message,
     conversationId: message.conversationId,
-    channelId: message.channelId,
     tempId,
   })
 }
@@ -44,14 +43,6 @@ export function emitMemberRemoved(
 ): void {
   const recipients = new Set([...memberIds(db, conversationId), userId, ...extraRecipients])
   hub().sendToUsers([...recipients], 'conversation.member.removed', { conversationId, userId })
-}
-
-export function emitChannelUpserted(db: DB, conversationId: string, channel: Channel): void {
-  hub().sendToUsers(memberIds(db, conversationId), 'channel.upserted', { conversationId, channel })
-}
-
-export function emitChannelRemoved(db: DB, conversationId: string, channelId: string): void {
-  hub().sendToUsers(memberIds(db, conversationId), 'channel.removed', { conversationId, channelId })
 }
 
 export function emitTyping(

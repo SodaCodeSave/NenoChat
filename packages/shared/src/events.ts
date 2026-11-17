@@ -1,7 +1,6 @@
 import type {
   Attachment,
   AiGroupDecision,
-  Channel,
   Contact,
   Conversation,
   Member,
@@ -40,7 +39,6 @@ export interface ClientEventPayloads {
   ping: { ts: number }
   'message.send': {
     conversationId: string
-    channelId?: string | null
     clientNonce: string
     type: MessageType
     content: string
@@ -77,7 +75,6 @@ export interface ServerEventPayloads {
   'message.created': {
     message: Message
     conversationId: string
-    channelId?: string | null
     /** 回显客户端 nonce，用于把本地 pending 消息转正 */
     tempId?: string | null
   }
@@ -98,8 +95,6 @@ export interface ServerEventPayloads {
   'conversation.updated': { conversation: Conversation; me?: Member | null }
   'conversation.member.upserted': { conversationId: string; member: Member; user?: User }
   'conversation.member.removed': { conversationId: string; userId: string }
-  'channel.upserted': { conversationId: string; channel: Channel }
-  'channel.removed': { conversationId: string; channelId: string }
 
   'post.created': { post: Post }
   'post.updated': { post: Post }
@@ -135,7 +130,6 @@ export interface ServerEventPayloads {
   'ai.group.due': {
     logId: string
     conversationId: string
-    channelId?: string | null
     personaId: string
     kind: 'reply' | 'autonomy'
     /** 触发这次插话的消息，自主开口时为空 */

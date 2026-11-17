@@ -50,24 +50,10 @@ export const BACKUP_TABLES: Record<string, readonly string[]> = {
     'updated_at',
     'notification_level',
   ],
-  channels: [
-    'server_id',
-    'id',
-    'conversation_id',
-    'name',
-    'topic',
-    'kind',
-    'category',
-    'position',
-    'archived_at',
-    'created_at',
-    'updated_at',
-  ],
   messages: [
     'server_id',
     'id',
     'conversation_id',
-    'channel_id',
     'sender_id',
     'sender_type',
     'type',
@@ -183,7 +169,7 @@ export const BACKUP_TABLES: Record<string, readonly string[]> = {
     'created_at',
   ],
   app_settings: ['server_id', 'key', 'value', 'updated_at'],
-  drafts: ['server_id', 'conversation_id', 'channel_id', 'content', 'updated_at'],
+  drafts: ['server_id', 'conversation_id', 'content', 'updated_at'],
 }
 
 /** 允许随备份带走的客户端本地偏好 */

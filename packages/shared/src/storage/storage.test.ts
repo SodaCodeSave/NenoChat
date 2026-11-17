@@ -181,7 +181,7 @@ describe('备份文件', () => {
       tables: {
         messages: [{ server_id: 'srv-1', id: 'm1', content: 'hi', seq: 1 }],
         conversations: [{ server_id: 'srv-1', id: 'c1', type: 'direct' }],
-        drafts: [{ server_id: 'srv-1', conversation_id: 'c1', channel_id: '', content: '草稿' }],
+        drafts: [{ server_id: 'srv-1', conversation_id: 'c1', content: '草稿' }],
       },
     })
 

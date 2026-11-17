@@ -132,7 +132,6 @@ export const AppendGroupSegmentSchema = z.object({
   logId: z.string().min(1),
   personaId: z.string().min(1),
   conversationId: z.string().min(1),
-  channelId: z.string().min(1).nullable().optional(),
   generationId: z.string().min(1),
   index: z.number().int().min(0),
   content: z.string().min(1).max(4000),

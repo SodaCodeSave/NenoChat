@@ -45,30 +45,3 @@ export const UpdateMemberSchema = z.object({
 export const PinConversationSchema = z.object({
   pinned: z.boolean(),
 })
-
-export const CreateChannelSchema = z.object({
-  name: z.string().trim().min(1).max(32),
-  topic: z.string().max(1024).nullable().optional(),
-  kind: z.enum(['text', 'announcement']).optional(),
-  category: z.string().trim().max(32).nullable().optional(),
-})
-
-export const UpdateChannelSchema = z.object({
-  name: z.string().trim().min(1).max(32).optional(),
-  topic: z.string().max(1024).nullable().optional(),
-  category: z.string().trim().max(32).nullable().optional(),
-  position: z.number().int().min(0).optional(),
-})
-
-export const ReorderChannelsSchema = z.object({
-  items: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        category: z.string().nullable(),
-        position: z.number().int().min(0),
-      }),
-    )
-    .min(1)
-    .max(200),
-})

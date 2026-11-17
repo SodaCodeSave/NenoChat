@@ -3,7 +3,6 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { AttachmentRef, Message, Sticker } from '@nenochat/shared'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
-import ChannelSidebar from '@/components/chat/ChannelSidebar.vue'
 import MemberSidebar from '@/components/chat/MemberSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
@@ -14,7 +13,6 @@ import SchedulePanel from '@/components/ai/SchedulePanel.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useAiStore } from '@/stores/ai'
-import { useChannelsStore } from '@/stores/channels'
 import { useConversationsStore } from '@/stores/conversations'
 import { useDebugStore } from '@/stores/debug'
 import { useMembersStore } from '@/stores/members'
@@ -28,7 +26,6 @@ const router = useRouter()
 const auth = useAuthStore()
 const ai = useAiStore()
 const conversations = useConversationsStore()
-const channels = useChannelsStore()
 const members = useMembersStore()
 const messages = useMessagesStore()
 const debug = useDebugStore()
@@ -36,29 +33,17 @@ const typing = useTypingStore()
 const ui = useUiStore()
 
 const conversationId = computed(() => String(route.params.conversationId ?? ''))
-const channelIdParam = computed(() => (route.params.channelId ? String(route.params.channelId) : null))
 
 const conversation = computed(() => conversations.byId.get(conversationId.value) ?? null)
 const isGroup = computed(() => conversation.value?.type === 'group')
 const isAi = computed(() => conversation.value?.type === 'ai')
-
-const channelGroups = computed(() => channels.groupedOf(conversationId.value))
-const activeChannel = computed(() => {
-  const list = channels.of(conversationId.value)
-  if (channelIdParam.value) {
-    const found = list.find((c) => c.id === channelIdParam.value)
-    if (found) return found
-  }
-  return list.find((c) => c.kind === 'text') ?? list[0] ?? null
-})
 
 const replyTo = ref<Message | null>(null)
 const editing = ref<Message | null>(null)
 const showMembers = ref(true)
 const showMemory = ref(false)
 const showSchedule = ref(false)
-/** 手机端用抽屉承载频道、成员、记忆与日程面板 */
-const mobileChannelsOpen = ref(false)
+/** 手机端用抽屉承载成员、记忆与日程面板 */
 const mobileMembersOpen = ref(false)
 const mobileMemoryOpen = ref(false)
 const mobileScheduleOpen = ref(false)
@@ -92,14 +77,6 @@ const messageBucket = computed(() => messages.buckets[conversationId.value])
 const hasMoreOlder = computed(() => messageBucket.value?.hasMoreOlder ?? false)
 const messagesLoading = computed(() => messageBucket.value?.loading ?? false)
 const highlightId = computed(() => (typeof route.query.m === 'string' ? route.query.m : null))
-
-/** 群聊按频道过滤；私聊与 AI 会话只有一条消息流 */
-const visibleMessages = computed(() => {
-  if (!isGroup.value) return allMessages.value
-  const channelId = activeChannel.value?.id
-  if (!channelId) return []
-  return allMessages.value.filter((m) => m.channelId === channelId)
-})
 
 const memberGroups = computed(() => members.groupedOf(conversationId.value))
 
@@ -153,12 +130,7 @@ async function loadConversation(): Promise<void> {
   await ensureConversation()
 
   if (isGroup.value) {
-    await Promise.all([channels.load(id, true), members.load(id, true)])
-    // 默认落到第一个文本频道
-    if (!channelIdParam.value && activeChannel.value) {
-      await router.replace(`/c/${id}/${activeChannel.value.id}`)
-      return
-    }
+    await members.load(id, true)
   } else if (conversation.value?.type === 'direct') {
     await members.load(id)
   }
@@ -172,11 +144,8 @@ async function loadConversation(): Promise<void> {
     if (persona) void ai.ensureSchedule(persona.id).catch(() => undefined)
   }
 
-  await messages.loadInitial(id, {
-    channelId: isGroup.value ? activeChannel.value?.id ?? null : null,
-    // 群聊按频道拉取需要强制刷新；私聊与 AI 会话已预载时直接用内存数据，新消息由 WS 同步
-    force: isGroup.value,
-  })
+  // 一个会话一条消息流：已预载时直接用内存数据，新消息由 WS 同步
+  await messages.loadInitial(id)
 
   // 从搜索结果跳进来：目标消息不在最近一页时，把它所在的上下文补进来
   const focusId = highlightId.value
@@ -199,16 +168,6 @@ watch(
   },
   { immediate: true },
 )
-
-watch(activeChannel, async (channel) => {
-  if (!isGroup.value || !channel) return
-  await messages.loadInitial(conversationId.value, { channelId: channel.id, force: true })
-})
-
-function selectChannel(channelId: string): void {
-  mobileChannelsOpen.value = false
-  void router.push(`/c/${conversationId.value}/${channelId}`)
-}
 
 /** 手机端没有常驻侧栏，头部按钮改为开关抽屉 */
 function toggleMembers(): void {
@@ -275,11 +234,9 @@ async function handleSend(
     return
   }
 
-  const channelId = isGroup.value ? activeChannel.value?.id ?? null : null
   typing.stopTyping(id)
   await messages.send({
     conversationId: id,
-    channelId,
     content,
     meta:
       mentions && (mentions.mentionAll || mentions.userIds.length > 0)
@@ -296,10 +253,8 @@ async function handleAttachment(payload: {
   type: 'image' | 'file'
 }): Promise<void> {
   const id = conversationId.value
-  const channelId = isGroup.value ? activeChannel.value?.id ?? null : null
   await messages.send({
     conversationId: id,
-    channelId,
     content: '',
     type: payload.type,
     meta: { attachments: [payload.attachment] },
@@ -312,7 +267,6 @@ async function handleAttachment(payload: {
 async function handleSticker(sticker: Sticker): Promise<void> {
   if (!sticker.url) return
   const id = conversationId.value
-  const channelId = isGroup.value ? activeChannel.value?.id ?? null : null
   const attachment: AttachmentRef = {
     id: sticker.attachmentId ?? sticker.id,
     kind: 'sticker',
@@ -323,7 +277,6 @@ async function handleSticker(sticker: Sticker): Promise<void> {
   }
   await messages.send({
     conversationId: id,
-    channelId,
     content: '',
     type: 'sticker',
     meta: { stickerId: sticker.id, attachments: [attachment] },
@@ -340,10 +293,7 @@ function handleContext(payload: { id: string; x: number; y: number }): void {
 }
 
 async function loadOlder(): Promise<void> {
-  await messages.loadOlder(
-    conversationId.value,
-    isGroup.value ? activeChannel.value?.id ?? null : null,
-  )
+  await messages.loadOlder(conversationId.value)
 }
 
 /** 引用块指向较早的消息：把那段上下文补进内存，列表会自行滚动并高亮 */
@@ -375,22 +325,9 @@ async function handlePin(messageId: string): Promise<void> {
   await messages.pin(messageId, !target?.pinnedAt)
 }
 
-async function createChannel(): Promise<void> {
-  const name = window.prompt('新频道名称')
-  if (!name?.trim()) return
-  const channel = await channels.create(conversationId.value, { name: name.trim() })
-  selectChannel(channel.id)
-}
-
 function goBack(): void {
   // replace 掉会话记录，安卓返回键不会又退回同一个会话
   void router.replace('/')
-}
-
-function openConversationSettings(): void {
-  mobileChannelsOpen.value = false
-  mobileMembersOpen.value = false
-  void router.push(`/settings/conversation/${conversationId.value}`)
 }
 
 function mentionFromMobile(userId: string, name: string): void {
@@ -401,22 +338,10 @@ function mentionFromMobile(userId: string, name: string): void {
 
 <template>
   <div class="flex h-full min-h-0">
-    <ChannelSidebar
-      v-if="conversation && isGroup && !ui.isMobile"
-      :conversation="conversation"
-      :groups="channelGroups"
-      :active-channel-id="activeChannel?.id ?? null"
-      :member-count="members.of(conversationId).length"
-      @select="selectChannel"
-      @open-settings="openConversationSettings"
-      @create-channel="createChannel"
-    />
-
     <div class="flex min-w-0 flex-1 flex-col">
       <template v-if="conversation">
         <ChatHeader
           :conversation="conversation"
-          :channel="activeChannel"
           :typing-names="typingNames"
           :member-count="members.of(conversationId).length"
           :show-members="isAi ? memoryPanelActive : membersPanelActive"
@@ -425,20 +350,18 @@ function mentionFromMobile(userId: string, name: string): void {
           @toggle-members="toggleMembers"
           @open-memory="toggleMemory"
           @toggle-schedule="toggleSchedule"
-          @open-channels="mobileChannelsOpen = true"
           @open-settings="router.push(`/settings/conversation/${conversationId}`)"
           @back="goBack"
         />
 
         <MessageList
           ref="messageList"
-          :messages="visibleMessages"
+          :messages="allMessages"
           :conversation-id="conversationId"
           :loading="messagesLoading"
           :has-more-older="hasMoreOlder"
           :highlight-id="highlightId"
           :streaming="aiStreamRow"
-          :debug-channel-id="isGroup ? activeChannel?.id ?? null : null"
           @load-older="loadOlder"
           @load-around="handleLoadAround"
           @visible-last="handleVisibleLast"
@@ -457,17 +380,14 @@ function mentionFromMobile(userId: string, name: string): void {
         <MessageInput
           ref="messageInput"
           :conversation-id="conversationId"
-          :channel-id="isGroup ? activeChannel?.id ?? null : null"
           :reply-to="replyTo"
           :editing="editing"
           :placeholder="
-            isGroup
-              ? `发送到 #${activeChannel?.name ?? '频道'}`
-              : isAi
-                ? ui.isMobile
-                  ? '和 AI 说点什么'
-                  : '和 AI 说点什么，长回复会自动分条'
-                : '输入消息'
+            isAi
+              ? ui.isMobile
+                ? '和 AI 说点什么'
+                : '和 AI 说点什么，长回复会自动分条'
+              : '输入消息'
           "
           :ai-mode="isAi"
           :mention-all-enabled="isGroup"
@@ -506,27 +426,8 @@ function mentionFromMobile(userId: string, name: string): void {
       @close="showSchedule = false"
     />
 
-    <!-- 手机端抽屉：频道 / 成员 / 记忆，替代常驻侧栏 -->
+    <!-- 手机端抽屉：成员 / 记忆，替代常驻侧栏 -->
     <Teleport to="body">
-      <div
-        v-if="ui.isMobile && mobileChannelsOpen && conversation"
-        class="fixed inset-0 z-40 flex bg-black/40"
-        @click.self="mobileChannelsOpen = false"
-      >
-        <ChannelSidebar
-          mobile
-          class="h-full w-[82vw] max-w-[320px] shadow-xl"
-          :conversation="conversation"
-          :groups="channelGroups"
-          :active-channel-id="activeChannel?.id ?? null"
-          :member-count="members.of(conversationId).length"
-          @select="selectChannel"
-          @open-settings="openConversationSettings"
-          @create-channel="createChannel"
-          @close="mobileChannelsOpen = false"
-        />
-      </div>
-
       <div
         v-if="ui.isMobile && mobileMembersOpen"
         class="fixed inset-0 z-40 flex justify-end bg-black/40"

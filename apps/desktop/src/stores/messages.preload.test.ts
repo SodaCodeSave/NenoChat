@@ -38,7 +38,6 @@ function makeMessage(id: string, seq: number, content: string): Message {
   return {
     id,
     conversationId: 'c1',
-    channelId: null,
     senderId: 'u1',
     senderType: 'user',
     type: 'text',

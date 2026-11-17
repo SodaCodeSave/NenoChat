@@ -30,14 +30,13 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     return messageService.listPage(db, {
       conversationId: request.params.id,
       userId,
-      channelId: query.channelId ?? null,
       before: query.before ?? null,
       after: query.after ?? null,
       limit: query.limit,
     })
   })
 
-  app.get<{ Params: { id: string; messageId: string }; Querystring: { channelId?: string } }>(
+  app.get<{ Params: { id: string; messageId: string } }>(
     '/conversations/:id/messages/around/:messageId',
     async (request) => {
       const userId = await requireUserId(request)
@@ -55,7 +54,6 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
 
     const result = messageService.send(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId ?? null,
       senderId: userId,
       clientNonce: input.clientNonce,
       type: input.type,
@@ -69,7 +67,6 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     if (!result.duplicated && input.type === 'text') {
       scheduleGroupResponse(db, {
         conversationId: input.conversationId,
-        channelId: input.channelId ?? null,
         messageId: result.message.id,
         senderId: userId,
         content: result.message.content,

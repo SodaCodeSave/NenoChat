@@ -4,11 +4,9 @@ import type { AiPersona, ChangeRecord, Message, PublicUser } from '@nenochat/sha
 import { getCursor, setCursor } from '@/db/dao/sync'
 import {
   markConversationDeleted,
-  upsertChannel,
   upsertConversation,
   upsertMember,
   markMemberLeft,
-  archiveChannel,
 } from '@/db/dao/conversations'
 import * as aiDao from '@/db/dao/ai'
 import { upsertUser } from '@/db/dao/users'
@@ -19,7 +17,6 @@ import { useServersStore } from './servers'
 import { useAuthStore } from './auth'
 import { useConversationsStore } from './conversations'
 import { useMessagesStore } from './messages'
-import { useChannelsStore } from './channels'
 import { useMembersStore } from './members'
 import { useTypingStore } from './typing'
 import { useMomentsStore } from './moments'
@@ -59,7 +56,6 @@ export const useSyncStore = defineStore('sync', () => {
 
     const conversations = useConversationsStore()
     const messages = useMessagesStore()
-    const channels = useChannelsStore()
     const members = useMembersStore()
     const ai = useAiStore()
     const contacts = useContactsStore()
@@ -93,17 +89,6 @@ export const useSyncStore = defineStore('sync', () => {
             await members.applyRemoved(member.conversationId, member.userId)
           } else {
             await upsertMember(sid, member)
-          }
-          break
-        }
-        case 'channel': {
-          const channel = payload as unknown as Parameters<typeof upsertChannel>[1]
-          if (change.op === 'delete') {
-            await archiveChannel(sid, channel.id)
-            await channels.applyRemoved(channel.conversationId, channel.id)
-          } else {
-            await upsertChannel(sid, channel)
-            await channels.applyUpserted(channel)
           }
           break
         }
@@ -146,7 +131,6 @@ export const useSyncStore = defineStore('sync', () => {
 
     const conversations = useConversationsStore()
     const messages = useMessagesStore()
-    const channels = useChannelsStore()
     const members = useMembersStore()
     const typing = useTypingStore()
     const moments = useMomentsStore()
@@ -189,14 +173,6 @@ export const useSyncStore = defineStore('sync', () => {
 
       wsClient.on('conversation.member.removed', (payload) => {
         void members.applyRemoved(payload.conversationId, payload.userId)
-      }),
-
-      wsClient.on('channel.upserted', (payload) => {
-        void channels.applyUpserted(payload.channel)
-      }),
-
-      wsClient.on('channel.removed', (payload) => {
-        void channels.applyRemoved(payload.conversationId, payload.channelId)
       }),
 
       wsClient.on('typing', (payload) => {

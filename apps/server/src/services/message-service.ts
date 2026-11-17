@@ -22,7 +22,6 @@ import { emitMessageCreated, emitMessageUpdated } from '../ws/emitter'
 
 export interface SendMessageInput {
   conversationId: string
-  channelId?: string | null
   senderId: string
   clientNonce: string
   type: MessageType
@@ -105,7 +104,6 @@ export function send(db: DB, input: SendMessageInput): SendMessageResult {
 
     const row = messagesRepo.insert(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId ?? null,
       senderId: input.senderId,
       senderType: SenderType.User,
       type: input.type,
@@ -144,7 +142,6 @@ export function appendSystemMessage(
   db: DB,
   input: {
     conversationId: string
-    channelId?: string | null
     senderType: SenderType
     senderId?: string | null
     type: MessageType
@@ -168,7 +165,6 @@ export function appendSystemMessage(
       : (input.meta ?? null)
     const row = messagesRepo.insert(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId ?? null,
       senderId: input.senderId ?? null,
       senderType: input.senderType,
       type: input.type,
@@ -283,7 +279,6 @@ export function listPage(
   input: {
     conversationId: string
     userId: string
-    channelId?: string | null
     before?: number | null
     after?: number | null
     limit: number
@@ -294,7 +289,6 @@ export function listPage(
   // 多取一条用于判断是否还有更多
   const rows = messagesRepo.page(db, {
     conversationId: input.conversationId,
-    channelId: input.channelId ?? null,
     before: input.before ?? null,
     after: input.after ?? null,
     limit: input.limit + 1,

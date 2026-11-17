@@ -1,5 +1,7 @@
 import type { StickerPackWithStickers } from '../schemas/sticker'
 
+export type { StickerPackWithStickers }
+
 /**
  * 表情包标记协议。
  * 模型在回复文字里写 [[sticker:表情id]]，落库前解析成真正的表情消息。

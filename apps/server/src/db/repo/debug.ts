@@ -189,7 +189,6 @@ export interface InsertDecisionInput {
   personaId: string
   personaName: string
   triggerMessageId?: string | null
-  channelId?: string | null
   kind: 'reply' | 'autonomy'
   fired: boolean
   stage: 'rules' | 'model'
@@ -206,7 +205,6 @@ interface DecisionRow {
   persona_id: string
   persona_name: string
   trigger_message_id: string | null
-  channel_id: string | null
   kind: string
   fired: number
   stage: string
@@ -224,7 +222,6 @@ function mapDecision(db: DB, row: DecisionRow): AiGroupDecision {
     personaId: row.persona_id,
     personaName: row.persona_name,
     triggerMessageId: row.trigger_message_id,
-    channelId: row.channel_id,
     kind: row.kind as AiGroupDecision['kind'],
     fired: row.fired === 1,
     stage: row.stage as AiGroupDecision['stage'],
@@ -252,16 +249,15 @@ export function insertDecision(db: DB, input: InsertDecisionInput): AiGroupDecis
   const ts = now()
   db.prepare(
     `INSERT INTO ai_group_decision
-       (id, conversation_id, persona_id, persona_name, trigger_message_id, channel_id,
+       (id, conversation_id, persona_id, persona_name, trigger_message_id,
         kind, fired, stage, reason, energy, mood, log_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.conversationId,
     input.personaId,
     input.personaName,
     input.triggerMessageId ?? null,
-    input.channelId ?? null,
     input.kind,
     input.fired ? 1 : 0,
     input.stage,
@@ -277,7 +273,6 @@ export function insertDecision(db: DB, input: InsertDecisionInput): AiGroupDecis
     personaId: input.personaId,
     personaName: input.personaName,
     triggerMessageId: input.triggerMessageId ?? null,
-    channelId: input.channelId ?? null,
     kind: input.kind,
     fired: input.fired,
     stage: input.stage,

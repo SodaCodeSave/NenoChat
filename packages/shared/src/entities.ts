@@ -1,5 +1,4 @@
 import type {
-  ChannelKind,
   ContactRelation,
   ConversationType,
   KeyLocation,
@@ -77,20 +76,6 @@ export interface Member {
   updatedAt: number
 }
 
-export interface Channel {
-  id: string
-  conversationId: string
-  name: string
-  topic?: string | null
-  kind: ChannelKind
-  category?: string | null
-  position: number
-  archivedAt?: number | null
-  createdBy?: string | null
-  createdAt: number
-  updatedAt: number
-}
-
 /** 消息附件引用（存于 message.meta.attachments） */
 export interface AttachmentRef {
   id: string
@@ -146,7 +131,6 @@ export interface MessageMeta {
 export interface Message {
   id: string
   conversationId: string
-  channelId?: string | null
   senderId?: string | null
   senderType: SenderType
   type: MessageType
@@ -446,7 +430,6 @@ export interface AiGroupDecision {
   /** 展示用的角色名，记录快照避免角色改名后历史失真 */
   personaName: string
   triggerMessageId: string | null
-  channelId: string | null
   kind: 'reply' | 'autonomy'
   /** 规则层是否放行 */
   fired: boolean

@@ -23,7 +23,6 @@ let bobId = ''
 let personaId = ''
 let botUserId = ''
 let groupId = ''
-let channelId = ''
 
 const silentLog = {
   info: () => {},
@@ -59,7 +58,6 @@ interface WireMessage {
   id: string
   senderId: string | null
   senderType: string
-  channelId: string | null
   content: string
   createdAt: number
   meta?: { ai?: { personaId?: string; proactive?: boolean } }
@@ -78,9 +76,7 @@ async function listMessages(): Promise<WireMessage[]> {
 async function waitForAiMessages(min: number, timeoutMs = 5_000): Promise<WireMessage[]> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const aiMessages = (await listMessages()).filter(
-      (message) => message.senderType === 'ai' && (!channelId || message.channelId === channelId),
-    )
+    const aiMessages = (await listMessages()).filter((message) => message.senderType === 'ai')
     if (aiMessages.length >= min) return aiMessages
     await new Promise((resolve) => setTimeout(resolve, 80))
   }
@@ -192,7 +188,6 @@ describe('群聊拉 AI', () => {
   it('建群时可以把自己的 AI 角色一起拉进来', async () => {
     const created = await api<{
       conversation: { id: string; type: string }
-      channels: Array<{ id: string; kind: string }>
     }>(aliceToken, 'POST', '/conversations', {
       type: 'group',
       name: '听歌群',
@@ -200,8 +195,6 @@ describe('群聊拉 AI', () => {
     })
     expect(created.status).toBe(200)
     groupId = created.json.conversation.id
-    channelId = created.json.channels.find((channel) => channel.kind === 'text')?.id ?? ''
-    expect(channelId).toBeTruthy()
 
     const detail = await api<{ members: Array<{ userId: string }> }>(
       aliceToken,
@@ -230,7 +223,6 @@ describe('群聊拉 AI', () => {
   it('被点名时 AI 在群里回复，并按角色身份展示', async () => {
     const sent = await api(bobToken, 'POST', '/messages', {
       conversationId: groupId,
-      channelId,
       clientNonce: 'group-mention-1',
       type: 'text',
       content: '@小禾 你今天听什么歌？',
@@ -246,7 +238,6 @@ describe('群聊拉 AI', () => {
   it('冷却期内连续点名也不会刷屏', async () => {
     await api(bobToken, 'POST', '/messages', {
       conversationId: groupId,
-      channelId,
       clientNonce: 'group-mention-2',
       type: 'text',
       content: '@小禾 再来一首？',

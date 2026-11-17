@@ -45,7 +45,6 @@ export const Permission = {
   MENTION_ALL: 1 << 2,
   PIN_MESSAGE: 1 << 3,
   MANAGE_MESSAGES: 1 << 4,
-  MANAGE_CHANNELS: 1 << 5,
   MANAGE_MEMBERS: 1 << 6,
   MANAGE_CONVERSATION: 1 << 7,
 } as const
@@ -60,17 +59,9 @@ export const ROLE_BASE_PERMISSIONS: Record<Role, number> = {
     Permission.MENTION_ALL |
     Permission.PIN_MESSAGE |
     Permission.MANAGE_MESSAGES |
-    Permission.MANAGE_CHANNELS |
     Permission.MANAGE_MEMBERS,
   owner: 0xffff,
 }
-
-/** 频道类型 */
-export const ChannelKind = {
-  Text: 'text',
-  Announcement: 'announcement',
-} as const
-export type ChannelKind = (typeof ChannelKind)[keyof typeof ChannelKind]
 
 /** 通知级别 */
 export const NotificationLevel = {
@@ -150,7 +141,6 @@ export const ChangeEntity = {
   User: 'user',
   Conversation: 'conversation',
   Member: 'member',
-  Channel: 'channel',
   Message: 'message',
   ReadCursor: 'read_cursor',
   Contact: 'contact',

@@ -613,7 +613,6 @@ export function appendStickerMessage(
   db: DB,
   input: {
     conversationId: string
-    channelId?: string | null
     stickerId: string
     generationId: string
     index: number
@@ -644,7 +643,6 @@ export function appendStickerMessage(
 
   return appendSystemMessage(db, {
     conversationId: input.conversationId,
-    channelId: input.channelId ?? null,
     senderType: 'ai' as SenderType,
     type: 'sticker',
     content: '',
@@ -709,7 +707,6 @@ export function appendAiSegment(
 
   const stickerPayload = (index: number, clientNonce: string | null) => ({
     conversationId,
-    channelId: null,
     stickerId: marker!.stickerId!,
     generationId: input.generationId,
     index,
@@ -1173,7 +1170,6 @@ function appendUserMessage(
   const ts = Date.now()
   const row = messagesRepo.insert(db, {
     conversationId,
-    channelId: null,
     senderId: userId,
     senderType: 'user',
     type: 'text',

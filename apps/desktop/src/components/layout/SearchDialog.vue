@@ -81,10 +81,7 @@ async function run(q: string): Promise<void> {
 async function openItem(item: Item): Promise<void> {
   if (item.kind === 'message') {
     const { message, conversationId } = item.hit
-    const path = message.channelId
-      ? `/c/${conversationId}/${message.channelId}`
-      : `/c/${conversationId}`
-    await router.push({ path, query: { m: message.id } })
+    await router.push({ path: `/c/${conversationId}`, query: { m: message.id } })
     close()
     return
   }

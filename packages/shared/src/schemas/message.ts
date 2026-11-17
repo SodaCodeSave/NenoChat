@@ -40,7 +40,6 @@ export const MessageMetaSchema = z
 
 export const SendMessageSchema = z.object({
   conversationId: z.string().min(1),
-  channelId: z.string().min(1).nullable().optional(),
   clientNonce: z.string().min(1).max(64),
   type: z
     .enum([MessageType.Text, MessageType.Image, MessageType.File, MessageType.Sticker])
@@ -65,7 +64,6 @@ export const MarkReadSchema = z.object({
 })
 
 export const MessagePageQuerySchema = z.object({
-  channelId: z.string().min(1).optional(),
   before: z.coerce.number().int().min(0).optional(),
   after: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(MESSAGE_PAGE_MAX).default(MESSAGE_PAGE_SIZE),

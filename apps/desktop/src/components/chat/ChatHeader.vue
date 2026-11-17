@@ -2,14 +2,13 @@
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import type { Channel } from '@nenochat/shared'
 import type { ConversationSummary } from '@/api/endpoints'
+
 import { conversationTitle } from '@/composables/conversation'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   conversation: ConversationSummary
-  channel?: Channel | null
   typingNames?: string[]
   memberCount?: number
   showMembers?: boolean
@@ -23,7 +22,6 @@ const emit = defineEmits<{
   (e: 'open-memory'): void
   (e: 'toggle-schedule'): void
   (e: 'open-settings'): void
-  (e: 'open-channels'): void
   (e: 'back'): void
 }>()
 
@@ -31,10 +29,7 @@ const ui = useUiStore()
 const isGroup = computed(() => props.conversation.type === 'group')
 const isAi = computed(() => props.conversation.type === 'ai')
 
-const title = computed(() => {
-  if (isGroup.value && props.channel) return `${props.channel.name}`
-  return conversationTitle(props.conversation)
-})
+const title = computed(() => conversationTitle(props.conversation))
 
 const subtitle = computed(() => {
   if (props.typingNames && props.typingNames.length > 0) {
@@ -42,7 +37,7 @@ const subtitle = computed(() => {
     return `${names} 正在输入…`
   }
   if (isGroup.value) {
-    return props.channel?.topic || `${props.memberCount ?? 0} 位成员`
+    return `${props.memberCount ?? 0} 位成员`
   }
   // AI 会话名下一律留空：这行原本写着「AI 角色 · 会主动找你」之类的说明
   if (isAi.value) return ''
@@ -71,19 +66,7 @@ const subtitle = computed(() => {
     </button>
 
     <div class="min-w-0 flex-1">
-      <!-- 手机端群聊没有侧边频道栏，点头部切换频道 -->
-      <button
-        v-if="isGroup && ui.isMobile"
-        type="button"
-        class="flex min-w-0 items-center gap-1.5 text-left active:opacity-70"
-        @click="emit('open-channels')"
-      >
-        <Icon v-if="props.channel" name="hash" :size="15" class="text-muted" />
-        <h1 class="truncate text-[15px] font-semibold text-text-strong">{{ title }}</h1>
-        <Icon name="chevronDown" :size="13" class="shrink-0 text-muted" />
-      </button>
-      <div v-else class="flex items-center gap-1.5">
-        <Icon v-if="isGroup && channel" name="hash" :size="15" class="text-muted" />
+      <div class="flex items-center gap-1.5">
         <h1 class="truncate text-[14px] font-semibold text-text-strong">{{ title }}</h1>
         <span
           v-if="isAi"

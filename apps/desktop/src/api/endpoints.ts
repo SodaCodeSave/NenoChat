@@ -1,6 +1,5 @@
 import {
   API_PREFIX,
-  type Channel,
   type ChangeRecord,
   type Contact,
   type Conversation,
@@ -62,15 +61,11 @@ export interface ConversationSummary extends Conversation {
 export const conversationApi = {
   list: () => http.get<{ conversations: ConversationSummary[] }>(p('/conversations')),
   create: (body: unknown) =>
-    http.post<{ conversation: Conversation; channels?: Channel[]; members?: Member[] }>(
-      p('/conversations'),
-      body,
-    ),
+    http.post<{ conversation: Conversation; members?: Member[] }>(p('/conversations'), body),
   detail: (id: string) =>
     http.get<{
       conversation: Conversation
       me: Member
-      channels: Channel[]
       members: Array<Member & { user: PublicUser | null }>
     }>(p(`/conversations/${id}`)),
   update: (id: string, body: unknown) =>
@@ -108,21 +103,8 @@ export const contactApi = {
   remove: (userId: string) => http.delete<{ ok: boolean }>(p(`/contacts/${userId}`)),
 }
 
-export const channelApi = {
-  list: (conversationId: string) =>
-    http.get<{ channels: Channel[] }>(p(`/conversations/${conversationId}/channels`)),
-  create: (conversationId: string, body: unknown) =>
-    http.post<{ channel: Channel }>(p(`/conversations/${conversationId}/channels`), body),
-  update: (channelId: string, body: unknown) =>
-    http.patch<{ channel: Channel }>(p(`/channels/${channelId}`), body),
-  remove: (channelId: string) => http.delete<{ ok: boolean }>(p(`/channels/${channelId}`)),
-  reorder: (conversationId: string, items: Array<{ id: string; category: string | null; position: number }>) =>
-    http.post<{ ok: boolean }>(p(`/conversations/${conversationId}/channels/reorder`), { items }),
-}
-
 export interface SendMessageBody {
   conversationId: string
-  channelId?: string | null
   clientNonce: string
   type?: string
   content: string
@@ -133,7 +115,7 @@ export interface SendMessageBody {
 export const messageApi = {
   page: (
     conversationId: string,
-    query: { channelId?: string; before?: number; after?: number; limit?: number },
+    query: { before?: number; after?: number; limit?: number },
   ) =>
     http.get<{ messages: Message[]; hasMore: boolean }>(p(`/conversations/${conversationId}/messages`), {
       query,

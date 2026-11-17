@@ -1,6 +1,5 @@
 import { useAuthStore } from '@/stores/auth'
 import { useAiStore } from '@/stores/ai'
-import { useChannelsStore } from '@/stores/channels'
 import { useContactsStore } from '@/stores/contacts'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMembersStore } from '@/stores/members'
@@ -72,7 +71,6 @@ export async function bootstrap(
 export function resetWorkspace(): void {
   useConversationsStore().reset()
   useMessagesStore().reset()
-  useChannelsStore().reset()
   useMembersStore().reset()
   useContactsStore().reset()
   useSyncStore().disconnect()

@@ -5,7 +5,6 @@ export interface MessageRow {
   server_id: string
   id: string
   conversation_id: string
-  channel_id: string | null
   sender_id: string | null
   sender_type: string
   type: string
@@ -37,7 +36,6 @@ export function mapMessage(row: MessageRow): Message {
   return {
     id: row.id,
     conversationId: row.conversation_id,
-    channelId: row.channel_id,
     senderId: row.sender_id,
     senderType: row.sender_type as Message['senderType'],
     type: row.type as Message['type'],
@@ -58,14 +56,13 @@ export function mapMessage(row: MessageRow): Message {
   }
 }
 
-const COLUMNS = 21
+const COLUMNS = 20
 
 function params(serverId: string, message: Message): unknown[] {
   return [
     serverId,
     message.id,
     message.conversationId,
-    message.channelId ?? null,
     message.senderId ?? null,
     message.senderType,
     message.type,
@@ -90,10 +87,10 @@ function params(serverId: string, message: Message): unknown[] {
 export async function upsertMessage(serverId: string, message: Message): Promise<void> {
   await dbExecute(
     `INSERT INTO messages
-       (server_id, id, conversation_id, channel_id, sender_id, sender_type, type, content, meta,
+       (server_id, id, conversation_id, sender_id, sender_type, type, content, meta,
         reply_to_id, seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at,
         created_at, updated_at, local_status, local_error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT(server_id, id) DO UPDATE SET
        content = excluded.content,
        meta = excluded.meta,
@@ -114,12 +111,12 @@ export async function upsertMessage(serverId: string, message: Message): Promise
 export async function insertPending(serverId: string, message: Message): Promise<void> {
   await dbExecute(
     `INSERT INTO messages
-       (server_id, id, conversation_id, channel_id, sender_id, sender_type, type, content, meta,
+       (server_id, id, conversation_id, sender_id, sender_type, type, content, meta,
         reply_to_id, seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at,
         created_at, updated_at, local_status, local_error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'pending',NULL)`,
-    // 前 19 个参数对应实体列，local_status 与 local_error 由 SQL 字面量写入
-    params(serverId, message).slice(0, 19),
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'pending',NULL)`,
+    // 前 18 个参数对应实体列，local_status 与 local_error 由 SQL 字面量写入
+    params(serverId, message).slice(0, 18),
   )
 }
 
@@ -148,7 +145,6 @@ export async function deleteLocal(serverId: string, messageId: string): Promise<
 
 export interface PageOptions {
   conversationId: string
-  channelId?: string | null
   before?: number | null
   limit?: number
 }
@@ -157,15 +153,15 @@ export async function listMessages(serverId: string, options: PageOptions): Prom
   const limit = options.limit ?? 50
   const sql = options.before
     ? `SELECT * FROM messages
-       WHERE server_id = $1 AND conversation_id = $2 AND ($3 IS NULL OR channel_id = $3) AND seq < $4
-       ORDER BY seq DESC LIMIT $5`
-    : `SELECT * FROM messages
-       WHERE server_id = $1 AND conversation_id = $2 AND ($3 IS NULL OR channel_id = $3)
+       WHERE server_id = $1 AND conversation_id = $2 AND seq < $3
        ORDER BY seq DESC LIMIT $4`
+    : `SELECT * FROM messages
+       WHERE server_id = $1 AND conversation_id = $2
+       ORDER BY seq DESC LIMIT $3`
 
   const rows = options.before
-    ? await dbSelect<MessageRow>(sql, [serverId, options.conversationId, options.channelId ?? null, options.before, limit + 1])
-    : await dbSelect<MessageRow>(sql, [serverId, options.conversationId, options.channelId ?? null, limit + 1])
+    ? await dbSelect<MessageRow>(sql, [serverId, options.conversationId, options.before, limit + 1])
+    : await dbSelect<MessageRow>(sql, [serverId, options.conversationId, limit + 1])
 
   const hasMore = rows.length > limit
   const sliced = hasMore ? rows.slice(0, limit) : rows

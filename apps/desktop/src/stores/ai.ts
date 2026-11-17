@@ -978,7 +978,6 @@ export const useAiStore = defineStore('ai', () => {
   async function handleGroupDue(payload: {
     logId: string
     conversationId: string
-    channelId?: string | null
     personaId: string
     kind: 'reply' | 'autonomy'
     triggerMessageId?: string | null
@@ -1019,14 +1018,8 @@ export const useAiStore = defineStore('ai', () => {
       const conversation = conversations.byId.get(payload.conversationId)
       let recent: Message[] = messages.messagesOf(payload.conversationId)
       if (recent.length === 0) {
-        const page = await messageApi.page(payload.conversationId, {
-          channelId: payload.channelId ?? undefined,
-          limit: 30,
-        })
+        const page = await messageApi.page(payload.conversationId, { limit: 30 })
         recent = page.messages
-      }
-      if (payload.channelId) {
-        recent = recent.filter((message) => message.channelId === payload.channelId)
       }
 
       let members = (await import('./members')).useMembersStore().of(payload.conversationId)
@@ -1143,7 +1136,6 @@ export const useAiStore = defineStore('ai', () => {
           logId: payload.logId,
           personaId: persona.id,
           conversationId: payload.conversationId,
-          channelId: payload.channelId ?? null,
           generationId: payload.logId,
           index,
           content: segments[index]!,

@@ -22,7 +22,7 @@ const routes: RouteRecordRaw[] = [
     meta: { layout: 'main' },
   },
   {
-    path: '/c/:conversationId/:channelId?',
+    path: '/c/:conversationId',
     name: 'conversation',
     component: () => import('@/views/ConversationView.vue'),
     meta: { layout: 'main' },

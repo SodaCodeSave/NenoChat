@@ -5,7 +5,6 @@ import type { DB } from '../index'
 export interface MessageRow {
   id: string
   conversation_id: string
-  channel_id: string | null
   sender_id: string | null
   sender_type: string
   type: string
@@ -37,7 +36,6 @@ export function mapMessage(row: MessageRow): Message {
   return {
     id: row.id,
     conversationId: row.conversation_id,
-    channelId: row.channel_id,
     senderId: row.sender_id,
     senderType: row.sender_type as SenderType,
     type: row.type as MessageType,
@@ -97,7 +95,6 @@ export function findByNonceInConversation(
 
 export interface InsertMessageInput {
   conversationId: string
-  channelId?: string | null
   senderId?: string | null
   senderType?: SenderType
   type: MessageType
@@ -116,14 +113,13 @@ export function insert(db: DB, input: InsertMessageInput): MessageRow {
   const id = ulid()
   db.prepare(
     `INSERT INTO messages
-       (id, conversation_id, channel_id, sender_id, sender_type, type, content, meta, reply_to_id,
+       (id, conversation_id, sender_id, sender_type, type, content, meta, reply_to_id,
         seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at, deleted_by,
         created_at, updated_at, updated_by_device)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)`,
   ).run(
     id,
     input.conversationId,
-    input.channelId ?? null,
     input.senderId ?? null,
     input.senderType ?? 'user',
     input.type,
@@ -166,7 +162,6 @@ export function removeFts(db: DB, messageId: string): void {
 
 export interface PageQuery {
   conversationId: string
-  channelId?: string | null
   before?: number | null
   after?: number | null
   limit: number
@@ -177,10 +172,6 @@ export function page(db: DB, query: PageQuery): MessageRow[] {
   const params: unknown[] = [query.conversationId]
   let where = 'conversation_id = ?'
 
-  if (query.channelId) {
-    where += ' AND channel_id = ?'
-    params.push(query.channelId)
-  }
   if (query.before != null) {
     where += ' AND seq < ?'
     params.push(query.before)

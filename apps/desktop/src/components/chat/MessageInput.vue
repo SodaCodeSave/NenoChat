@@ -13,7 +13,6 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   conversationId: string
-  channelId?: string | null
   replyTo?: Message | null
   editing?: Message | null
   disabled?: boolean

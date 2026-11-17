@@ -1,4 +1,4 @@
-import type { Channel, Conversation, Member } from '@nenochat/shared'
+import type { Conversation, Member } from '@nenochat/shared'
 import { dbExecute, dbSelect } from '../../platform/db'
 import type { ConversationSummary } from '../../api/endpoints'
 
@@ -169,7 +169,7 @@ export async function deleteConversation(serverId: string, conversationId: strin
   ])
 }
 
-/* ------------------------------- 成员与频道 ------------------------------- */
+/* -------------------------------- 成员 -------------------------------- */
 
 export interface MemberRow {
   server_id: string
@@ -244,78 +244,6 @@ export async function markMemberLeft(serverId: string, conversationId: string, u
     'UPDATE members SET left_at = $4, updated_at = $4 WHERE server_id = $1 AND conversation_id = $2 AND user_id = $3',
     [serverId, conversationId, userId, Date.now()],
   )
-}
-
-export interface ChannelRow {
-  server_id: string
-  id: string
-  conversation_id: string
-  name: string
-  topic: string | null
-  kind: string
-  category: string | null
-  position: number
-  archived_at: number | null
-  created_at: number
-  updated_at: number
-}
-
-export async function listChannels(serverId: string, conversationId: string): Promise<Channel[]> {
-  const rows = await dbSelect<ChannelRow>(
-    `SELECT * FROM channels
-     WHERE server_id = $1 AND conversation_id = $2 AND archived_at IS NULL
-     ORDER BY COALESCE(category, ''), position, created_at`,
-    [serverId, conversationId],
-  )
-  return rows.map((row) => ({
-    id: row.id,
-    conversationId: row.conversation_id,
-    name: row.name,
-    topic: row.topic,
-    kind: row.kind as Channel['kind'],
-    category: row.category,
-    position: row.position,
-    archivedAt: row.archived_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }))
-}
-
-export async function upsertChannel(serverId: string, channel: Channel): Promise<void> {
-  await dbExecute(
-    `INSERT INTO channels
-       (server_id, id, conversation_id, name, topic, kind, category, position, archived_at, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT(server_id, id) DO UPDATE SET
-       name = excluded.name,
-       topic = excluded.topic,
-       kind = excluded.kind,
-       category = excluded.category,
-       position = excluded.position,
-       archived_at = excluded.archived_at,
-       updated_at = excluded.updated_at`,
-    [
-      serverId,
-      channel.id,
-      channel.conversationId,
-      channel.name,
-      channel.topic ?? null,
-      channel.kind,
-      channel.category ?? null,
-      channel.position,
-      channel.archivedAt ?? null,
-      channel.createdAt,
-      channel.updatedAt,
-    ],
-  )
-}
-
-export async function archiveChannel(serverId: string, channelId: string): Promise<void> {
-  await dbExecute('UPDATE channels SET archived_at = $3 WHERE server_id = $1 AND id = $2', [
-    serverId,
-    channelId,
-    Date.now(),
-  ])
 }
 
 /** 会话软删：保留本地行便于回溯，列表层按 deleted_at 过滤 */

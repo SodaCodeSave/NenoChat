@@ -14,7 +14,6 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import type { DB } from '../db'
 import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
-import * as channelsRepo from '../db/repo/channels'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
@@ -71,7 +70,6 @@ interface GroupState {
 
 interface GroupTurnInput {
   conversationId: string
-  channelId: string | null
   member: GroupPersonaMember
   kind: 'reply' | 'autonomy'
   logId: string
@@ -201,7 +199,6 @@ function reserveTurn(
   db: DB,
   input: {
     conversationId: string
-    channelId: string | null
     member: GroupPersonaMember
     kind: 'reply' | 'autonomy'
     dayKey: string
@@ -219,15 +216,14 @@ function reserveTurn(
     try {
       db.prepare(
         `INSERT INTO ai_group_log
-           (id, conversation_id, persona_id, user_id, channel_id, kind, day_key, slot, status,
+           (id, conversation_id, persona_id, user_id, kind, day_key, slot, status,
             message_id, reply_to_id, reason, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, ?)`,
       ).run(
         logId,
         input.conversationId,
         input.member.persona.id,
         input.member.persona.owner_id,
-        input.channelId,
         input.kind,
         input.dayKey,
         used,
@@ -307,10 +303,9 @@ function rosterOf(db: DB, conversationId: string, selfBotId: string): Array<{ na
   }))
 }
 
-function recentMessages(db: DB, conversationId: string, channelId: string | null): Message[] {
+function recentMessages(db: DB, conversationId: string): Message[] {
   const rows = messagesRepo.page(db, {
     conversationId,
-    channelId,
     before: null,
     after: null,
     limit: RECENT_LIMIT,
@@ -363,7 +358,7 @@ function buildTurnPrompt(
 ): ReturnType<typeof buildGroupPrompt> {
   const conversation = conversationsRepo.findById(db, input.conversationId)
   const persona = aiRepo.mapPersona(input.member.persona)
-  const messages = recentMessages(db, input.conversationId, input.channelId)
+  const messages = recentMessages(db, input.conversationId)
   const nameById = new Map(
     membersRepo
       .listActive(db, input.conversationId)
@@ -424,7 +419,6 @@ function appendGroupSegmentCore(
   db: DB,
   input: {
     conversationId: string
-    channelId: string | null
     persona: aiRepo.PersonaRow
     generationId: string
     index: number
@@ -459,7 +453,6 @@ function appendGroupSegmentCore(
   const appendText = (content: string, index: number, replyToId: string | null): Message =>
     appendSystemMessage(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId,
       senderType: 'ai' as SenderType,
       senderId: input.persona.user_id,
       type: 'text',
@@ -475,7 +468,6 @@ function appendGroupSegmentCore(
   const stickerAppend = (index: number, replyToId: string | null): Message | null =>
     appendStickerMessage(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId,
       stickerId: marker!.stickerId!,
       generationId: input.generationId,
       index,
@@ -509,7 +501,6 @@ function appendGroupSegment(
   db: DB,
   input: {
     conversationId: string
-    channelId: string | null
     persona: aiRepo.PersonaRow
     generationId: string
     index: number
@@ -536,7 +527,6 @@ function appendSegments(
   for (let index = 0; index < segments.length; index++) {
     const message = appendGroupSegment(db, {
       conversationId: input.conversationId,
-      channelId: input.channelId,
       persona: input.member.persona,
       generationId: input.logId,
       index,
@@ -579,7 +569,6 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
     hub().sendToUser(input.member.persona.owner_id, 'ai.group.due', {
       logId: input.logId,
       conversationId: input.conversationId,
-      channelId: input.channelId,
       personaId: input.member.persona.id,
       kind: input.kind,
       triggerMessageId: input.trigger?.messageId ?? null,
@@ -647,7 +636,6 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
 
 export interface GroupMessageTrigger {
   conversationId: string
-  channelId: string | null
   messageId: string
   senderId: string
   content: string
@@ -707,7 +695,6 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
           personaId: member.persona.id,
           personaName: mapped.name,
           triggerMessageId: trigger.messageId,
-          channelId: trigger.channelId,
           kind: 'reply',
           fired: false,
           stage: 'rules',
@@ -721,7 +708,6 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
 
     const reserved = reserveTurn(db, {
       conversationId: trigger.conversationId,
-      channelId: trigger.channelId,
       member,
       kind: 'reply',
       dayKey,
@@ -736,7 +722,6 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       personaId: member.persona.id,
       personaName: mapped.name,
       triggerMessageId: trigger.messageId,
-      channelId: trigger.channelId,
       kind: 'reply',
       fired: true,
       stage: 'rules',
@@ -750,7 +735,6 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
     try {
       await runTurn(db, {
         conversationId: trigger.conversationId,
-        channelId: trigger.channelId,
         member,
         kind: 'reply',
         logId: reserved.logId,
@@ -787,7 +771,6 @@ export function appendClientGroupSegment(
     logId: string
     personaId: string
     conversationId: string
-    channelId?: string | null
     generationId: string
     index: number
     content: string
@@ -825,7 +808,6 @@ export function appendClientGroupSegment(
 
   const message = appendGroupSegmentCore(db, {
     conversationId: input.conversationId,
-    channelId: input.channelId ?? null,
     persona,
     generationId: input.generationId,
     index: input.index,
@@ -884,11 +866,6 @@ function listAutonomyCandidates(db: DB): AutonomyCandidate[] {
   return rows.map((row) => ({ conversation_id: row.conversation_id, persona: row }))
 }
 
-function firstTextChannelId(db: DB, conversationId: string): string | null {
-  const channels = channelsRepo.listByConversation(db, conversationId)
-  return channels.find((channel) => channel.kind === 'text')?.id ?? channels[0]?.id ?? null
-}
-
 /** 跑一轮主动开口扫描。导出以便测试与手动触发。 */
 export async function scanGroupAutonomyOnce(
   db: DB,
@@ -932,7 +909,6 @@ export async function scanGroupAutonomyOnce(
         personaId: candidate.persona.id,
         personaName: candidate.persona.name,
         triggerMessageId: null,
-        channelId: null,
         kind: 'autonomy',
         fired: false,
         stage: 'rules',
@@ -951,7 +927,6 @@ export async function scanGroupAutonomyOnce(
 
     const reserved = reserveTurn(db, {
       conversationId: candidate.conversation_id,
-      channelId: firstTextChannelId(db, candidate.conversation_id),
       member,
       kind: 'autonomy',
       dayKey,
@@ -966,7 +941,6 @@ export async function scanGroupAutonomyOnce(
       personaId: candidate.persona.id,
       personaName: candidate.persona.name,
       triggerMessageId: null,
-      channelId: null,
       kind: 'autonomy',
       fired: true,
       stage: 'rules',
@@ -980,7 +954,6 @@ export async function scanGroupAutonomyOnce(
     try {
       await runTurn(db, {
         conversationId: candidate.conversation_id,
-        channelId: firstTextChannelId(db, candidate.conversation_id),
         member,
         kind: 'autonomy',
         logId: reserved.logId,

@@ -3,7 +3,6 @@ import {
   Permission,
   Role,
   dmKey,
-  type Channel,
   type Conversation,
   type Member,
 } from '@nenochat/shared'
@@ -12,7 +11,6 @@ import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as membersRepo from '../db/repo/members'
-import * as channelsRepo from '../db/repo/channels'
 import * as usersRepo from '../db/repo/users'
 import { writeChange } from './change-log'
 import { assertMember, assertOutranks, assertPermission } from './permission-service'
@@ -51,7 +49,6 @@ export function list(db: DB, userId: string): ConversationSummary[] {
 export interface DetailResult {
   conversation: Conversation
   me: Member
-  channels: Channel[]
   members: Array<Member & { user: ReturnType<typeof usersRepo.mapPublicUser> | null }>
 }
 
@@ -73,7 +70,6 @@ export function detail(db: DB, conversationId: string, userId: string): DetailRe
   return {
     conversation: conversationsRepo.mapConversation(conv),
     me: membersRepo.mapMember(member),
-    channels: channelsRepo.listByConversation(db, conversationId).map(channelsRepo.mapChannel),
     members: memberRows.map((row) => {
       const user = userMap.get(row.user_id)
       return {
@@ -176,14 +172,6 @@ export function createGroup(db: DB, userId: string, input: CreateGroupInput): De
         invitedBy: userId,
       })
     }
-
-    // 每个新群自带一个默认频道，进入即可说话
-    channelsRepo.create(db, {
-      conversationId: row.id,
-      name: '综合',
-      kind: 'text',
-      createdBy: userId,
-    })
 
     const mapped = conversationsRepo.mapConversation(row)
     writeChange(db, {

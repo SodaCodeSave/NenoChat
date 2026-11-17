@@ -221,22 +221,23 @@ describe('会话与消息', () => {
     expect(res.status).toBe(403)
   })
 
-  it('群聊自带默认频道，普通成员无管理权限', async () => {
+  it('群聊只有一条消息流，普通成员无管理权限', async () => {
     const group = await api<{
       conversation: { id: string; type: string }
-      channels: Array<{ id: string; name: string }>
+      channels?: unknown
     }>('POST', '/conversations', {
       token: alice.accessToken,
       body: { type: 'group', name: '测试群', memberIds: [bob.user.id] },
     })
     expect(group.json.conversation.type).toBe('group')
-    expect(group.json.channels).toHaveLength(1)
-    expect(group.json.channels[0]!.name).toBe('综合')
+    expect(group.json.channels).toBeUndefined()
 
     const groupId = group.json.conversation.id
-    const channelId = group.json.channels[0]!.id
 
-    const deny = await api('DELETE', `/channels/${channelId}`, { token: bob.accessToken })
+    const deny = await api('PATCH', `/conversations/${groupId}`, {
+      token: bob.accessToken,
+      body: { announcement: '普通成员不能改公告' },
+    })
     expect(deny.status).toBe(403)
 
     const rename = await api('PATCH', `/conversations/${groupId}`, {
