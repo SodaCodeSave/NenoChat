@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./ai/*": "./src/ai/*.ts",
     "./sync/*": "./src/sync/*.ts",
-    "./notifications/*": "./src/notifications/*.ts"
+    "./notifications/*": "./src/notifications/*.ts",
+    "./storage/*": "./src/storage/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

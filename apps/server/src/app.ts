@@ -28,6 +28,7 @@ import { registerWs } from './ws/server'
 import { startProactiveScheduler } from './services/proactive-service'
 import { startMomentsScheduler } from './services/moment-ai-service'
 import { startGroupAiScheduler } from './services/group-ai-service'
+import { startAttachmentReclaimer } from './services/attachment-gc'
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -115,10 +116,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   const stopMoments = startMomentsScheduler(app, getDb())
   // 群聊里角色自己的主动开口
   const stopGroupAi = startGroupAiScheduler(app, getDb())
+  // 无人引用的附件与磁盘孤儿文件，定时回收
+  const stopAttachmentGc = startAttachmentReclaimer(getDb())
   app.addHook('onClose', async () => {
     stopProactive()
     stopMoments()
     stopGroupAi()
+    stopAttachmentGc()
   })
 
   return app

@@ -15,6 +15,9 @@ export default defineConfig(() => ({
       '@nenochat/shared/notifications': fileURLToPath(
         new URL('../../packages/shared/src/notifications', import.meta.url),
       ),
+      '@nenochat/shared/storage': fileURLToPath(
+        new URL('../../packages/shared/src/storage', import.meta.url),
+      ),
       '@nenochat/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
     },
   },

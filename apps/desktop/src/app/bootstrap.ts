@@ -9,6 +9,7 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { useServersStore } from '@/stores/servers'
 import { useSyncStore } from '@/stores/sync'
 import { hasLocalDb } from '@/platform/db'
+import { initFileCache } from '@/platform/file-cache'
 
 export type BootstrapStage = 'starting' | 'server' | 'auth' | 'cache' | 'realtime' | 'ready' | 'error'
 
@@ -39,6 +40,8 @@ export async function bootstrap(
     }
 
     onStage('cache')
+    // 附件缓存索引先就绪，消息列表渲染时才能优先命中本地 blob
+    void initFileCache()
     const conversations = useConversationsStore()
     await conversations.hydrate()
     // 本地镜像先出，再后台刷新，保证列表不会空屏

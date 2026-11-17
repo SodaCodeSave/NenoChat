@@ -7,6 +7,7 @@ import Avatar from '@/components/ui/Avatar.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
+import StorageSettings from '@/components/settings/StorageSettings.vue'
 import AvatarUploader from '@/components/settings/AvatarUploader.vue'
 import { normalizeServerUrl, useServersStore } from '@/stores/servers'
 import { useAuthStore } from '@/stores/auth'
@@ -431,13 +432,7 @@ async function removeServer(id: string): Promise<void> {
         </section>
 
         <section v-else-if="currentSection === 'storage'">
-          <h2 class="mb-1 text-[15px] font-semibold text-text-strong">存储与数据</h2>
-          <p class="mb-4 text-[12px] text-muted">
-            消息与图片镜像在本机，删服务器会连带清理该服务器的本地数据
-          </p>
-          <div class="rounded-xl border border-dashed border-line p-4 text-[12.5px] text-muted">
-            本地库大小统计、按服务器清理与聊天记录导出会在 P2 阶段补齐。
-          </div>
+          <StorageSettings />
         </section>
 
         <!-- 关于 -->

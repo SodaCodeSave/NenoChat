@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { API_PREFIX, type ServerInfo, type ServerInstance } from '@nenochat/shared'
 import { listServers, removeServerCascade, touchServer, upsertServer } from '@/db/dao/servers'
 import { hasLocalDb } from '@/platform/db'
+import { clearAttachmentCache } from '@/platform/file-cache'
 
 const CURRENT_KEY = 'nenochat.currentServer'
 const SERVERS_KEY = 'nenochat.servers'
@@ -147,7 +148,10 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function remove(id: string): Promise<void> {
+    const target = servers.value.find((s) => s.id === id)
     if (hasLocalDb()) await removeServerCascade(id)
+    // 删服务器时一并清掉该地址下的附件缓存，避免留下无法再访问的旧文件
+    if (target) await clearAttachmentCache({ namespace: target.baseUrl })
     servers.value = servers.value.filter((s) => s.id !== id)
     if (currentId.value === id) {
       const next = servers.value[0]?.id ?? null

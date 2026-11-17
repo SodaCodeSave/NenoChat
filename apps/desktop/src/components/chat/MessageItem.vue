@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { resolveFileUrl } from '@/api/http'
+import { resolveAttachmentUrl } from '@/platform/file-cache'
 import { formatMessageTime } from '@/composables/conversation'
 import { useUiStore } from '@/stores/ui'
 
@@ -61,11 +62,39 @@ const segments = computed(() => {
 
 const isImage = computed(() => props.message.type === 'image')
 const isSticker = computed(() => props.message.type === 'sticker')
+
+/** 命中本地缓存后用 blob URL 展示，离线也能看图；未命中时先用网络地址 */
+const cachedUrls = ref<Record<string, string>>({})
+
+watch(
+  () => props.message.meta?.attachments,
+  async (list) => {
+    if (!list || list.length === 0) return
+    const resolved = await Promise.all(
+      list.map(async (attachment) => {
+        try {
+          const url = await resolveAttachmentUrl(attachment.url, attachment.kind)
+          return url ? ([attachment.id, url] as const) : null
+        } catch {
+          return null
+        }
+      }),
+    )
+    const next = Object.fromEntries(resolved.filter((item): item is readonly [string, string] => item !== null))
+    if (Object.keys(next).length > 0) cachedUrls.value = { ...cachedUrls.value, ...next }
+  },
+  { immediate: true, deep: true },
+)
+
 const attachments = computed(() =>
   (props.message.meta?.attachments ?? []).map((attachment) => ({
     ...attachment,
     url: resolveFileUrl(attachment.url) ?? attachment.url,
     thumbUrl: resolveFileUrl(attachment.thumbUrl ?? attachment.url) ?? attachment.url,
+    displayUrl:
+      cachedUrls.value[attachment.id] ??
+      resolveFileUrl(attachment.thumbUrl ?? attachment.url) ??
+      attachment.url,
   })),
 )
 
@@ -212,10 +241,10 @@ const showAiTail = computed(
             :key="attachment.id"
             type="button"
             class="block overflow-hidden rounded-lg border border-line"
-            @click="emit('preview', attachment.url)"
+            @click="emit('preview', attachment.displayUrl)"
           >
             <img
-              :src="attachment.thumbUrl || attachment.url"
+              :src="attachment.displayUrl"
               :alt="attachment.filename"
               class="max-h-[300px] w-auto max-w-full object-cover"
               loading="lazy"
@@ -229,7 +258,7 @@ const showAiTail = computed(
           <img
             v-for="attachment in attachments"
             :key="attachment.id"
-            :src="attachment.url"
+            :src="attachment.displayUrl"
             :alt="attachment.filename"
             class="h-[140px] w-[140px] object-contain"
           />
@@ -240,7 +269,7 @@ const showAiTail = computed(
           <a
             v-for="attachment in attachments"
             :key="attachment.id"
-            :href="attachment.url"
+            :href="attachment.displayUrl"
             target="_blank"
             class="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
           >
