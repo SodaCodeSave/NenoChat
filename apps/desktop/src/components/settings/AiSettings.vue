@@ -447,11 +447,13 @@ onMounted(() => {
             >
               <img :src="preset.icon" :alt="preset.label" class="h-4 w-4 shrink-0 object-contain" />
               <img
+                v-if="preset.textIcon"
                 :src="preset.textIcon"
                 :alt="preset.label"
                 :title="preset.label"
                 class="h-3.5 w-auto max-w-[64px] shrink-0 object-contain"
               />
+              <span v-else>{{ preset.label }}</span>
             </button>
             <button
               type="button"

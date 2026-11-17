@@ -20,6 +20,7 @@ import minimaxIcon from '@lobehub/icons-static-svg/icons/minimax-color.svg'
 import minimaxTextIcon from '@lobehub/icons-static-svg/icons/minimax-text.svg'
 import volcengineIcon from '@lobehub/icons-static-svg/icons/volcengine-color.svg'
 import volcengineTextIcon from '@lobehub/icons-static-svg/icons/volcengine-text.svg'
+import tokenrouterIcon from '@/assets/icons/tokenrouter.svg'
 
 export interface AiProviderPreset {
   id: string
@@ -30,8 +31,8 @@ export interface AiProviderPreset {
   baseUrl: string
   model: string
   icon: string
-  /** 字标图标，预设胶囊里用它替代文字 */
-  textIcon: string
+  /** 字标图标，预设胶囊里用它替代文字；没有字标的服务商留空回退显示文字 */
+  textIcon?: string
   /** 用于把已保存的服务商匹配回图标的关键词（匹配 name 或 baseUrl，小写） */
   keywords: string[]
   /** 本地服务商，无需 API Key */
@@ -139,6 +140,15 @@ export const AI_PROVIDER_PRESETS: AiProviderPreset[] = [
     icon: volcengineIcon,
     textIcon: volcengineTextIcon,
     keywords: ['volcengine', 'volces', 'doubao', '豆包', '火山'],
+  },
+  {
+    id: 'tokenrouter',
+    label: 'TokenRouter',
+    name: 'TokenRouter',
+    baseUrl: 'https://ai.anmc.cn/v1',
+    model: 'glm-5.3-flash',
+    icon: tokenrouterIcon,
+    keywords: ['tokenrouter', 'ai.anmc.cn', 'anmc'],
   },
   {
     id: 'ollama',
