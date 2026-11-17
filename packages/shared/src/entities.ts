@@ -650,6 +650,8 @@ export interface BilibiliComment {
 /** 抓取到的 B 站视频材料：总结与卡片共用；transcript 为空表示无字幕 */
 export interface BilibiliVideoMaterial {
   video: BilibiliVideoInfo
+  /** 总结缓存隔离键：单 P 为 bvid，多 P 为 bvid_c{cid} */
+  cacheKey: string
   transcript: string
   comments: BilibiliComment[]
   /** 已缓存的 AI 总结，未生成时为 null */

@@ -151,6 +151,7 @@ describe('B 站上下文与总结提示词', () => {
     transcript: '',
     comments: [{ author: '观众 A', content: '很好看', like: 10 }],
     summary: null,
+    cacheKey: 'BV1GJ411x7h7',
   }
 
   it('无字幕时标注降级并带热评', () => {

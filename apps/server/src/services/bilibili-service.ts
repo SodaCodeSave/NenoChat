@@ -37,7 +37,7 @@ function absolute(url: string): string {
   return url
 }
 
-/** b23.tv 短链需要跟随跳转才能拿到真实 BV 号 */
+/** b23.tv 短链需要跟随跳转拿到真实地址（保留 p/cid 参数） */
 async function resolveShortUrl(url: string): Promise<string | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
@@ -48,8 +48,7 @@ async function resolveShortUrl(url: string): Promise<string | null> {
       headers: BASE_HEADERS,
       signal: controller.signal,
     })
-    const finalUrl = response.url || url
-    return parseBilibiliVideoId(finalUrl)
+    return response.url || null
   } catch {
     return null
   } finally {
@@ -57,26 +56,102 @@ async function resolveShortUrl(url: string): Promise<string | null> {
   }
 }
 
-async function resolveVideoId(input: string): Promise<string | null> {
-  const direct = parseBilibiliVideoId(input)
-  if (direct) return direct
+export interface BilibiliVideoRequest {
+  /** BV 或 av 号 */
+  videoId: string
+  /** 目标分 P，从 1 开始 */
+  page: number
+  /** URL 显式指定的 cid */
+  cid: number | null
+}
+
+/**
+ * 从 BV/av/URL 解析出视频标识与分 P。
+ * 多 P 视频必须保留 URL 里的 p / cid，否则会退化成 P1。
+ */
+export function parseBilibiliVideoRequest(input: string): BilibiliVideoRequest | null {
+  const text = input.trim()
+  let page = 1
+  let cid: number | null = null
+  let isUrl = false
+  try {
+    const url = new URL(text)
+    isUrl = true
+    const p = Number(url.searchParams.get('p'))
+    if (Number.isInteger(p) && p > 0) page = p
+    const rawCid = Number(url.searchParams.get('cid'))
+    if (Number.isInteger(rawCid) && rawCid > 0) cid = rawCid
+  } catch {
+    /* 裸 BV/av 号没有 URL 参数 */
+  }
+
+  const videoId = parseBilibiliVideoId(text)
+  if (videoId) return { videoId, page, cid }
+
+  // 已经是别的网站链接：不要从路径里抠 BV 号，避免抓错视频
+  if (isUrl) return null
+
+  // 整句话里夹带 BV 号
+  const match = text.match(/BV[0-9A-Za-z]{10}/i)
+  return match ? { videoId: `BV${match[0].slice(2)}`, page, cid } : null
+}
+
+export interface BilibiliPageRef {
+  cid: number
+  page: number
+}
+
+/**
+ * 选出本次要抓取的 cid，并给出总结缓存键。
+ * 多 P 视频按 cid 隔离缓存，避免 P1 的总结/字幕串到其他分 P。
+ */
+export function selectBilibiliPage(input: {
+  bvid: string
+  videos?: number | null
+  fallbackCid?: number | null
+  pages?: BilibiliPageRef[] | null
+  page: number
+  cid?: number | null
+}): { cid: number; page: number; cacheKey: string } {
+  const pages = input.pages ?? []
+  const selected =
+    (input.cid ? pages.find((item) => item.cid === input.cid) : undefined) ??
+    pages.find((item) => item.page === input.page) ??
+    pages[0]
+
+  const cid = selected?.cid ?? input.fallbackCid ?? 0
+  if (!cid) throw new ConnectorRequestError('无法获取视频分 P 信息，请稍后重试')
+
+  const pageNo = selected?.page ?? input.page
+  const multiPage = (input.videos ?? pages.length) > 1
+  return {
+    cid,
+    page: pageNo,
+    cacheKey: multiPage ? `${input.bvid}_c${cid}` : input.bvid,
+  }
+}
+
+async function resolveVideoRequest(input: string): Promise<BilibiliVideoRequest | null> {
   const trimmed = input.trim()
   if (/^https?:\/\/(?:b23\.tv|bili2233\.cn)\//i.test(trimmed)) {
-    return resolveShortUrl(trimmed)
+    const finalUrl = await resolveShortUrl(trimmed)
+    return finalUrl ? parseBilibiliVideoRequest(finalUrl) : null
   }
-  // 整句话里夹带 BV 号
-  const match = trimmed.match(/BV[0-9A-Za-z]{10}/i)
-  return match ? `BV${match[0].slice(2)}` : null
+  return parseBilibiliVideoRequest(input)
 }
 
-/** 供链接卡片复用：解析 BV / av / 短链 */
-export async function resolveBilibiliVideoId(input: string): Promise<string | null> {
-  return resolveVideoId(input)
+export interface BilibiliVideoTarget {
+  info: BilibiliVideoInfo
+  cid: number
+  page: number
+  cacheKey: string
 }
 
-/** 供链接卡片复用：只取公开视频信息 */
-export async function getVideoInfo(videoId: string): Promise<BilibiliVideoInfo> {
-  return (await fetchVideoInfo(videoId)).info
+/** 供链接卡片复用：解析 BV/短链并取公开视频信息 */
+export async function loadVideoTarget(input: string): Promise<BilibiliVideoTarget | null> {
+  const request = await resolveVideoRequest(input)
+  if (!request) return null
+  return fetchVideoInfo(request)
 }
 
 interface ViewPayload {
@@ -91,14 +166,16 @@ interface ViewPayload {
     duration?: number
     pubdate?: number
     cid?: number
+    videos?: number
+    pages?: Array<{ cid?: number; page?: number; part?: string }>
     owner?: { name?: string; face?: string }
   }
 }
 
-async function fetchVideoInfo(
-  videoId: string,
-): Promise<{ info: BilibiliVideoInfo; cid: number }> {
-  const param = videoId.startsWith('av') ? `aid=${videoId.slice(2)}` : `bvid=${videoId}`
+async function fetchVideoInfo(request: BilibiliVideoRequest): Promise<BilibiliVideoTarget> {
+  const param = request.videoId.startsWith('av')
+    ? `aid=${request.videoId.slice(2)}`
+    : `bvid=${request.videoId}`
   const payload = await fetchConnectorJson<ViewPayload>(
     `https://api.bilibili.com/x/web-interface/view?${param}`,
     { headers: BASE_HEADERS, timeoutMs: 12_000 },
@@ -107,6 +184,21 @@ async function fetchVideoInfo(
   if (payload.code !== 0 || !data?.bvid) {
     throw new ConnectorRequestError(payload.message || '无法获取视频信息，请检查视频是否可访问')
   }
+
+  const picked = selectBilibiliPage({
+    bvid: data.bvid,
+    videos: data.videos,
+    fallbackCid: data.cid,
+    pages: (data.pages ?? [])
+      .filter(
+        (item): item is { cid: number; page: number } =>
+          typeof item.cid === 'number' && typeof item.page === 'number',
+      )
+      .map((item) => ({ cid: item.cid, page: item.page })),
+    page: request.page,
+    cid: request.cid,
+  })
+
   const info: BilibiliVideoInfo = {
     bvid: data.bvid,
     aid: data.aid ?? 0,
@@ -117,11 +209,11 @@ async function fetchVideoInfo(
     cover: data.pic ? absolute(data.pic) : '',
     duration: data.duration ?? 0,
     pubDate: data.pubdate ?? 0,
-    url: `https://www.bilibili.com/video/${data.bvid}`,
-    page: 1,
-    cid: data.cid ?? 0,
+    url: `https://www.bilibili.com/video/${data.bvid}${picked.page > 1 ? `?p=${picked.page}` : ''}`,
+    page: picked.page,
+    cid: picked.cid,
   }
-  return { info, cid: data.cid ?? 0 }
+  return { info, ...picked }
 }
 
 interface PlayerPayload {
@@ -216,16 +308,17 @@ export async function prepareVideoMaterial(
   const connector = enabledConnectorOfType(db, ownerId, 'bilibili')
   if (!connector) return null
 
-  const videoId = await resolveVideoId(input)
-  if (!videoId) throw err.validation('无法识别的 B 站视频地址')
+  const request = await resolveVideoRequest(input)
+  if (!request) throw err.validation('无法识别的 B 站视频地址')
 
   takeRateLimit(`bilibili:${ownerId}`, 15, 60_000)
   const secret = readConnectorSecret(connector)
-  const { info: video, cid } = await fetchVideoInfo(videoId)
+  const target = await fetchVideoInfo(request)
+  const video = target.info
 
   let transcript = ''
   try {
-    transcript = await fetchTranscript(video, cid, secret)
+    transcript = await fetchTranscript(video, target.cid, secret)
   } catch {
     transcript = ''
   }
@@ -239,9 +332,10 @@ export async function prepareVideoMaterial(
     }
   }
 
-  const cached = repo.findSummary(db, ownerId, video.bvid)
+  const cached = repo.findSummary(db, ownerId, target.cacheKey)
   return {
     video,
+    cacheKey: target.cacheKey,
     transcript,
     comments,
     summary: cached?.summary ?? null,
@@ -265,7 +359,7 @@ export type VideoSummarizer = (prompt: string) => Promise<{ text: string; model?
 
 /**
  * 有缓存直接用；没有则调用传入的 summarizer（服务端或客户端各自的模型通道），
- * 总结结果按用户 + bvid 去重缓存。失败只返回原材料，不抛错。
+ * 总结结果按用户 + 视频（多 P 按 cid）去重缓存。失败只返回原材料，不抛错。
  */
 export async function ensureVideoSummary(
   db: DB,
@@ -280,7 +374,7 @@ export async function ensureVideoSummary(
     if (!text) return
     const row = repo.saveSummary(db, {
       ownerId,
-      videoId: material.video.bvid,
+      videoId: material.cacheKey,
       title: material.video.title,
       summary: text,
       model: result.model ?? null,

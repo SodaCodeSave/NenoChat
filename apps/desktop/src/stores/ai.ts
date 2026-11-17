@@ -442,13 +442,13 @@ export const useAiStore = defineStore('ai', () => {
         if (!material.summary?.trim()) {
           const summary = await summarizeLocally(
             buildBilibiliSummaryPrompt(material),
-            material.video.bvid,
+            material.cacheKey,
           )
           if (summary) {
             material.summary = summary
             void connectorApi
               .saveBilibiliSummary({
-                videoId: material.video.bvid,
+                videoId: material.cacheKey,
                 summary,
                 model: persona.modelOverride ?? provider?.model,
               })

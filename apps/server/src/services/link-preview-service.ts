@@ -11,8 +11,7 @@ import {
 } from './connector-service'
 import {
   getCachedSummary,
-  getVideoInfo,
-  resolveBilibiliVideoId,
+  loadVideoTarget,
 } from './bilibili-service'
 
 /** 元信息缓存 7 天，过期后重新抓取 */
@@ -251,9 +250,9 @@ export async function getLinkPreview(
       Boolean(parseBilibiliVideoId(normalized))
 
     if (bilibiliEnabled && looksBilibili) {
-      const videoId = await resolveBilibiliVideoId(normalized)
-      if (videoId) {
-        const video = await getVideoInfo(videoId)
+      const target = await loadVideoTarget(normalized)
+      if (target) {
+        const video = target.info
         const row = repo.saveLinkPreview(db, {
           urlHash,
           url: normalized,
@@ -263,7 +262,7 @@ export async function getLinkPreview(
           image: video.cover || null,
           siteName: '哔哩哔哩',
           author: clean(video.author, 80),
-          videoId: video.bvid,
+          videoId: target.cacheKey,
         })
         return withSummary(db, ownerId, repo.mapLinkPreview(row))
       }
