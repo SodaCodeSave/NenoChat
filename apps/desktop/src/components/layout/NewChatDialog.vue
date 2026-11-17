@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiPersona, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -45,11 +45,18 @@ watch(keyword, (value) => {
   searchTimer = setTimeout(async () => {
     try {
       const found = await userApi.search(q)
+      // 输入已经变了就丢弃这次结果，避免旧结果盖掉新结果
+      if (keyword.value.trim() !== q) return
       results.value = found.users
     } catch {
       results.value = []
     }
   }, 260)
+})
+
+// 弹窗关闭即卸载，未落地的搜索请求连定时器一起清掉
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
 })
 
 const isSelected = (id: string): boolean => selected.value.some((u) => u.id === id)

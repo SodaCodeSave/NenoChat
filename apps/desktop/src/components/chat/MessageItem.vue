@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { type ConnectorActionMeta, type Message, extractUrls } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -9,6 +9,7 @@ import { connectorPresetOf } from '@/config/connectors'
 import { resolveFileUrl } from '@/api/http'
 import { resolveAttachmentUrl } from '@/platform/file-cache'
 import { formatMessageTime } from '@/composables/conversation'
+import { useLongPress } from '@/composables/use-long-press'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -124,7 +125,8 @@ watch(
     const next = Object.fromEntries(resolved.filter((item): item is readonly [string, string] => item !== null))
     if (Object.keys(next).length > 0) cachedUrls.value = { ...cachedUrls.value, ...next }
   },
-  { immediate: true, deep: true },
+  // 消息更新总是整体替换对象，不需要深比较；附件缓存命中与否只看引用
+  { immediate: true },
 )
 
 const attachments = computed(() =>
@@ -151,34 +153,13 @@ const ui = useUiStore()
 
 /* ------------------------- 手机端长按菜单 ------------------------- */
 
-let pressTimer = 0
-let startX = 0
-let startY = 0
-
-function clearPress(): void {
-  window.clearTimeout(pressTimer)
-  pressTimer = 0
-}
+const press = useLongPress((x, y) => emit('context', { id: props.message.id, x, y }))
 
 function onTouchStart(event: TouchEvent): void {
+  // 撤回后的消息与临时占位没有菜单，桌面端也用不到长按
   if (!ui.isMobile || deleted.value || props.ephemeral) return
-  const touch = event.touches[0]
-  if (!touch) return
-  startX = touch.clientX
-  startY = touch.clientY
-  clearPress()
-  pressTimer = window.setTimeout(() => {
-    emit('context', { id: props.message.id, x: startX, y: startY })
-  }, 450)
+  press.onTouchStart(event)
 }
-
-function onTouchMove(event: TouchEvent): void {
-  const touch = event.touches[0]
-  if (!touch || !pressTimer) return
-  if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) clearPress()
-}
-
-onBeforeUnmount(clearPress)
 
 const statusLabel = computed(() => {
   if (props.failed) return '发送失败'
@@ -238,9 +219,9 @@ const liveConnectorLabel = computed(() => {
       :class="qqOwn ? 'flex-row-reverse' : ''"
       @contextmenu="openContextMenu"
       @touchstart.passive="onTouchStart"
-      @touchmove.passive="onTouchMove"
-      @touchend="clearPress"
-      @touchcancel="clearPress"
+      @touchmove.passive="press.onTouchMove"
+      @touchend="press.onTouchEnd"
+      @touchcancel="press.onTouchEnd"
     >
       <!-- 头像列：同一组内只有首条显示 -->
       <div class="w-9 shrink-0">
@@ -446,6 +427,7 @@ const liveConnectorLabel = computed(() => {
         type="button"
         class="rounded p-1 text-muted hover:bg-surface-2 hover:text-text"
         title="引用回复"
+        aria-label="引用回复"
         @click="emit('reply', message.id)"
       >
         <Icon name="reply" :size="14" />
@@ -455,6 +437,7 @@ const liveConnectorLabel = computed(() => {
         type="button"
         class="rounded p-1 text-muted hover:bg-surface-2 hover:text-text"
         title="编辑"
+        aria-label="编辑"
         @click="emit('edit', message.id)"
       >
         <Icon name="edit" :size="14" />
@@ -463,6 +446,7 @@ const liveConnectorLabel = computed(() => {
         type="button"
         class="rounded p-1 text-muted hover:bg-surface-2 hover:text-text"
         title="置顶"
+        aria-label="置顶"
         @click="emit('pin', message.id)"
       >
         <Icon name="pin" :size="14" />
@@ -472,6 +456,7 @@ const liveConnectorLabel = computed(() => {
         type="button"
         class="rounded p-1 text-muted hover:bg-danger/10 hover:text-danger"
         title="撤回"
+        aria-label="撤回"
         @click="emit('recall', message.id)"
       >
         <Icon name="trash" :size="14" />

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -77,12 +77,20 @@ function handleCreated(id: string): void {
   open(id)
 }
 
+/** 点到菜单外或页面滚动时收起右键 / 长按菜单 */
+function close(): void {
+  if (menu.value) closeMenu()
+}
+
 onMounted(() => {
-  const close = (): void => {
-    if (menu.value) closeMenu()
-  }
   window.addEventListener('click', close)
   window.addEventListener('scroll', close, true)
+})
+
+// 组件被 MainLayout 条件挂载，监听不摘会随每次挂载泄漏一对
+onBeforeUnmount(() => {
+  window.removeEventListener('click', close)
+  window.removeEventListener('scroll', close, true)
 })
 </script>
 

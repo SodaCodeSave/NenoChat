@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed } from 'vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -11,6 +11,7 @@ import {
   formatListTime,
   messagePreview,
 } from '@/composables/conversation'
+import { useLongPress } from '@/composables/use-long-press'
 import { useMessagesStore } from '@/stores/messages'
 import { useConversationsStore } from '@/stores/conversations'
 import { useUiStore } from '@/stores/ui'
@@ -42,50 +43,18 @@ function openContextMenu(event: MouseEvent): void {
 
 /* ------------------------- 手机端长按菜单 ------------------------- */
 
-let pressTimer = 0
-let startX = 0
-let startY = 0
-let longPressed = false
-
-function clearPress(): void {
-  window.clearTimeout(pressTimer)
-  pressTimer = 0
-}
+const press = useLongPress((x, y) => emit('context', { id: props.conversation.id, x, y }))
 
 function onTouchStart(event: TouchEvent): void {
   if (!ui.isMobile) return
-  const touch = event.touches[0]
-  if (!touch) return
-  startX = touch.clientX
-  startY = touch.clientY
-  longPressed = false
-  clearPress()
-  pressTimer = window.setTimeout(() => {
-    longPressed = true
-    emit('context', { id: props.conversation.id, x: startX, y: startY })
-    // 部分 WebView 长按后不会再派发 click，兜底恢复，避免吞掉下一次点击
-    window.setTimeout(() => {
-      longPressed = false
-    }, 600)
-  }, 450)
-}
-
-function onTouchMove(event: TouchEvent): void {
-  const touch = event.touches[0]
-  if (!touch || !pressTimer) return
-  if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) clearPress()
+  press.onTouchStart(event)
 }
 
 function onTap(): void {
   // 长按已经弹出菜单，抬手时不要再触发进入会话
-  if (longPressed) {
-    longPressed = false
-    return
-  }
+  if (press.consumeLongPressed()) return
   emit('select', props.conversation.id)
 }
-
-onBeforeUnmount(clearPress)
 
 async function togglePin(event: MouseEvent): Promise<void> {
   event.stopPropagation()
@@ -102,9 +71,9 @@ async function togglePin(event: MouseEvent): Promise<void> {
     ]"
     @click="onTap"
     @touchstart.passive="onTouchStart"
-    @touchmove.passive="onTouchMove"
-    @touchend="clearPress"
-    @touchcancel="clearPress"
+    @touchmove.passive="press.onTouchMove"
+    @touchend="press.onTouchEnd"
+    @touchcancel="press.onTouchEnd"
     @contextmenu="openContextMenu"
   >
     <Avatar

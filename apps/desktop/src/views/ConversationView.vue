@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { AttachmentRef, Message, Sticker } from '@nenochat/shared'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
@@ -72,6 +72,16 @@ function showToast(text: string): void {
   }, 1800)
 }
 
+/** 预览打开期间按 Esc 直接关闭；监听随预览开关挂卸，不常驻 */
+function onPreviewKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') previewUrl.value = null
+}
+
+watch(previewUrl, (url) => {
+  if (url) window.addEventListener('keydown', onPreviewKeydown)
+  else window.removeEventListener('keydown', onPreviewKeydown)
+})
+
 const allMessages = computed(() => messages.messagesOf(conversationId.value))
 const messageBucket = computed(() => messages.buckets[conversationId.value])
 const hasMoreOlder = computed(() => messageBucket.value?.hasMoreOlder ?? false)
@@ -105,9 +115,11 @@ const aiStreamRow = computed(() => {
 
 const typingNames = computed(() => {
   const ids = typing.activeIn(conversationId.value).filter((id) => id !== auth.user?.id)
+  // 成员索引是 O(1) 查表：输入中的每个人都要查一次，不能用数组 find 扫
+  const index = members.memberIndex(conversationId.value)
   return ids
     .map((id) => {
-      const member = members.of(conversationId.value).find((m) => m.userId === id)
+      const member = index.get(id)
       return member ? members.displayName(member) : null
     })
     .filter((name): name is string => Boolean(name))
@@ -159,9 +171,15 @@ async function loadConversation(): Promise<void> {
   if (last) await conversations.markRead(id, last.seq)
 }
 
+/** 记住当前会话：整页卸载时 watch 不会再触发，靠它补清 typing 状态 */
+let activeConversationId = ''
+
 watch(
   conversationId,
-  async () => {
+  async (next, prev) => {
+    // 离开旧会话时把输入状态与兜底定时器一并清掉
+    if (prev && prev !== next) typing.clear(prev)
+    activeConversationId = next
     replyTo.value = null
     editing.value = null
     await loadConversation()
@@ -334,6 +352,14 @@ function mentionFromMobile(userId: string, name: string): void {
   mobileMembersOpen.value = false
   messageInput.value?.insertMention(userId, name)
 }
+
+onBeforeUnmount(() => {
+  // 预览开着直接关页时 watch 来不及摘监听，这里兜底
+  window.removeEventListener('keydown', onPreviewKeydown)
+  window.clearTimeout(toastTimer)
+  // 直接退出会话页时 watch 不会再触发，补清最后一个会话的 typing 状态
+  if (activeConversationId) typing.clear(activeConversationId)
+})
 </script>
 
 <template>
@@ -496,6 +522,7 @@ function mentionFromMobile(userId: string, name: string): void {
         <button
           type="button"
           class="absolute top-4 right-4 rounded-full bg-white/15 p-2 text-white hover:bg-white/25"
+          aria-label="关闭预览"
           @click="previewUrl = null"
         >
           <Icon name="close" :size="18" />

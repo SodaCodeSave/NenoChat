@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import {
   GROUP_AI_DEFAULTS,
   MOMENT_AI_DEFAULTS,
@@ -161,7 +161,8 @@ async function followAll(): Promise<void> {
     for (const persona of targets) {
       await aiApi.updatePersona(persona.id, { proactiveMode: 'global' })
     }
-    await ai.load()
+    // 刚把所有角色的模式改掉，store 的 loaded 守卫会跳过缓存，必须 force 才能拉到新状态
+    await ai.load(true)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '切换失败'
   } finally {
@@ -169,6 +170,11 @@ async function followAll(): Promise<void> {
     confirmFollowAll.value = false
   }
 }
+
+// 「已保存」的闪现定时器随组件清掉，避免切走设置页后还回来改状态
+onBeforeUnmount(() => {
+  if (savedTimer) clearTimeout(savedTimer)
+})
 </script>
 
 <template>

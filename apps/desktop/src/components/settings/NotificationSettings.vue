@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NotificationLevel, NotificationSettings } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -52,9 +52,13 @@ onMounted(async () => {
   await notifications.refreshPermission()
 })
 
+let savedTimer = 0
+let testTimer = 0
+
 function flashSaved(): void {
   savedHint.value = true
-  window.setTimeout(() => {
+  window.clearTimeout(savedTimer)
+  savedTimer = window.setTimeout(() => {
     savedHint.value = false
   }, 2000)
 }
@@ -85,7 +89,8 @@ async function enableSystemNotification(): Promise<void> {
 async function sendTestNotification(): Promise<void> {
   const delivered = await notifications.sendTest()
   testHint.value = delivered ? '已发送，请查看系统通知' : '发送失败，请检查系统通知权限'
-  window.setTimeout(() => {
+  window.clearTimeout(testTimer)
+  testTimer = window.setTimeout(() => {
     testHint.value = ''
   }, 3000)
 }
@@ -97,6 +102,12 @@ function toggle(key: 'desktopEnabled' | 'soundEnabled' | 'showPreview' | 'dndEna
 function setLevel(key: 'dmLevel' | 'groupLevel', value: NotificationLevel): void {
   void patch({ [key]: value } as Partial<NotificationSettings>)
 }
+
+// 提示语定时器随组件清掉，避免切走设置页后还回来改状态
+onBeforeUnmount(() => {
+  window.clearTimeout(savedTimer)
+  window.clearTimeout(testTimer)
+})
 </script>
 
 <template>

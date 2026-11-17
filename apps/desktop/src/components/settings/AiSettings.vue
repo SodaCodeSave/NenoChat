@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { AiPersona, AiProvider } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
@@ -363,7 +363,8 @@ function closeEditor(): void {
 
 async function onPersonaSaved(persona: AiPersona): Promise<void> {
   closeEditor()
-  await ai.load()
+  // 刚做过增改，store 的 loaded 守卫会跳过缓存，必须 force 才会真的回服务端拉
+  await ai.load(true)
   // 新建角色会自动建会话，列表要立刻能看到
   await conversations.refresh().catch(() => undefined)
   notice.value = `已保存角色「${persona.name}」`
@@ -404,6 +405,13 @@ onMounted(() => {
   void load().then(() => {
     void probeMissingBalances()
   })
+})
+
+// 「已保存」的闪现定时器随组件清掉，避免切走设置页后还回来改状态
+onBeforeUnmount(() => {
+  if (segmentTimer) clearTimeout(segmentTimer)
+  if (streamTimer) clearTimeout(streamTimer)
+  if (debugTimer) clearTimeout(debugTimer)
 })
 </script>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { AiPersona, Contact, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -28,6 +28,8 @@ const aliasDraft = ref('')
 
 const friends = computed(() => contacts.friends)
 const friendIds = computed(() => new Set(contacts.friends.map((item) => item.contactUserId)))
+const outgoingIds = computed(() => new Set(contacts.outgoing.map((item) => item.contactUserId)))
+const incomingIds = computed(() => new Set(contacts.incoming.map((item) => item.contactUserId)))
 
 /** 自己的 AI 角色里还没进通讯录的；进群、私聊都不受影响 */
 const personaCandidates = computed(() =>
@@ -55,10 +57,11 @@ function subtitleOf(contact: Contact): string {
   return `@${user.username}${user.bio ? ` · ${user.bio}` : ''}`
 }
 
+/** 搜索结果每行都要判一次关系：Set 一次查表，代替三次数组扫描 */
 function relationWith(userId: string): 'friend' | 'outgoing' | 'incoming' | null {
-  if (contacts.friends.some((item) => item.contactUserId === userId)) return 'friend'
-  if (contacts.outgoing.some((item) => item.contactUserId === userId)) return 'outgoing'
-  if (contacts.incoming.some((item) => item.contactUserId === userId)) return 'incoming'
+  if (friendIds.value.has(userId)) return 'friend'
+  if (outgoingIds.value.has(userId)) return 'outgoing'
+  if (incomingIds.value.has(userId)) return 'incoming'
   return null
 }
 
@@ -177,6 +180,11 @@ watch(keyword, (value) => {
       searching.value = false
     }
   }, 260)
+})
+
+// 搜索防抖定时器随组件清掉，避免切走页面后还回来改结果
+onBeforeUnmount(() => {
+  if (timer) clearTimeout(timer)
 })
 </script>
 

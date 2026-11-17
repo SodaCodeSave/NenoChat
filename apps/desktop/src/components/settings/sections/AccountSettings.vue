@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AvatarUploader from '../AvatarUploader.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
@@ -71,6 +71,11 @@ async function logout(): Promise<void> {
     confirmLogout.value = false
   }
 }
+
+// 「已保存」的闪现定时器随组件清掉，避免切走设置页后还回来改状态
+onBeforeUnmount(() => {
+  if (savedTimer) clearTimeout(savedTimer)
+})
 </script>
 
 <template>

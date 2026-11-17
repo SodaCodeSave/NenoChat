@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConversationsStore } from '@/stores/conversations'
 import { useDebugStore } from '@/stores/debug'
 import { useMembersStore } from '@/stores/members'
+import { messagePreview } from '@/composables/conversation'
 import { collapseAccidentalDuplicates } from '@/composables/message-merge'
 
 const props = defineProps<{
@@ -232,7 +233,8 @@ function senderName(message: Message): string {
     )
   }
   if (message.senderId === auth.user?.id) return auth.user?.displayName ?? '我'
-  const member = members.of(message.conversationId).find((m) => m.userId === message.senderId)
+  // 成员索引是 O(1) 查表：渲染路径每行都会走这里，不能用数组 find 扫
+  const member = members.memberIndex(message.conversationId).get(message.senderId ?? '')
   if (member) return members.displayName(member)
   return members.profiles[message.senderId ?? '']?.displayName ?? '未知用户'
 }
@@ -246,7 +248,7 @@ function senderAvatar(message: Message): string | null {
     )
   }
   if (message.senderId === auth.user?.id) return auth.user?.avatarUrl ?? null
-  const member = members.of(message.conversationId).find((m) => m.userId === message.senderId)
+  const member = members.memberIndex(message.conversationId).get(message.senderId ?? '')
   return member?.user?.avatarUrl ?? null
 }
 
@@ -266,20 +268,13 @@ function senderSeed(message: Message): string {
 
 const messageById = computed(() => new Map(props.messages.map((message) => [message.id, message])))
 
-function previewOf(message: Message): string {
-  if (message.deletedAt) return '消息已撤回'
-  if (message.type === 'image') return '[图片]'
-  if (message.type === 'file') return '[文件]'
-  if (message.type === 'sticker') return '[表情]'
-  return message.content.trim().slice(0, 80) || '（空消息）'
-}
-
 /** 优先用已加载到的原消息（能看到编辑后的内容），否则退回发送时定格的快照 */
 function replyViewOf(message: Message): { id: string; senderName: string; preview: string } | null {
   if (!message.replyToId) return null
   const target = messageById.value.get(message.replyToId)
   if (target) {
-    return { id: target.id, senderName: senderName(target), preview: previewOf(target) }
+    // 预览文案统一走 conversation 里的 messagePreview，别处（会话列表等）也用它
+    return { id: target.id, senderName: senderName(target), preview: messagePreview(target) }
   }
   const snapshot = message.meta?.replyTo
   if (snapshot) {

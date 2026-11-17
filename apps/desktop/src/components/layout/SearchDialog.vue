@@ -145,16 +145,23 @@ function snippet(text: string): string {
   return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat
 }
 
-function indexOf(item: Item): number {
-  return items.value.findIndex((candidate) => {
-    if (candidate.kind !== item.kind) return false
-    if (candidate.kind === 'message' && item.kind === 'message') {
-      return candidate.hit.message.id === item.hit.message.id
-    }
-    if (candidate.kind === 'user' && item.kind === 'user') return candidate.id === item.id
-    if (candidate.kind === 'conversation' && item.kind === 'conversation') return candidate.id === item.id
-    return false
+/** 条目在扁平结果里的稳定键：消息按消息 id，其余按分区 + id */
+function itemKeyOf(item: Item): string {
+  if (item.kind === 'message') return `message:${item.hit.message.id}`
+  return `${item.kind}:${item.id}`
+}
+
+/** items 已按 分区铺平，行高亮与悬停直接查表，避免每行 findIndex */
+const indexByKey = computed(() => {
+  const map = new Map<string, number>()
+  items.value.forEach((item, index) => {
+    map.set(itemKeyOf(item), index)
   })
+  return map
+})
+
+function indexOf(item: Item): number {
+  return indexByKey.value.get(itemKeyOf(item)) ?? -1
 }
 
 watch(
