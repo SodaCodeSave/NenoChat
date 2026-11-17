@@ -60,20 +60,8 @@ CREATE TABLE drafts_next (
   PRIMARY KEY (server_id, conversation_id)
 );
 
-INSERT INTO drafts_next (server_id, conversation_id, content, updated_at)
-SELECT server_id, conversation_id, content, updated_at
-FROM drafts
-WHERE rowid IN (
-  SELECT rowid FROM (
-    SELECT rowid,
-           ROW_NUMBER() OVER (
-             PARTITION BY server_id, conversation_id
-             ORDER BY updated_at DESC, rowid DESC
-           ) AS rn
-    FROM drafts
-  )
-  WHERE rn = 1
-);
+INSERT OR REPLACE INTO drafts_next (server_id, conversation_id, content, updated_at)
+SELECT server_id, conversation_id, content, updated_at FROM drafts ORDER BY updated_at;
 
 DROP TABLE drafts;
 ALTER TABLE drafts_next RENAME TO drafts;

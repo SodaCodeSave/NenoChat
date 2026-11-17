@@ -48,5 +48,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0007_drop_channels.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "drafts_dedupe",
+            sql: include_str!("../migrations/0008_drafts_dedupe.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
