@@ -6,6 +6,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
+import NotificationSettings from '@/components/settings/NotificationSettings.vue'
 import AvatarUploader from '@/components/settings/AvatarUploader.vue'
 import { normalizeServerUrl, useServersStore } from '@/stores/servers'
 import { useAuthStore } from '@/stores/auth'
@@ -351,13 +352,7 @@ async function removeServer(id: string): Promise<void> {
 
         <!-- 通知 -->
         <section v-else-if="currentSection === 'notification'">
-          <h2 class="mb-1 text-[15px] font-semibold text-text-strong">通知</h2>
-          <p class="mb-4 text-[12px] text-muted">
-            桌面通知与免打扰会在 P1 阶段连同系统通知一起接入，当前仅保留结构位置。
-          </p>
-          <div class="rounded-xl border border-dashed border-line p-4 text-[12.5px] text-muted">
-            已有后端通知设置表与接口，界面待接入。
-          </div>
+          <NotificationSettings />
         </section>
 
         <!-- 服务器 -->

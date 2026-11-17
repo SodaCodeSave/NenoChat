@@ -24,5 +24,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0003_ai_proactive_mode.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "notification_index",
+            sql: include_str!("../migrations/0004_notifications.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

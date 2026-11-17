@@ -180,6 +180,7 @@ export interface MemberRow {
   allow: number
   deny: number
   mute_until: number | null
+  notification_level: string | null
   joined_at: number
   left_at: number | null
   updated_at: number
@@ -200,6 +201,7 @@ export async function listMembers(serverId: string, conversationId: string): Pro
     allow: row.allow,
     deny: row.deny,
     muteUntil: row.mute_until,
+    notificationLevel: (row.notification_level as Member['notificationLevel']) ?? null,
     joinedAt: row.joined_at,
     leftAt: row.left_at,
     updatedAt: row.updated_at,
@@ -209,14 +211,15 @@ export async function listMembers(serverId: string, conversationId: string): Pro
 export async function upsertMember(serverId: string, member: Member): Promise<void> {
   await dbExecute(
     `INSERT INTO members
-       (server_id, conversation_id, user_id, role, nickname, allow, deny, mute_until, joined_at, left_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       (server_id, conversation_id, user_id, role, nickname, allow, deny, mute_until, notification_level, joined_at, left_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT(server_id, conversation_id, user_id) DO UPDATE SET
        role = excluded.role,
        nickname = excluded.nickname,
        allow = excluded.allow,
        deny = excluded.deny,
        mute_until = excluded.mute_until,
+       notification_level = excluded.notification_level,
        left_at = excluded.left_at,
        updated_at = excluded.updated_at`,
     [
@@ -228,6 +231,7 @@ export async function upsertMember(serverId: string, member: Member): Promise<vo
       member.allow,
       member.deny,
       member.muteUntil ?? null,
+      member.notificationLevel ?? null,
       member.joinedAt,
       member.leftAt ?? null,
       member.updatedAt,

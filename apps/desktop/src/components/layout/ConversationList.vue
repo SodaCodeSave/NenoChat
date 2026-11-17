@@ -3,17 +3,25 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import Badge from '@/components/ui/Badge.vue'
 import ConversationItem from './ConversationItem.vue'
 import NewChatDialog from './NewChatDialog.vue'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMessagesStore } from '@/stores/messages'
+import { useNotificationsStore } from '@/stores/notifications'
 import { useUiStore } from '@/stores/ui'
 import { conversationTitle } from '@/composables/conversation'
 
 const router = useRouter()
 const conversations = useConversationsStore()
 const messages = useMessagesStore()
+const notifications = useNotificationsStore()
 const ui = useUiStore()
+
+/** 分组标题上的未读汇总，入口角标之外再给一层细分 */
+function unreadOf(items: Array<{ unreadCount?: number | null }>): number {
+  return items.reduce((sum, item) => sum + (item.unreadCount ?? 0), 0)
+}
 
 const props = defineProps<{ mobile?: boolean }>()
 
@@ -99,6 +107,15 @@ onMounted(() => {
       <div class="mb-2 flex items-center justify-between">
         <h1 class="text-[21px] font-semibold text-text-strong">消息</h1>
         <div class="flex items-center gap-1">
+          <span class="relative">
+            <IconButton icon="bell" label="通知中心" :size="19" @click="notifications.togglePanel()" />
+            <span
+              v-if="notifications.unreadTotal > 0"
+              class="pointer-events-none absolute -top-1 -right-1"
+            >
+              <Badge :count="notifications.unreadTotal" />
+            </span>
+          </span>
           <IconButton icon="search" label="全局搜索" :size="19" @click="ui.commandOpen = true" />
           <IconButton icon="plus" label="发起新会话" :size="20" @click="dialogOpen = true" />
         </div>
@@ -138,7 +155,12 @@ onMounted(() => {
       :class="props.mobile ? 'pb-[calc(var(--mobile-tab-h)+var(--safe-bottom)+0.75rem)]' : ''"
     >
       <section v-if="pinnedAi.length > 0" class="mb-1">
-        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">置顶</p>
+        <p class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium tracking-wide text-muted">
+          置顶
+          <span v-if="unreadOf(pinnedAi) > 0" class="ml-auto">
+            <Badge :count="unreadOf(pinnedAi)" tone="muted" />
+          </span>
+        </p>
         <ConversationItem
           v-for="item in pinnedAi"
           :key="item.id"
@@ -150,7 +172,12 @@ onMounted(() => {
       </section>
 
       <section v-if="aiRest.length > 0" class="mb-1">
-        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">AI 角色</p>
+        <p class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium tracking-wide text-muted">
+          AI 角色
+          <span v-if="unreadOf(aiRest) > 0" class="ml-auto">
+            <Badge :count="unreadOf(aiRest)" tone="muted" />
+          </span>
+        </p>
         <ConversationItem
           v-for="item in aiRest"
           :key="item.id"
@@ -162,7 +189,12 @@ onMounted(() => {
       </section>
 
       <section v-if="groups.length > 0" class="mb-1">
-        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">群聊</p>
+        <p class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium tracking-wide text-muted">
+          群聊
+          <span v-if="unreadOf(groups) > 0" class="ml-auto">
+            <Badge :count="unreadOf(groups)" tone="muted" />
+          </span>
+        </p>
         <ConversationItem
           v-for="item in groups"
           :key="item.id"
@@ -174,7 +206,12 @@ onMounted(() => {
       </section>
 
       <section v-if="directs.length > 0" class="mb-1">
-        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">私聊</p>
+        <p class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium tracking-wide text-muted">
+          私聊
+          <span v-if="unreadOf(directs) > 0" class="ml-auto">
+            <Badge :count="unreadOf(directs)" tone="muted" />
+          </span>
+        </p>
         <ConversationItem
           v-for="item in directs"
           :key="item.id"

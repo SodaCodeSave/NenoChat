@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { AiPersona, ChangeRecord, Message, PublicUser } from '@nenochat/shared'
+import type { AiPersona, AppNotification, ChangeRecord, Message, PublicUser } from '@nenochat/shared'
 import { getCursor, setCursor } from '@/db/dao/sync'
 import {
   markConversationDeleted,
@@ -26,6 +26,7 @@ import { useMomentsStore } from './moments'
 import { useAiStore } from './ai'
 import { useDebugStore } from './debug'
 import { useContactsStore } from './contacts'
+import { useNotificationsStore } from './notifications'
 
 /**
  * 同步中枢：既负责把变更落到本地镜像，也负责把实时事件转发给各业务 store。
@@ -62,6 +63,7 @@ export const useSyncStore = defineStore('sync', () => {
     const members = useMembersStore()
     const ai = useAiStore()
     const contacts = useContactsStore()
+    const notifications = useNotificationsStore()
 
     for (const change of changes) {
       const payload = change.payload as Record<string, unknown> | null
@@ -112,6 +114,9 @@ export const useSyncStore = defineStore('sync', () => {
           await messages.applyUpdated(message)
           break
         }
+        case 'notification':
+          notifications.applyUpdated(payload as unknown as AppNotification)
+          break
         case 'ai_persona': {
           const persona = payload as unknown as AiPersona
           if (change.op === 'delete') {
@@ -273,6 +278,14 @@ export const useSyncStore = defineStore('sync', () => {
 
       wsClient.on('contact.updated', (payload) => {
         useContactsStore().upsert(payload.contact)
+      }),
+
+      wsClient.on('notification.created', (payload) => {
+        useNotificationsStore().receive(payload.notification)
+      }),
+
+      wsClient.on('notification.updated', (payload) => {
+        useNotificationsStore().applyUpdated(payload.notification)
       }),
 
       wsClient.on('sync.reset', () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import type { AiPersona, Conversation, Member, PublicUser } from '@nenochat/shared'
+import type { AiPersona, Conversation, Member, NotificationLevel, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import AvatarUploader from '@/components/settings/AvatarUploader.vue'
 import PersonaEditor from '@/components/settings/PersonaEditor.vue'
@@ -54,6 +54,33 @@ const isAdmin = computed(() => me.value?.role === 'admin')
 const canManage = computed(() => isOwner.value || isAdmin.value)
 const isGroup = computed(() => detail.value?.conversation.type === 'group')
 const isAiConversation = computed(() => detail.value?.conversation.type === 'ai')
+
+/** 会话级免打扰：null 表示跟随设置里的全局默认 */
+const notificationLevel = computed<NotificationLevel | null>(
+  () => (detail.value?.me.notificationLevel as NotificationLevel | null) ?? null,
+)
+const notificationOptions: Array<{ key: NotificationLevel | null; label: string; hint: string }> = [
+  { key: null, label: '跟随全局', hint: '使用设置里的默认级别' },
+  { key: 'all', label: '全部消息', hint: '每条消息都提醒' },
+  { key: 'mentions', label: '仅 @ 提及', hint: '只有被 @ 时提醒' },
+  { key: 'none', label: '不接收', hint: '静音本会话' },
+]
+
+async function setNotificationLevel(value: NotificationLevel | null): Promise<void> {
+  if (!me.value) return
+  error.value = null
+  try {
+    const result = await conversationApi.updateMember(conversationId.value, me.value.userId, {
+      notificationLevel: value,
+    })
+    if (detail.value) detail.value.me = result.member
+    const target = conversations.byId.get(conversationId.value)
+    if (target) target.notificationLevel = value
+    notice.value = '已更新通知设置'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '更新失败'
+  }
+}
 
 /** 会话标题：群聊是「群设置」，AI 会话是「AI 设置」 */
 const pageTitle = computed(() => {
@@ -580,6 +607,36 @@ function backToChat(): void {
               </button>
             </section>
           </template>
+
+          <!-- 通知：所有会话类型都能单独设置，AI 会话也不会因为全局开关被忽略 -->
+          <section v-if="me" class="rounded-xl border border-line bg-surface p-4">
+            <p class="text-[13px] font-medium text-text-strong">消息通知</p>
+            <p class="mt-0.5 mb-3 text-[11.5px] text-muted">
+              只影响这个会话的系统提醒，设置页里的免打扰仍然优先
+            </p>
+            <div class="grid grid-cols-2 gap-1.5">
+              <button
+                v-for="option in notificationOptions"
+                :key="option.label"
+                type="button"
+                class="rounded-lg border px-2.5 py-2 text-left transition-colors"
+                :class="
+                  notificationLevel === option.key
+                    ? 'border-accent bg-accent-soft'
+                    : 'border-line bg-surface-2 hover:border-accent/50'
+                "
+                @click="setNotificationLevel(option.key)"
+              >
+                <span
+                  class="block text-[12.5px]"
+                  :class="notificationLevel === option.key ? 'font-medium text-accent' : 'text-text'"
+                >
+                  {{ option.label }}
+                </span>
+                <span class="mt-0.5 block text-[10.5px] text-muted">{{ option.hint }}</span>
+              </button>
+            </div>
+          </section>
         </template>
       </div>
     </div>

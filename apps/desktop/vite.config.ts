@@ -11,6 +11,10 @@ export default defineConfig(() => ({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // 更具体的前缀必须排在前面，否则会被入口别名吞掉
+      '@nenochat/shared/notifications': fileURLToPath(
+        new URL('../../packages/shared/src/notifications', import.meta.url),
+      ),
       '@nenochat/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
     },
   },

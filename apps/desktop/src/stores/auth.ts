@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { NotificationSettings, User, UserSettings } from '@nenochat/shared'
-import { authApi } from '@/api/endpoints'
+import { authApi, notificationApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
@@ -171,6 +171,15 @@ export const useAuthStore = defineStore('auth', () => {
     if (me.notificationSettings) notificationSettings.value = me.notificationSettings
   }
 
+  /** 通知设置沿用服务端既有设置表，保存后回填本地，供通知判定即时使用 */
+  async function updateNotificationSettings(
+    patch: Partial<NotificationSettings>,
+  ): Promise<NotificationSettings> {
+    const result = await notificationApi.updateSettings(patch)
+    notificationSettings.value = result.notificationSettings
+    return result.notificationSettings
+  }
+
   /** 用 refresh token 换新的 access token；并发调用共享同一次请求 */
   async function refreshSession(): Promise<string | null> {
     if (refreshInFlight) return refreshInFlight
@@ -292,6 +301,7 @@ export const useAuthStore = defineStore('auth', () => {
     register,
     registerDevice: devicePayload,
     loadProfile,
+    updateNotificationSettings,
     refreshSession,
     bootstrap,
     clearSession,

@@ -1,15 +1,29 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useConversationsStore } from '@/stores/conversations'
+import { setAppBadge } from '@/platform/badge'
 import NavRail from '@/components/layout/NavRail.vue'
 import ConversationList from '@/components/layout/ConversationList.vue'
 import MobileTabBar from '@/components/layout/MobileTabBar.vue'
 import SearchDialog from '@/components/layout/SearchDialog.vue'
 import TitleBar from '@/components/layout/TitleBar.vue'
+import NotificationCenter from '@/components/notifications/NotificationCenter.vue'
+import NotificationToast from '@/components/notifications/NotificationToast.vue'
 
 const ui = useUiStore()
 const route = useRoute()
+const conversations = useConversationsStore()
+
+// 未读总数同步到任务栏/底座角标；不支持的平台静默跳过
+watch(
+  () => conversations.totalUnread,
+  (count) => {
+    void setAppBadge(count)
+  },
+  { immediate: true },
+)
 
 const isConversation = computed(() => route.name === 'conversation')
 /** 手机端：首页 = 会话列表全屏；进入会话/子页面后只显示内容区 */
@@ -56,6 +70,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       <MobileTabBar v-if="tabVisible" />
 
       <SearchDialog />
+      <NotificationCenter />
+      <NotificationToast />
     </div>
   </div>
 </template>

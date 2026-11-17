@@ -530,7 +530,7 @@ export interface AiGeneration {
 export interface AppNotification {
   id: string
   userId: string
-  type: 'mention' | 'dm' | 'group' | 'ai_proactive' | 'post_like' | 'post_comment' | 'system'
+  type: 'mention' | 'dm' | 'group' | 'group_ai' | 'ai_proactive' | 'post_like' | 'post_comment' | 'system'
   title: string
   body?: string | null
   conversationId?: string | null
