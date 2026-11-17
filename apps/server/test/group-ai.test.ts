@@ -20,9 +20,15 @@ let aliceToken = ''
 let aliceId = ''
 let bobToken = ''
 let bobId = ''
+let providerId = ''
 let personaId = ''
 let botUserId = ''
+let botUserId2 = ''
 let groupId = ''
+let queueGroupId = ''
+
+/** 上游收到的 /chat/completions 请求体，按到达顺序记录 */
+let upstreamBodies: string[] = []
 
 const silentLog = {
   info: () => {},
@@ -60,23 +66,30 @@ interface WireMessage {
   senderType: string
   content: string
   createdAt: number
+  replyToId?: string | null
   meta?: { ai?: { personaId?: string; proactive?: boolean } }
 }
 
-async function listMessages(): Promise<WireMessage[]> {
+async function listMessages(conversationId: string = groupId): Promise<WireMessage[]> {
   const res = await api<{ messages: WireMessage[] }>(
     bobToken,
     'GET',
-    `/conversations/${groupId}/messages?limit=50`,
+    `/conversations/${conversationId}/messages?limit=50`,
   )
   expect(res.status).toBe(200)
   return res.json.messages
 }
 
-async function waitForAiMessages(min: number, timeoutMs = 5_000): Promise<WireMessage[]> {
+async function waitForAiMessages(
+  min: number,
+  timeoutMs = 5_000,
+  conversationId: string = groupId,
+): Promise<WireMessage[]> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const aiMessages = (await listMessages()).filter((message) => message.senderType === 'ai')
+    const aiMessages = (await listMessages(conversationId)).filter(
+      (message) => message.senderType === 'ai',
+    )
     if (aiMessages.length >= min) return aiMessages
     await new Promise((resolve) => setTimeout(resolve, 80))
   }
@@ -94,6 +107,7 @@ beforeAll(async () => {
       raw += chunk
     })
     req.on('end', () => {
+      upstreamBodies.push(raw)
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(
         JSON.stringify({
@@ -154,6 +168,7 @@ beforeAll(async () => {
     keyLocation: 'server',
   })
   expect(provider.status).toBe(200)
+  providerId = provider.json.provider.id
 
   const persona = await api<{ persona: { id: string; userId: string } }>(
     aliceToken,
@@ -281,6 +296,97 @@ describe('群聊主动开口', () => {
       .prepare("SELECT COUNT(*) AS c FROM ai_group_log WHERE conversation_id = ? AND kind = 'autonomy'")
       .get(groupId) as { c: number }
     expect(again.c).toBe(1)
+  })
+})
+
+describe('群聊排队接话', () => {
+  it('一条消息触发两个角色先后接话，后者的提示词带上前者的发言', async () => {
+    const persona2 = await api<{ persona: { id: string; userId: string } }>(
+      aliceToken,
+      'POST',
+      '/ai/personas',
+      {
+        name: '阿蓝',
+        systemPrompt: '你是群里的一员，喜欢接话。',
+        providerId,
+      },
+    )
+    expect(persona2.status).toBe(200)
+    botUserId2 = persona2.json.persona.userId
+
+    const created = await api<{ conversation: { id: string } }>(
+      aliceToken,
+      'POST',
+      '/conversations',
+      {
+        type: 'group',
+        name: '排队群',
+        memberIds: [bobId, botUserId, botUserId2],
+      },
+    )
+    expect(created.status).toBe(200)
+    queueGroupId = created.json.conversation.id
+
+    upstreamBodies = []
+    const sent = await api<{ message: { id: string } }>(bobToken, 'POST', '/messages', {
+      conversationId: queueGroupId,
+      clientNonce: 'queue-chain-1',
+      type: 'text',
+      content: '@小禾 @阿蓝 今天来点新歌推荐？',
+    })
+    expect(sent.status).toBe(200)
+    const triggerId = sent.json.message.id
+
+    const aiMessages = await waitForAiMessages(2, 15_000, queueGroupId)
+    const personaIds = new Set(aiMessages.map((message) => message.meta?.ai?.personaId))
+    expect(personaIds.size).toBe(2)
+    for (const message of aiMessages) {
+      expect(message.replyToId).toBe(triggerId)
+    }
+
+    // 排队串上下文：第二个角色的请求里能看到第一个角色的发言。
+    // 每个角色首轮还会触发一次日程生成的上游调用，这里只看带触发消息原文的回复请求
+    const replyBodies = upstreamBodies.filter((body) => body.includes('新歌推荐'))
+    expect(replyBodies.length).toBe(2)
+    expect(replyBodies[0]).not.toContain('老唱片')
+    expect(replyBodies[1]).toContain('老唱片')
+  })
+
+  it('每条消息最多接话角色设为 1 时只接一个', async () => {
+    const patch = await api(aliceToken, 'PATCH', '/ai/settings', {
+      groupRepliesPerMessage: 1,
+      groupReplyCooldownMinutes: 0,
+    })
+    expect(patch.status).toBe(200)
+
+    // 被点名必回自带 8 秒强制冷却，等上一轮的冷却过了再发
+    const lastAiAt = Math.max(
+      ...(await listMessages(queueGroupId))
+        .filter((message) => message.senderType === 'ai')
+        .map((message) => message.createdAt),
+    )
+    const waitMs = lastAiAt + 8_300 - Date.now()
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs))
+
+    const sent = await api<{ message: { id: string } }>(bobToken, 'POST', '/messages', {
+      conversationId: queueGroupId,
+      clientNonce: 'queue-cap-1',
+      type: 'text',
+      content: '@小禾 @阿蓝 再聊聊巡演？',
+    })
+    expect(sent.status).toBe(200)
+    const triggerId = sent.json.message.id
+
+    const deadline = Date.now() + 8_000
+    let chained: WireMessage[] = []
+    while (Date.now() < deadline) {
+      chained = (await listMessages(queueGroupId)).filter(
+        (message) => message.senderType === 'ai' && message.replyToId === triggerId,
+      )
+      if (chained.length >= 1) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(chained).toHaveLength(1)
   })
 })
 

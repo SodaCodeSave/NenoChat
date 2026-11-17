@@ -104,6 +104,8 @@ export const AI_SKIP_TOKEN = 'SKIP'
 export const GROUP_AI_DEFAULTS = {
   /** 每个角色在每个群里每天的插话上限 */
   repliesPerDay: 12,
+  /** 一条群消息最多几个角色排队接话 */
+  repliesPerMessage: 2,
   /** 每个角色在每个群里每天的主动开口上限 */
   autonomyPerDay: 1,
   /** 两次插话之间的最小间隔，避免跟着每条消息刷屏 */

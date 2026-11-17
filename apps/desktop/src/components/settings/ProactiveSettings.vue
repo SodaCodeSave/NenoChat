@@ -46,6 +46,7 @@ const DEFAULTS: Editable = {
   momentsLikesPerDay: MOMENT_AI_DEFAULTS.likesPerDay,
   groupEnabled: true,
   groupRepliesPerDay: GROUP_AI_DEFAULTS.repliesPerDay,
+  groupRepliesPerMessage: GROUP_AI_DEFAULTS.repliesPerMessage,
   groupReplyProbability: null,
   groupReplyCooldownMinutes: null,
   groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
@@ -401,6 +402,16 @@ async function followAll(): Promise<void> {
           :max="10"
           @update:model-value="
             setNumber('groupAutonomyPerDay', $event, 0, 10, GROUP_AI_DEFAULTS.autonomyPerDay)
+          "
+        />
+      </Field>
+      <Field label="每条消息最多接话角色" hint="角色排队接话，后面的角色能看到前面角色说的话">
+        <NumberInput
+          :model-value="form.groupRepliesPerMessage"
+          :min="1"
+          :max="5"
+          @update:model-value="
+            setNumber('groupRepliesPerMessage', $event, 1, 5, GROUP_AI_DEFAULTS.repliesPerMessage)
           "
         />
       </Field>

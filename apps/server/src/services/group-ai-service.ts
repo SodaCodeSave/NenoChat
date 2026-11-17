@@ -51,8 +51,17 @@ import { hub } from '../ws/hub'
 
 const TZ_OFFSET_MIN = serverTzOffsetMinutes()
 const STALE_PENDING_MS = 5 * 60_000
-const MAX_REPLIES_PER_MESSAGE = 2
 const RECENT_LIMIT = 30
+
+/** 一轮发言的结局；dispatched 表示已派发给本机密钥的客户端代跑 */
+type TurnOutcome = 'sent' | 'dispatched' | 'skipped' | 'failed' | 'no_provider'
+
+/** 排队接话时，轮到下一个角色之前的随机歇口气区间 */
+const CHAIN_GAP_MIN_MS = 1_000
+const CHAIN_GAP_MAX_MS = 3_000
+/** 本机密钥代跑：等这一轮落库（或明确跳过）再派发下一个角色，单轮最长等这么久 */
+const TURN_SETTLE_POLL_MS = 500
+const TURN_SETTLE_TIMEOUT_MS = 90_000
 
 interface GroupPersonaMember {
   persona: aiRepo.PersonaRow
@@ -544,12 +553,12 @@ function appendSegments(
 
 /* ------------------------------ 生成与派发 ------------------------------ */
 
-async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
+async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
   const provider = input.member.provider
   if (!provider) {
     finishLog(db, input.logId, 'skipped', { reason: 'no_provider' })
     resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
-    return
+    return 'no_provider'
   }
 
   // 服务端托管密钥时顺手补齐当天日程；本机密钥由客户端生成时自己注入
@@ -564,7 +573,7 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
     if (!hub().isOnline(input.member.persona.owner_id)) {
       finishLog(db, input.logId, 'skipped', { reason: 'local_key_offline' })
       resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'local_key_offline', false)
-      return
+      return 'skipped'
     }
     hub().sendToUser(input.member.persona.owner_id, 'ai.group.due', {
       logId: input.logId,
@@ -577,7 +586,7 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
       dueAt: now(),
     })
     finishLog(db, input.logId, 'dispatched')
-    return
+    return 'dispatched'
   }
 
   let reply: string
@@ -607,13 +616,13 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
     const reason = e instanceof Error ? e.message.slice(0, 160) : 'generate_failed'
     finishLog(db, input.logId, 'failed', { reason })
     resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
-    return
+    return 'failed'
   }
 
   if (isSkipReply(reply)) {
     finishLog(db, input.logId, 'skipped', { reason: 'skip' })
     resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
-    return
+    return 'skipped'
   }
 
   const settings = aiRepo.readGlobalSettings(db, input.member.persona.owner_id)
@@ -624,12 +633,13 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<void> {
   if (segments.length === 0) {
     finishLog(db, input.logId, 'skipped', { reason: 'empty_reply' })
     resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
-    return
+    return 'skipped'
   }
 
   const firstId = appendSegments(db, input, segments, model)
   finishLog(db, input.logId, 'sent', { messageId: firstId })
   resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
+  return 'sent'
 }
 
 /* ------------------------------ 对外入口 ------------------------------ */
@@ -643,7 +653,28 @@ export interface GroupMessageTrigger {
   mentionAll?: boolean
 }
 
-/** 用户发了一条群消息：规则预筛后决定谁接话 */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 本机密钥代跑的轮次是否已收尾（落库、跳过或失败），记录没了也当收尾 */
+function isSettledStatus(status: string | undefined): boolean {
+  return !status || status === 'sent' || status === 'skipped' || status === 'failed'
+}
+
+/** 等一个已派发的轮次收尾，超时则放行，避免卡死整条排队链 */
+async function waitForTurnSettled(db: DB, logId: string): Promise<void> {
+  const deadline = now() + TURN_SETTLE_TIMEOUT_MS
+  while (now() < deadline) {
+    const row = db
+      .prepare('SELECT status FROM ai_group_log WHERE id = ?')
+      .get(logId) as { status: string } | undefined
+    if (isSettledStatus(row?.status)) return
+    await delay(TURN_SETTLE_POLL_MS)
+  }
+}
+
+/** 用户发了一条群消息：规则预筛后决定谁接话，多个角色按序排队接话 */
 export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger): Promise<void> {
   const conversation = conversationsRepo.findById(db, trigger.conversationId)
   if (!conversation || conversation.type !== 'group' || conversation.deleted_at !== null) return
@@ -660,10 +691,15 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
   let fired = 0
 
   for (const member of members) {
-    if (fired >= MAX_REPLIES_PER_MESSAGE) break
-
     const mapped = aiRepo.mapPersona(member.persona)
     const settings = aiRepo.readGlobalSettings(db, member.persona.owner_id)
+    if (fired >= settings.groupRepliesPerMessage) break
+
+    // 排队接话：已经有人说过话了，轮到下一个角色前先歇口气
+    if (fired > 0) {
+      await delay(CHAIN_GAP_MIN_MS + Math.random() * (CHAIN_GAP_MAX_MS - CHAIN_GAP_MIN_MS))
+    }
+
     const mentioned =
       trigger.mentionAll ||
       Boolean(trigger.mentions?.includes(member.botUserId)) ||
@@ -732,8 +768,9 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
     })
 
     fired += 1
+    let outcome: TurnOutcome = 'failed'
     try {
-      await runTurn(db, {
+      outcome = await runTurn(db, {
         conversationId: trigger.conversationId,
         member,
         kind: 'reply',
@@ -752,6 +789,12 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       finishLog(db, reserved.logId, 'failed', {
         reason: e instanceof Error ? e.message.slice(0, 160) : 'unknown',
       })
+    }
+
+    // 本机密钥是客户端代跑：等这一轮收尾再轮到下一个角色，
+    // 这样下一个角色的上下文里才能看到这一轮的发言
+    if (outcome === 'dispatched') {
+      await waitForTurnSettled(db, reserved.logId)
     }
   }
 }

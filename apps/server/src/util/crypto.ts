@@ -48,10 +48,15 @@ export function decryptSecret(payload: string): string {
   if (!ivPart || !tagPart || !dataPart) throw new Error('密文格式不合法')
   const decipher = createDecipheriv('aes-256-gcm', deriveKey(), Buffer.from(ivPart, 'base64url'))
   decipher.setAuthTag(Buffer.from(tagPart, 'base64url'))
-  return Buffer.concat([
-    decipher.update(Buffer.from(dataPart, 'base64url')),
-    decipher.final(),
-  ]).toString('utf8')
+  try {
+    return Buffer.concat([
+      decipher.update(Buffer.from(dataPart, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8')
+  } catch {
+    // AES-GCM 认证失败基本只有一种原因：SECRET_KEY 与加密时不一致
+    throw new Error('托管密钥解密失败：SECRET_KEY 与加密时不一致，请重新保存该密钥')
+  }
 }
 
 /** 把密钥处理成 abcd****wxyz，用于接口回显 */

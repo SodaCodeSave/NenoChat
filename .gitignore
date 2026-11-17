@@ -12,12 +12,26 @@ apps/server/.env
 # 客户端构建产物
 apps/desktop/dist/
 apps/desktop/src-tauri/target/
-apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/gen/*
+# Android 工程由 Tauri 生成后需手工维护（release 放行明文 http 等），单独跟踪
+!apps/desktop/src-tauri/gen/android
+apps/desktop/src-tauri/gen/android/*
+!apps/desktop/src-tauri/gen/android/app
+apps/desktop/src-tauri/gen/android/app/*
+!apps/desktop/src-tauri/gen/android/app/build.gradle.kts
 
 # 本地环境
 .env
 .env.local
 *.local
 
+# 部署
+deploy/nas.env
+.deploy/
+
 # 计划与临时
 .workbuddy/
+deploy/
+
+# ZCode 本地数据
+.zcode/
