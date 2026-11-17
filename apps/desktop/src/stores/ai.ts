@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   buildChatMessages,
+  buildBilibiliSummaryPrompt,
   buildCompactionPrompt,
   buildGroupPrompt,
   buildMomentCommentPrompt,
@@ -13,9 +14,11 @@ import {
   cutStreamingSegments,
   dayKeyOf,
   estimateTokens,
+  findBilibiliInput,
   isSkipReply,
   minutesOfLocalDay,
   parseScheduleItems,
+  renderBilibiliContext,
   segmentDelay,
   SEGMENT_REPLY_DEFAULTS,
   splitSegments,
@@ -373,6 +376,8 @@ export const useAiStore = defineStore('ai', () => {
     quoted?: string | null,
     images?: TurnImage[],
     includeImages?: boolean,
+    provider?: AiProvider | null,
+    apiKey?: string | null,
   ): Promise<{ chat: ChatMessage[]; memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } }> {
     let memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } = { summaries: [], facts: [] }
     try {
@@ -392,17 +397,67 @@ export const useAiStore = defineStore('ai', () => {
 
     /**
      * 本机密钥模式下服务端不参与生成，连接器资料在这里取好再注入；
-     * 搜索失败不影响回复。
+     * 任何一步失败都不影响回复。
      */
-    let connectorContext: string | null = null
+    const contextBlocks: string[] = []
+
+    const videoInput = findBilibiliInput(userInput)
+    if (videoInput) {
+      try {
+        const { material } = await connectorApi.prepareBilibili(videoInput)
+        // 服务端没有缓存时用本机密钥总结一次，结果回传服务端按视频去重
+        if (!material.summary?.trim() && provider && apiKey) {
+          const summaryModel = persona.modelOverride ?? provider.model
+          try {
+            const result = await invoke<AiCompleteResult>('ai_complete', {
+              baseUrl: provider.baseUrl,
+              apiKey,
+              model: summaryModel,
+              messages: [{ role: 'user', content: buildBilibiliSummaryPrompt(material) }],
+              temperature: 0.3,
+              maxTokens: 700,
+              jsonMode: false,
+            })
+            const summary = result.content.trim()
+            if (summary) {
+              material.summary = summary
+              void connectorApi
+                .saveBilibiliSummary({
+                  videoId: material.video.bvid,
+                  summary,
+                  model: summaryModel,
+                })
+                .catch(() => undefined)
+            }
+            reportUsage({
+              conversationId,
+              personaId: persona.id,
+              providerId: provider.id,
+              kind: 'summary',
+              refId: material.video.bvid,
+              model: summaryModel,
+              usage: result.usage,
+            })
+          } catch {
+            /* 总结失败时仍注入标题、简介与热评 */
+          }
+        }
+        contextBlocks.push(renderBilibiliContext(material))
+      } catch {
+        /* 抓取失败不注入 */
+      }
+    }
+
     if (shouldSearchWeb(userInput)) {
       try {
         const { results } = await connectorApi.search(userInput)
-        connectorContext = renderWebSearchContext(userInput, results) || null
+        const block = renderWebSearchContext(userInput, results)
+        if (block) contextBlocks.push(block)
       } catch {
-        connectorContext = null
+        /* 搜索失败不注入 */
       }
     }
+    const connectorContext = contextBlocks.length > 0 ? contextBlocks.join('\n\n') : null
 
     const chat = buildChatMessages({
       persona,
@@ -561,6 +616,8 @@ export const useAiStore = defineStore('ai', () => {
       quoted,
       turnImages,
       !provider.visionModel,
+      provider,
+      apiKey,
     )
 
     streaming.value[conversationId] = { generationId, text: '' }

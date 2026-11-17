@@ -62,6 +62,15 @@ export function findBilibiliVideoId(text: string): string | null {
   return null
 }
 
+/** 从消息里找出要交给服务端抓取的 B 站输入：完整链接（含短链）或裸 BV 号 */
+export function findBilibiliInput(text: string): string | null {
+  for (const url of extractUrls(text)) {
+    if (parseBilibiliVideoId(url)) return url
+    if (/^https?:\/\/(?:b23\.tv|bili2233\.cn)\//i.test(url)) return url
+  }
+  return findBilibiliVideoId(text)
+}
+
 /**
  * 搜索触发词：只在用户明确表达「要查外部信息」时联网。
  * 不做全量搜索，避免每条消息都产生费用与额外延迟。

@@ -920,7 +920,29 @@ export async function generateOnServer(
   )
 
   // 连接器资料（网页搜索 / B 站视频）只进提示词，失败不影响回复
-  const connectorContext = await buildConnectorContext(db, input.userId, input.content)
+  const summaryModel = persona.model_override ?? provider.model
+  const connectorContext = await buildConnectorContext(db, input.userId, input.content, {
+    summarize: async (prompt) => {
+      const result = await callUpstream({
+        baseUrl: provider.base_url,
+        apiKey,
+        model: summaryModel,
+        temperature: 0.3,
+        maxTokens: 700,
+        messages: [{ role: 'user', content: prompt }],
+        record: {
+          db,
+          ownerId: input.userId,
+          conversationId: input.conversationId,
+          personaId: persona.id,
+          providerId: provider.id,
+          kind: 'summary',
+          refId: input.conversationId,
+        },
+      })
+      return { text: result.content, model: summaryModel }
+    },
+  })
 
   const chatMessages = buildChatMessages({
     persona: aiRepo.mapPersona(persona),

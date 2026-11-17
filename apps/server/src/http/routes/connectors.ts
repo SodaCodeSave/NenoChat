@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import {
+  BilibiliPrepareSchema,
+  BilibiliSummaryQuerySchema,
+  BilibiliSummarySaveSchema,
   ConnectorCreateSchema,
   ConnectorPatchSchema,
   ConnectorSearchSchema,
@@ -9,6 +12,8 @@ import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import * as connectorService from '../../services/connector-service'
+import * as bilibiliService from '../../services/bilibili-service'
+import { err } from '../../util/errors'
 
 export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
@@ -55,5 +60,29 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     const input = parse(ConnectorSearchSchema, request.body)
     const results = await connectorService.searchWithEnabledConnector(db, userId, input.query)
     return { results }
+  })
+
+  /** 抓取 B 站视频信息、字幕/热评与已缓存的总结 */
+  app.post('/connectors/bilibili/prepare', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(BilibiliPrepareSchema, request.body)
+    const material = await bilibiliService.prepareVideoMaterial(db, userId, input.url)
+    if (!material) throw err.validation('还没有启用 B 站连接器')
+    return { material }
+  })
+
+  /** 本机密钥模式：客户端本地总结后回传缓存，按视频去重 */
+  app.post('/connectors/bilibili/summaries', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(BilibiliSummarySaveSchema, request.body)
+    bilibiliService.saveClientSummary(db, userId, input)
+    return { ok: true }
+  })
+
+  /** 卡片「查看总结」读取缓存 */
+  app.get('/connectors/bilibili/summary', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(BilibiliSummaryQuerySchema, request.query)
+    return bilibiliService.getCachedSummary(db, userId, input.videoId)
   })
 }
