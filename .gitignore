@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+target/
+*.log
+.DS_Store
+
+# 服务端运行时数据
+apps/server/data/
+apps/server/.env
+
+# 客户端构建产物
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# 本地环境
+.env
+.env.local
+*.local
+
+# 计划与临时
+.workbuddy/

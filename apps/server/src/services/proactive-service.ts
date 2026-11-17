@@ -1,0 +1,468 @@
+import { Cron } from 'croner'
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
+import { PROACTIVE_DEFAULTS, buildProactivePrompt, splitSegments, ulid, type ProactiveConfig } from '@nenochat/shared'
+import type { DB } from '../db'
+import { withTx } from '../db/tx'
+import * as aiRepo from '../db/repo/ai'
+import * as conversationsRepo from '../db/repo/conversations'
+import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
+import { createNotification } from './notification-service'
+import {
+  decideProactiveFire,
+  formatLocalTime,
+  localDayKey,
+  serverTzOffsetMinutes,
+  type ProactiveDecision,
+} from './proactive-rules'
+import { hub } from '../ws/hub'
+
+/**
+ * 主动消息调度。
+ *
+ * 判定与生成都在服务端完成，客户端只负责展示 —— 这样多端看到的是同一条，
+ * 不会出现「手机发一条、电脑又发一条」。
+ * 密钥在本机（keyLocation='local'）的角色服务端发不了，改为通过 WS 派发给在线客户端代跑。
+ */
+
+const STALE_PENDING_MS = 10 * 60_000
+const SCAN_INTERVAL_CRON = PROACTIVE_DEFAULTS.scanIntervalCron
+const KICKOFF_DELAY_MS = 30_000
+
+/** 服务端时区偏移（分钟），默认取运行环境；东八区为 480 */
+const TZ_OFFSET_MIN = serverTzOffsetMinutes()
+
+interface CandidateRow {
+  persona_id: string
+  owner_id: string
+  proactive_config: string | null
+  proactive_enabled: number
+  proactive_mode: string
+  /** 主人那条全局设置，跟随全局的角色以它为准 */
+  global_config: string | null
+  global_enabled: number | null
+  conversation_id: string
+  conversation_created_at: number
+  last_user_message_at: number | null
+  last_proactive_at: number | null
+  sent_today: number
+  key_location: string | null
+}
+
+function parsePersonaConfig(row: CandidateRow): ProactiveConfig {
+  const fallback: ProactiveConfig = {
+    enabled: row.proactive_enabled === 1,
+    minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
+    maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
+  }
+  if (!row.proactive_config) return fallback
+  try {
+    const parsed = JSON.parse(row.proactive_config) as Partial<ProactiveConfig>
+    return {
+      enabled: parsed.enabled ?? fallback.enabled,
+      minIdleHours: parsed.minIdleHours ?? fallback.minIdleHours,
+      maxPerDay: parsed.maxPerDay ?? fallback.maxPerDay,
+      windowStart: parsed.windowStart,
+      windowEnd: parsed.windowEnd,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function parseGlobalConfig(row: CandidateRow): ProactiveConfig {
+  const fallback: ProactiveConfig = {
+    enabled: row.global_enabled === 1,
+    minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
+    maxPerDay: PROACTIVE_DEFAULTS.maxPerDay,
+  }
+  if (!row.global_config) return fallback
+  try {
+    const parsed = JSON.parse(row.global_config) as Partial<ProactiveConfig>
+    return {
+      enabled: fallback.enabled,
+      minIdleHours: parsed.minIdleHours ?? fallback.minIdleHours,
+      maxPerDay: parsed.maxPerDay ?? fallback.maxPerDay,
+      windowStart: parsed.windowStart,
+      windowEnd: parsed.windowEnd,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+/** 角色自己配就用自己那份，跟随全局就用主人那条总设置 */
+function resolveConfig(row: CandidateRow): ProactiveConfig {
+  return row.proactive_mode === 'custom' ? parsePersonaConfig(row) : parseGlobalConfig(row)
+}
+
+/** 一条 SQL 把所有候选与其判定所需的计数带出来，避免每个角色查五次 */
+function listCandidates(db: DB, dayKey: string): CandidateRow[] {
+  return db
+    .prepare(
+      `SELECT p.id                AS persona_id,
+              p.owner_id          AS owner_id,
+              p.proactive_config  AS proactive_config,
+              p.proactive_enabled AS proactive_enabled,
+              p.proactive_mode    AS proactive_mode,
+              g.proactive_config  AS global_config,
+              g.proactive_enabled AS global_enabled,
+              c.id                AS conversation_id,
+              c.created_at        AS conversation_created_at,
+              (SELECT MAX(m.created_at) FROM messages m
+                WHERE m.conversation_id = c.id
+                  AND m.sender_id = p.owner_id
+                  AND m.deleted_at IS NULL)                              AS last_user_message_at,
+              (SELECT MAX(l.fired_at) FROM ai_proactive_log l
+                WHERE l.conversation_id = c.id
+                  AND l.status IN ('sent', 'dispatched'))                 AS last_proactive_at,
+              (SELECT COUNT(*) FROM ai_proactive_log l2
+                WHERE l2.conversation_id = c.id
+                  AND l2.day_key = ?
+                  AND l2.status IN ('pending', 'dispatched', 'sent'))      AS sent_today,
+              (SELECT pr.key_location FROM ai_sessions s
+                JOIN ai_providers pr ON pr.id = s.provider_id AND pr.deleted_at IS NULL
+                WHERE s.conversation_id = c.id LIMIT 1)                   AS key_location
+       FROM ai_personas p
+       JOIN conversations c
+         ON c.type = 'ai' AND c.ai_persona_id = p.id AND c.deleted_at IS NULL
+       LEFT JOIN ai_global_settings g ON g.user_id = p.owner_id
+       WHERE p.deleted_at IS NULL
+         AND p.in_contacts = 1
+         AND (
+           (p.proactive_mode = 'custom' AND p.proactive_enabled = 1)
+           OR (p.proactive_mode <> 'custom' AND g.proactive_enabled = 1)
+         )`,
+    )
+    .all(dayKey) as CandidateRow[]
+}
+
+/**
+ * 先占位再生成：唯一索引 (conversation_id, day_key, slot) 保证
+ * 多实例同时扫描时只有一个能抢到这一格。
+ */
+export function reserveSlot(
+  db: DB,
+  input: {
+    conversationId: string
+    userId: string
+    personaId: string
+    dayKey: string
+    maxPerDay: number
+    now: number
+  },
+): number | null {
+  return withTx(db, () => {
+    const used = db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM ai_proactive_log
+         WHERE conversation_id = ? AND day_key = ?
+           AND status IN ('pending', 'dispatched', 'sent')`,
+      )
+      .get(input.conversationId, input.dayKey) as { c: number }
+
+    if (used.c >= input.maxPerDay) return null
+    const slot = used.c
+
+    try {
+      db.prepare(
+        `INSERT INTO ai_proactive_log
+           (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL)`,
+      ).run(ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, slot, input.now)
+      return slot
+    } catch {
+      // 唯一索引冲突：另一个实例已经抢到同一格
+      return null
+    }
+  })
+}
+
+function finishSlot(
+  db: DB,
+  input: {
+    conversationId: string
+    dayKey: string
+    slot: number
+    status: 'sent' | 'dispatched' | 'failed' | 'skipped'
+    messageId?: string | null
+    reason?: string | null
+  },
+): void {
+  db.prepare(
+    `UPDATE ai_proactive_log SET status = ?, message_id = ?, reason = ?
+     WHERE conversation_id = ? AND day_key = ? AND slot = ?`,
+  ).run(
+    input.status,
+    input.messageId ?? null,
+    input.reason ?? null,
+    input.conversationId,
+    input.dayKey,
+    input.slot,
+  )
+}
+
+/** 记忆摘要 + 事实，作为「你记得的事」注入主动消息提示词 */
+function buildMemoryDigest(db: DB, conversationId: string): string {
+  const summary = aiRepo.latestSummary(db, conversationId)
+  const facts = aiRepo.listFacts(db, conversationId).map(aiRepo.mapFact)
+  return [
+    summary?.summary ?? '',
+    ...facts.map((fact) => `${fact.key}: ${fact.value}`),
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n')
+}
+
+/** 服务端密钥：直接生成并落库（离线也能发） */
+async function fireOnServer(
+  db: DB,
+  candidate: CandidateRow,
+  persona: aiRepo.PersonaRow,
+  decision: ProactiveDecision,
+  dayKey: string,
+  log: FastifyBaseLogger,
+): Promise<void> {
+  const config = resolveConfig(candidate)
+  const slot = reserveSlot(db, {
+    conversationId: candidate.conversation_id,
+    userId: candidate.owner_id,
+    personaId: persona.id,
+    dayKey,
+    maxPerDay: config.maxPerDay,
+    now: Date.now(),
+  })
+  if (slot === null) return
+
+  const session = aiRepo.findSession(db, candidate.conversation_id)
+  const provider = session ? aiRepo.findProvider(db, session.provider_id) : undefined
+  if (!provider) {
+    finishSlot(db, {
+      conversationId: candidate.conversation_id,
+      dayKey,
+      slot,
+      status: 'skipped',
+      reason: 'no_provider',
+    })
+    return
+  }
+
+  const mapped = aiRepo.mapPersona(persona)
+  const messages = buildProactivePrompt({
+    persona: mapped,
+    memoryDigest: buildMemoryDigest(db, candidate.conversation_id),
+    idleHours: decision.idleHours,
+    localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
+  })
+
+  let reply: string
+  try {
+    reply = await callUpstream({
+      baseUrl: provider.base_url,
+      apiKey: resolveServerApiKey(provider),
+      model: persona.model_override ?? provider.model,
+      temperature: persona.temperature ?? provider.temperature,
+      maxTokens: Math.min(provider.max_tokens, 400),
+      messages,
+    })
+  } catch (e) {
+    log.warn({ err: e, personaId: persona.id }, '主动消息生成失败')
+    finishSlot(db, {
+      conversationId: candidate.conversation_id,
+      dayKey,
+      slot,
+      status: 'failed',
+      reason: e instanceof Error ? e.message.slice(0, 200) : 'generate_failed',
+    })
+    return
+  }
+
+  // 主动搭话最多两条，多了像刷屏
+  const settings = aiRepo.readGlobalSettings(db, candidate.owner_id)
+  const segments = splitSegments(reply, {
+    enabled: settings.segmentEnabled,
+    pattern: settings.segmentPattern,
+  }).slice(0, 2)
+  if (segments.length === 0) {
+    finishSlot(db, {
+      conversationId: candidate.conversation_id,
+      dayKey,
+      slot,
+      status: 'skipped',
+      reason: 'empty_reply',
+    })
+    return
+  }
+
+  const generationId = `proactive-${candidate.conversation_id}-${dayKey}-${slot}`
+  const messageIds: string[] = []
+  for (let index = 0; index < segments.length; index++) {
+    const message = appendAiSegment(db, candidate.conversation_id, {
+      generationId,
+      index,
+      content: segments[index]!,
+      clientNonce: `${generationId}-${index}`,
+      model: persona.model_override ?? provider.model,
+      totalSegments: segments.length,
+      personaId: persona.id,
+      proactive: true,
+    })
+    messageIds.push(message.id)
+  }
+
+  db.prepare('UPDATE ai_personas SET last_proactive_at = ? WHERE id = ?').run(Date.now(), persona.id)
+  finishSlot(db, {
+    conversationId: candidate.conversation_id,
+    dayKey,
+    slot,
+    status: 'sent',
+    messageId: messageIds[0] ?? null,
+  })
+
+  createNotification(db, {
+    userId: candidate.owner_id,
+    type: 'ai_proactive',
+    title: persona.name,
+    body: segments.join(' ').slice(0, 120),
+    conversationId: candidate.conversation_id,
+    messageId: messageIds[0] ?? null,
+  })
+}
+
+/** 本机密钥：服务端只派发，由在线客户端调用本地上游生成 */
+function dispatchToClient(
+  db: DB,
+  candidate: CandidateRow,
+  persona: aiRepo.PersonaRow,
+  decision: ProactiveDecision,
+  dayKey: string,
+): void {
+  if (!hub().isOnline(candidate.owner_id)) return
+
+  const config = resolveConfig(candidate)
+  const slot = reserveSlot(db, {
+    conversationId: candidate.conversation_id,
+    userId: candidate.owner_id,
+    personaId: persona.id,
+    dayKey,
+    maxPerDay: config.maxPerDay,
+    now: Date.now(),
+  })
+  if (slot === null) return
+
+  hub().sendToUser(candidate.owner_id, 'ai.proactive.due', {
+    conversationId: candidate.conversation_id,
+    personaId: persona.id,
+    hint: decision.idleHours >= 24 ? '很久没聊天了，找个轻松的话题' : undefined,
+    dueAt: Date.now(),
+  })
+
+  finishSlot(db, {
+    conversationId: candidate.conversation_id,
+    dayKey,
+    slot,
+    status: 'dispatched',
+  })
+}
+
+/** 跑一轮扫描。导出以便测试与手动触发。 */
+export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
+  const now = Date.now()
+  const dayKey = localDayKey(now, TZ_OFFSET_MIN)
+
+  // 上次进程崩溃留下的 pending 会一直占着配额，先释放
+  db.prepare(
+    `UPDATE ai_proactive_log SET status = 'failed', reason = 'stale_pending'
+     WHERE status = 'pending' AND fired_at < ?`,
+  ).run(now - STALE_PENDING_MS)
+
+  const candidates = listCandidates(db, dayKey)
+  if (candidates.length === 0) return
+
+  for (const candidate of candidates) {
+    const persona = aiRepo.findPersona(db, candidate.persona_id)
+    if (!persona) continue
+
+    const config = resolveConfig(candidate)
+    const serverCanRun = candidate.key_location === 'server'
+    const ownerOnline = hub().isOnline(candidate.owner_id)
+
+    const decision = decideProactiveFire({
+      now,
+      conversationCreatedAt: candidate.conversation_created_at,
+      lastUserMessageAt: candidate.last_user_message_at,
+      lastProactiveAt: candidate.last_proactive_at,
+      sentToday: candidate.sent_today,
+      config,
+      tzOffsetMinutes: TZ_OFFSET_MIN,
+      serverCanRun,
+      ownerOnline,
+    })
+
+    if (!decision.fire) continue
+
+    try {
+      if (serverCanRun) {
+        await fireOnServer(db, candidate, persona, decision, dayKey, log)
+      } else {
+        dispatchToClient(db, candidate, persona, decision, dayKey)
+      }
+    } catch (e) {
+      log.error({ err: e, personaId: persona.id }, '主动消息派发异常')
+    }
+  }
+}
+
+/**
+ * 启动调度器，返回停止函数。
+ * 测试环境不启动（否则定时器会拖住 vitest 进程）。
+ */
+export function startProactiveScheduler(app: FastifyInstance, db: DB): () => void {
+  if (process.env.NODE_ENV === 'test') return () => {}
+
+  // protect: 上一轮没跑完就跳过这一轮，避免长耗时生成叠加
+  const job = new Cron(SCAN_INTERVAL_CRON, { protect: true }, () => {
+    void scanOnce(db, app.log).catch((e) => {
+      app.log.error({ err: e }, '主动消息扫描失败')
+    })
+  })
+
+  // 刚启动时不必等下一个 5 分钟窗口
+  const kickoff = setTimeout(() => {
+    void scanOnce(db, app.log).catch(() => undefined)
+  }, KICKOFF_DELAY_MS)
+
+  return () => {
+    job.stop()
+    clearTimeout(kickoff)
+  }
+}
+
+/** 供测试直接调用：不经过定时器判断当前角色是否该发 */
+export function evaluateCandidate(
+  db: DB,
+  conversationId: string,
+  now = Date.now(),
+): { decision: ProactiveDecision; persona: aiRepo.PersonaRow | null } | null {
+  const conversation = conversationsRepo.findById(db, conversationId)
+  if (!conversation?.ai_persona_id) return null
+  const persona = aiRepo.findPersona(db, conversation.ai_persona_id)
+  if (!persona) return null
+
+  const dayKey = localDayKey(now, TZ_OFFSET_MIN)
+  const row = listCandidates(db, dayKey).find((c) => c.conversation_id === conversationId)
+  if (!row) return null
+
+  const config = resolveConfig(row)
+  const decision = decideProactiveFire({
+    now,
+    conversationCreatedAt: row.conversation_created_at,
+    lastUserMessageAt: row.last_user_message_at,
+    lastProactiveAt: row.last_proactive_at,
+    sentToday: row.sent_today,
+    config,
+    tzOffsetMinutes: TZ_OFFSET_MIN,
+    serverCanRun: row.key_location === 'server',
+    ownerOnline: hub().isOnline(row.owner_id),
+  })
+  return { decision, persona }
+}

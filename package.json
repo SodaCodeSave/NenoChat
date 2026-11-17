@@ -1,0 +1,21 @@
+{
+  "name": "nenochat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @nenochat/server --filter @nenochat/desktop dev",
+    "dev:server": "pnpm --filter @nenochat/server dev",
+    "dev:web": "pnpm --filter @nenochat/desktop dev",
+    "dev:app": "pnpm --filter @nenochat/desktop tauri:dev",
+    "build:server": "pnpm --filter @nenochat/server build",
+    "build:web": "pnpm --filter @nenochat/desktop build",
+    "build:app": "pnpm --filter @nenochat/desktop tauri:build",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "pnpm -r test"
+  }
+}

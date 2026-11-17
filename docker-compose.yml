@@ -1,0 +1,25 @@
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: apps/server/Dockerfile
+    container_name: nenochat-server
+    restart: unless-stopped
+    ports:
+      - '8787:8787'
+    environment:
+      # 生产环境务必替换这两个密钥，至少 16 位
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret-please}
+      SECRET_KEY: ${SECRET_KEY:-change-me-aes-secret-please}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      SERVER_NAME: ${SERVER_NAME:-NenoChat}
+      # 自建在域名后面时改成对外地址，否则附件链接会指向容器内
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    volumes:
+      # 数据卷：SQLite 数据库与上传文件
+      - nenochat-data:/app/apps/server/data
+
+volumes:
+  nenochat-data:

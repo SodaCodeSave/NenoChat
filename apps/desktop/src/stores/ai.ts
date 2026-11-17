@@ -1,0 +1,839 @@
+import { defineStore } from 'pinia'
+import { computed, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import {
+  buildChatMessages,
+  buildCompactionPrompt,
+  buildGroupPrompt,
+  buildMomentCommentPrompt,
+  buildMomentPostPrompt,
+  buildProactivePrompt,
+  estimateTokens,
+  isSkipReply,
+  segmentDelay,
+  SEGMENT_REPLY_DEFAULTS,
+  splitSegments,
+  ulid,
+  type AiGlobalSettings,
+  type AiMemoryFact,
+  type AiMemorySummary,
+  type AiPersona,
+  type AiProvider,
+  type ChatMessage,
+  type Message,
+  type SegmentRule,
+} from '@nenochat/shared'
+import { aiApi } from '@/api/ai'
+import { conversationApi, messageApi } from '@/api/endpoints'
+import { postApi } from '@/api/posts'
+import { listPersonas, upsertPersona as upsertPersonaRow } from '@/db/dao/ai'
+import { hasLocalDb } from '@/platform/db'
+import { isTauri } from '@/platform/device'
+import { loadProviderKey } from '@/platform/ai-keys'
+import { useAuthStore } from './auth'
+import { useConversationsStore } from './conversations'
+import { useMessagesStore } from './messages'
+import { useServersStore } from './servers'
+
+interface StreamDelta {
+  generation_id: string
+  delta: string
+}
+
+interface StreamDone {
+  generation_id: string
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  model: string | null
+}
+
+interface StreamError {
+  generation_id: string
+  message: string
+}
+
+const MEMORY_COMPACT_THRESHOLD = 20
+
+/**
+ * AI 会话编排。
+ * 密钥在本机时走 Rust 流式网关（真正的逐字打字感），
+ * 密钥托管在服务端时由服务端生成、按普通消息下发。
+ */
+export const useAiStore = defineStore('ai', () => {
+  const providers = ref<AiProvider[]>([])
+  const personas = ref<AiPersona[]>([])
+  const globalSettings = ref<AiGlobalSettings | null>(null)
+  const streaming = ref<Record<string, { generationId: string; text: string }>>({})
+  const generating = ref<Record<string, boolean>>({})
+  const lastError = ref<string | null>(null)
+
+  const auth = useAuthStore()
+  const messages = useMessagesStore()
+  const conversations = useConversationsStore()
+
+  const providerById = computed(() => new Map(providers.value.map((p) => [p.id, p])))
+  const personaById = computed(() => new Map(personas.value.map((p) => [p.id, p])))
+
+  /** 分段规则以全局设置为准；离线读不到设置时退回默认规则 */
+  function currentSegmentRule(): SegmentRule {
+    const settings = globalSettings.value
+    return {
+      enabled: settings?.segmentEnabled ?? SEGMENT_REPLY_DEFAULTS.enabled,
+      pattern: settings?.segmentPattern ?? SEGMENT_REPLY_DEFAULTS.pattern,
+    }
+  }
+
+  /** 全局自动互动设置；读取失败时保持 null，界面按默认值渲染 */
+  async function loadSettings(): Promise<void> {
+    try {
+      const result = await aiApi.settings()
+      globalSettings.value = result.settings
+    } catch {
+      /* 离线或老服务端：先不显示 */
+    }
+  }
+
+  async function saveSettings(patch: Partial<Omit<AiGlobalSettings, 'updatedAt'>>): Promise<void> {
+    // 先本地生效，避免开关回弹；服务端失败再用返回值纠正
+    const current = globalSettings.value
+    if (current) globalSettings.value = { ...current, ...patch }
+    try {
+      const result = await aiApi.updateSettings(patch)
+      globalSettings.value = result.settings
+    } catch {
+      await loadSettings()
+      throw new Error('保存全局设置失败')
+    }
+  }
+
+  async function load(): Promise<void> {
+    // 先出本地镜像（断网也有角色列表），再拉服务端覆盖
+    if (hasLocalDb()) {
+      const sid = useServersStore().currentId ?? ''
+      if (sid) {
+        const local = await listPersonas(sid)
+        if (local.length > 0) personas.value = local
+      }
+    }
+
+    try {
+      const [providerResult, personaResult] = await Promise.all([
+        aiApi.providers(),
+        aiApi.personas(),
+        loadSettings(),
+      ])
+      providers.value = providerResult.providers
+      personas.value = personaResult.personas
+
+      if (hasLocalDb()) {
+        const sid = useServersStore().currentId ?? ''
+        if (sid) {
+          for (const persona of personaResult.personas) {
+            await upsertPersonaRow(sid, persona)
+          }
+        }
+      }
+    } catch {
+      /* 离线：保留本地镜像 */
+    }
+  }
+
+  /** sync 落库后同步内存，避免通讯录与角色列表要等下一次 load */
+  function upsertLocal(persona: AiPersona): void {
+    const index = personas.value.findIndex((p) => p.id === persona.id)
+    if (index >= 0) personas.value[index] = { ...personas.value[index], ...persona }
+    else personas.value = [...personas.value, persona]
+  }
+
+  function removeLocal(personaId: string): void {
+    personas.value = personas.value.filter((p) => p.id !== personaId)
+  }
+
+  function personaOf(conversationId: string): AiPersona | null {
+    const conversation = conversations.byId.get(conversationId)
+    if (!conversation?.aiPersonaId) return null
+    return personaById.value.get(conversation.aiPersonaId) ?? null
+  }
+
+  function providerOf(persona: AiPersona | null): AiProvider | null {
+    if (!persona) return null
+    return (
+      (persona.providerId ? providerById.value.get(persona.providerId) : undefined) ??
+      providers.value.find((p) => p.isDefault) ??
+      providers.value[0] ??
+      null
+    )
+  }
+
+  function streamTextOf(conversationId: string): string {
+    return streaming.value[conversationId]?.text ?? ''
+  }
+
+  function isGenerating(conversationId: string): boolean {
+    return Boolean(generating.value[conversationId])
+  }
+
+  async function collectContext(
+    conversationId: string,
+    persona: AiPersona,
+    userInput: string,
+    currentMessageId?: string,
+    quoted?: string | null,
+  ): Promise<{ chat: ChatMessage[]; memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } }> {
+    let memories: { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } = { summaries: [], facts: [] }
+    try {
+      memories = await aiApi.memory(conversationId)
+    } catch {
+      /* 记忆读取失败不阻断对话 */
+    }
+
+    // 当前这句由 buildChatMessages 追加，先把它从 recent 里排除，避免出现两次
+    const recent = messages
+      .messagesOf(conversationId)
+      .filter((message) => message.id !== currentMessageId)
+      .slice(-60)
+
+    const chat = buildChatMessages({
+      persona,
+      facts: memories.facts,
+      summary: memories.summaries[0] ?? null,
+      recent,
+      userInput,
+      userName: auth.user?.displayName ?? '用户',
+      quoted: quoted ?? null,
+    })
+
+    return { chat, memories }
+  }
+
+  /** 本地密钥模式：Rust 流式生成 → 分条 → 逐条落库 */
+  async function generateLocally(
+    conversationId: string,
+    persona: AiPersona,
+    provider: AiProvider,
+    userInput: string,
+    currentMessageId?: string,
+    quoted?: string | null,
+  ): Promise<void> {
+    if (!isTauri()) throw new Error('本机密钥模式需要桌面客户端，网页版请使用服务端托管密钥')
+
+    const apiKey = await loadProviderKey(provider.id)
+    if (!apiKey) throw new Error('本机没有找到该服务商的密钥，请到设置里重新填写')
+
+    const generationId = ulid()
+    const { chat } = await collectContext(conversationId, persona, userInput, currentMessageId, quoted)
+
+    streaming.value[conversationId] = { generationId, text: '' }
+    generating.value[conversationId] = true
+
+    const unlisteners: UnlistenFn[] = []
+    let buffer = ''
+    let finished = false
+
+    const cleanup = (): void => {
+      for (const off of unlisteners) off()
+      unlisteners.length = 0
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      void listen<StreamDelta>('ai://delta', (event) => {
+        if (event.payload.generation_id !== generationId) return
+        buffer += event.payload.delta
+        const current = streaming.value[conversationId]
+        if (current) current.text = buffer
+      }).then((off) => unlisteners.push(off))
+
+      void listen<StreamDone>('ai://done', (event) => {
+        if (event.payload.generation_id !== generationId || finished) return
+        finished = true
+        cleanup()
+        resolve()
+      }).then((off) => unlisteners.push(off))
+
+      void listen<StreamError>('ai://error', (event) => {
+        if (event.payload.generation_id !== generationId || finished) return
+        finished = true
+        cleanup()
+        reject(new Error(event.payload.message))
+      }).then((off) => unlisteners.push(off))
+
+      void invoke('ai_generate', {
+        request: {
+          generation_id: generationId,
+          base_url: provider.baseUrl,
+          api_key: apiKey,
+          model: persona.modelOverride ?? provider.model,
+          temperature: persona.temperature ?? provider.temperature,
+          max_tokens: provider.maxTokens,
+          messages: chat,
+        },
+      }).catch((e: unknown) => {
+        if (finished) return
+        finished = true
+        cleanup()
+        reject(e instanceof Error ? e : new Error('生成失败'))
+      })
+    }).finally(() => {
+      delete streaming.value[conversationId]
+      generating.value[conversationId] = false
+    })
+
+    const segments = splitSegments(buffer, currentSegmentRule())
+    if (segments.length === 0) return
+
+    for (let index = 0; index < segments.length; index++) {
+      const text = segments[index]!
+      if (index > 0) {
+        await new Promise((resolve) => setTimeout(resolve, segmentDelay(text)))
+      }
+      await aiApi.appendMessage(conversationId, {
+        generationId,
+        index,
+        content: text,
+        clientNonce: ulid(),
+      })
+    }
+
+    void maybeCompact(conversationId, persona, provider)
+  }
+
+  /** 服务端密钥模式：交给服务端生成，消息以普通事件下发 */
+  async function generateOnServer(
+    conversationId: string,
+    persona: AiPersona,
+    provider: AiProvider,
+    content: string,
+    clientNonce: string,
+  ): Promise<void> {
+    generating.value[conversationId] = true
+    try {
+      await aiApi.startGeneration({
+        conversationId,
+        content,
+        clientNonce,
+        providerId: provider.id,
+      })
+    } finally {
+      generating.value[conversationId] = false
+    }
+  }
+
+  /** 同一句话的重复提交（双击/旧事件处理器）在 700ms 内只放行一次 */
+  const recentTurns = new Map<string, { content: string; at: number }>()
+
+  /**
+   * 发送一轮 AI 对话：先把用户消息按普通消息发出（保证立刻可见），
+   * 再根据密钥位置决定由谁生成。
+   * replyTo 让「引用某条消息再提问」成立：消息带上 replyToId，提示词里也带上被引原文。
+   */
+  async function sendTurn(
+    conversationId: string,
+    content: string,
+    replyTo?: Message | null,
+  ): Promise<void> {
+    const now = Date.now()
+    const last = recentTurns.get(conversationId)
+    if (last && last.content === content.trim() && now - last.at < 700) return
+    recentTurns.set(conversationId, { content: content.trim(), at: now })
+
+    lastError.value = null
+    const persona = personaOf(conversationId)
+    if (!persona) throw new Error('这个会话没有绑定 AI 角色')
+    const provider = providerOf(persona)
+    if (!provider) throw new Error('还没有配置 AI 服务商')
+
+    const nonce = ulid()
+    // clientNonce 必须与下面 generation 用的完全一致：
+    // 服务端按 (sender, nonce) 做幂等，两个不同的值会插出第二条同样的用户消息
+    const sent = await messages.send({
+      conversationId,
+      content,
+      clientNonce: nonce,
+      meta: { clientNonce: nonce },
+      replyToId: replyTo?.id ?? null,
+    })
+
+    if (provider.keyLocation === 'server') {
+      await generateOnServer(conversationId, persona, provider, content, nonce)
+      return
+    }
+
+    try {
+      await generateLocally(conversationId, persona, provider, content, sent.id, quotedOf(replyTo))
+    } catch (e) {
+      lastError.value = e instanceof Error ? e.message : '生成失败'
+      throw e
+    }
+  }
+
+  /** 引用原文交给模型；撤回的消息没有可引用内容 */
+  function quotedOf(message: Message | null | undefined): string | null {
+    if (!message || message.deletedAt) return null
+    return message.content.trim().slice(0, 400) || null
+  }
+
+  /** 记忆压缩：超过阈值时把旧对话压成摘要 + 事实，失败静默重试交给下次触发 */
+  async function maybeCompact(
+    conversationId: string,
+    persona: AiPersona,
+    provider: AiProvider,
+  ): Promise<void> {
+    if (!isTauri()) return
+    try {
+      const memory = await aiApi.memory(conversationId)
+      const lastCompactedSeq = memory.summaries.reduce((max, s) => Math.max(max, s.toSeq), 0)
+      const list = messages.messagesOf(conversationId)
+      const pending = list.filter((m) => m.seq > lastCompactedSeq && !m.deletedAt)
+      if (pending.length < MEMORY_COMPACT_THRESHOLD) return
+
+      const apiKey = await loadProviderKey(provider.id)
+      if (!apiKey) return
+
+      const transcript = pending
+        .slice(0, 60)
+        .map((m) => `${m.senderType === 'ai' ? persona.name : '我'}：${m.content}`)
+        .join('\n')
+
+      const prompt = buildCompactionPrompt({
+        previousSummary: memory.summaries[0]?.summary ?? null,
+        transcript,
+      })
+
+      const raw = await invoke<string>('ai_complete', {
+        baseUrl: provider.baseUrl,
+        apiKey,
+        model: persona.modelOverride ?? provider.model,
+        messages: prompt,
+        temperature: 0.2,
+        maxTokens: 800,
+        jsonMode: true,
+      })
+
+      const parsed = JSON.parse(raw) as {
+        summary?: string
+        facts?: Array<{ subject: string; key: string; value: string; confidence?: number }>
+      }
+
+      const lastMessage = pending[pending.length - 1]!
+      await aiApi.writeMemory(conversationId, {
+        summary: parsed.summary
+          ? {
+              fromSeq: lastCompactedSeq,
+              toSeq: lastMessage.seq,
+              text: parsed.summary,
+              model: persona.modelOverride ?? provider.model,
+            }
+          : undefined,
+        facts: (parsed.facts ?? []).map((fact) => ({
+          subject: (['user', 'persona', 'relation', 'world'].includes(fact.subject)
+            ? fact.subject
+            : 'user') as 'user' | 'persona' | 'relation' | 'world',
+          key: fact.key,
+          value: fact.value,
+          confidence: fact.confidence,
+        })),
+      })
+    } catch {
+      /* 压缩失败不影响主流程，下次对话继续尝试 */
+    }
+  }
+
+  /** 正在跑主动消息的会话，避免服务端重发事件时生成两遍 */
+  const proactiveBusy = new Set<string>()
+
+  /**
+   * 服务端判定「该主动找你了」，但密钥在本机所以它自己发不了。
+   * 由在线客户端代跑一次生成，结果仍走普通消息接口落库。
+   */
+  async function handleProactiveDue(payload: {
+    conversationId: string
+    personaId: string
+    hint?: string
+  }): Promise<void> {
+    if (!isTauri()) return
+    if (proactiveBusy.has(payload.conversationId)) return
+
+    const persona = personas.value.find((p) => p.id === payload.personaId) ?? personaOf(payload.conversationId)
+    if (!persona) return
+    const provider = providerOf(persona)
+    if (!provider || provider.keyLocation !== 'local') return
+
+    proactiveBusy.add(payload.conversationId)
+    try {
+      await generateProactiveLocally(payload.conversationId, persona, provider, payload.hint)
+    } catch {
+      /* 配额已被服务端占掉，失败不重试，避免刷屏 */
+    } finally {
+      proactiveBusy.delete(payload.conversationId)
+    }
+  }
+
+  /** 本机密钥的主动消息：非流式一次生成，最多两条 */
+  async function generateProactiveLocally(
+    conversationId: string,
+    persona: AiPersona,
+    provider: AiProvider,
+    hint?: string,
+  ): Promise<void> {
+    const apiKey = await loadProviderKey(provider.id)
+    if (!apiKey) return
+
+    let digest = ''
+    try {
+      const memories = await aiApi.memory(conversationId)
+      digest = [
+        memories.summaries[0]?.summary ?? '',
+        ...memories.facts.map((f) => `${f.key}: ${f.value}`),
+      ]
+        .filter(Boolean)
+        .join('\n')
+    } catch {
+      /* 没有记忆也能主动开口 */
+    }
+
+    const prompt = buildProactivePrompt({
+      persona,
+      memoryDigest: hint ? `${digest}\n提示：${hint}` : digest,
+      idleHours: 0,
+      localTime: new Date().toLocaleString(),
+    })
+
+    const raw = await invoke<string>('ai_complete', {
+      baseUrl: provider.baseUrl,
+      apiKey,
+      model: persona.modelOverride ?? provider.model,
+      messages: prompt,
+      temperature: 0.9,
+      maxTokens: 200,
+      jsonMode: false,
+    })
+
+    const segments = splitSegments(raw, currentSegmentRule()).slice(0, 2)
+    if (segments.length === 0) return
+
+    const generationId = `proactive-local-${conversationId}-${Date.now()}`
+    for (let index = 0; index < segments.length; index++) {
+      await aiApi.appendMessage(conversationId, {
+        generationId,
+        index,
+        content: segments[index]!,
+        clientNonce: `${generationId}-${index}`,
+        model: persona.modelOverride ?? provider.model,
+        totalSegments: segments.length,
+        proactive: true,
+      })
+    }
+  }
+
+  /** 正在跑群聊回复的日志，避免服务端重发事件时生成两遍 */
+  const groupBusy = new Set<string>()
+
+  /**
+   * 群聊里轮到某个角色说话，但密钥在本机：
+   * 服务端已经算好心情、占好配额，这里只负责生成内容并回传。
+   */
+  async function handleGroupDue(payload: {
+    logId: string
+    conversationId: string
+    channelId?: string | null
+    personaId: string
+    kind: 'reply' | 'autonomy'
+    triggerMessageId?: string | null
+    mood: string
+    energy: number
+  }): Promise<void> {
+    if (groupBusy.has(payload.logId)) return
+
+    const persona = personaById.value.get(payload.personaId)
+    if (!persona) {
+      void aiApi.skipGroup(payload.logId, 'persona_not_loaded').catch(() => undefined)
+      return
+    }
+    const provider = providerOf(persona)
+    if (!provider) {
+      void aiApi.skipGroup(payload.logId, 'no_provider').catch(() => undefined)
+      return
+    }
+
+    // 网页端没有本机密钥，直接回报跳过，避免服务端一直等
+    if (!isTauri()) {
+      void aiApi.skipGroup(payload.logId, 'client_cannot_run_local_key').catch(() => undefined)
+      return
+    }
+    if (provider.keyLocation !== 'local') {
+      void aiApi.skipGroup(payload.logId, 'provider_not_local').catch(() => undefined)
+      return
+    }
+
+    const apiKey = await loadProviderKey(provider.id)
+    if (!apiKey) {
+      void aiApi.skipGroup(payload.logId, 'missing_local_key').catch(() => undefined)
+      return
+    }
+
+    groupBusy.add(payload.logId)
+    try {
+      const conversation = conversations.byId.get(payload.conversationId)
+      let recent: Message[] = messages.messagesOf(payload.conversationId)
+      if (recent.length === 0) {
+        const page = await messageApi.page(payload.conversationId, {
+          channelId: payload.channelId ?? undefined,
+          limit: 30,
+        })
+        recent = page.messages
+      }
+      if (payload.channelId) {
+        recent = recent.filter((message) => message.channelId === payload.channelId)
+      }
+
+      let members = (await import('./members')).useMembersStore().of(payload.conversationId)
+      if (members.length === 0) {
+        const detail = await conversationApi.detail(payload.conversationId)
+        members = detail.members
+      }
+      const nameById = new Map(
+        members.map((member) => [
+          member.userId,
+          member.nickname || member.user?.displayName || member.userId,
+        ]),
+      )
+
+      const trigger =
+        payload.kind === 'reply'
+          ? recent.find((message) => message.id === payload.triggerMessageId) ?? null
+          : null
+      const mustReply = trigger ? trigger.content.includes(`@${persona.name}`) : false
+      const lastAt = recent.length > 0 ? recent[recent.length - 1]!.createdAt : Date.now()
+
+      // 群里的引用关系也要让模型看见：谁在接谁的茬，决定它该不该插话
+      const byId = new Map(recent.map((message) => [message.id, message]))
+      const quotedContextOf = (message: Message): { speaker: string; content: string } | null => {
+        if (!message.replyToId) return null
+        const target = byId.get(message.replyToId)
+        if (target) {
+          return {
+            speaker: nameById.get(target.senderId ?? '') ?? '群友',
+            content: previewOfMessage(target),
+          }
+        }
+        const snapshot = message.meta?.replyTo
+        return snapshot ? { speaker: snapshot.senderName, content: snapshot.preview } : null
+      }
+
+      const prompt = buildGroupPrompt({
+        persona,
+        mood: payload.mood,
+        energy: payload.energy,
+        groupName: conversation?.name ?? '群聊',
+        members: members.map((member) => ({
+          name: nameById.get(member.userId) ?? member.userId,
+          isSelf: member.userId === persona.userId,
+        })),
+        recent: recent
+          .filter(
+            (message) =>
+              message.senderType !== 'system' && !message.deletedAt && message.content.trim().length > 0,
+          )
+          .slice(-24)
+          .map((message) => ({
+            speaker: nameById.get(message.senderId ?? '') ?? '群友',
+            content: message.content,
+            isSelf: Boolean(persona.userId) && message.senderId === persona.userId,
+            mentionsSelf: Boolean(message.meta?.mentions?.includes(persona.userId ?? '')),
+            replyTo: quotedContextOf(message),
+          })),
+        mode: payload.kind,
+        trigger:
+          trigger && payload.kind === 'reply'
+            ? {
+                speaker: nameById.get(trigger.senderId ?? '') ?? '群友',
+                content: trigger.content,
+                mustReply,
+                replyTo: quotedContextOf(trigger),
+              }
+            : null,
+        idleHours: Math.max(0, Math.floor((Date.now() - lastAt) / 3_600_000)),
+        localTime: new Date().toLocaleString(),
+      })
+
+      const raw = await invoke<string>('ai_complete', {
+        baseUrl: provider.baseUrl,
+        apiKey,
+        model: persona.modelOverride ?? provider.model,
+        messages: prompt,
+        temperature: persona.temperature ?? provider.temperature,
+        maxTokens: 300,
+        jsonMode: false,
+      })
+
+      if (isSkipReply(raw)) {
+        await aiApi.skipGroup(payload.logId, 'client_skip')
+        return
+      }
+
+      const segments = splitSegments(raw, currentSegmentRule()).slice(0, 3)
+      if (segments.length === 0) {
+        await aiApi.skipGroup(payload.logId, 'empty_reply')
+        return
+      }
+
+      for (let index = 0; index < segments.length; index++) {
+        if (index > 0) {
+          await new Promise((resolve) => setTimeout(resolve, segmentDelay(segments[index]!)))
+        }
+        await aiApi.appendGroupMessage({
+          logId: payload.logId,
+          personaId: persona.id,
+          conversationId: payload.conversationId,
+          channelId: payload.channelId ?? null,
+          generationId: payload.logId,
+          index,
+          content: segments[index]!,
+          clientNonce: `${payload.logId}-${index}`,
+          model: persona.modelOverride ?? provider.model,
+          totalSegments: segments.length,
+        })
+      }
+    } catch {
+      /* 配额已被服务端占掉，失败不重试，避免群里刷屏 */
+    } finally {
+      groupBusy.delete(payload.logId)
+    }
+  }
+
+  /** 引用块里展示的摘要，与消息列表保持同一套收敛规则 */
+  function previewOfMessage(message: Message): string {
+    if (message.deletedAt) return '消息已撤回'
+    if (message.type === 'image') return '[图片]'
+    if (message.type === 'file') return '[文件]'
+    if (message.type === 'sticker') return '[表情]'
+    return message.content.trim().slice(0, 80) || '（空消息）'
+  }
+
+  /** 模型偶尔带引号或换行，落库前收敛成一句话 */
+  function cleanGenerated(text: string, maxChars: number): string {
+    return text
+      .trim()
+      .replace(/^["'「『（(]+/, '')
+      .replace(/["'」』）)]+$/, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, maxChars)
+      .trim()
+  }
+
+  /** 正在跑动态任务的角色，避免服务端重发事件时生成两遍 */
+  const momentBusy = new Set<string>()
+
+  /**
+   * 服务端判定某个角色该去动态广场活动了，但密钥在本机，
+   * 只能由在线客户端代跑生成，结果通过动态接口回写。
+   */
+  async function handleMomentDue(payload: {
+    kind: 'post' | 'comment'
+    personaId: string
+    postId?: string
+  }): Promise<void> {
+    if (!isTauri()) return
+    const persona = personaById.value.get(payload.personaId)
+    if (!persona) return
+    if (momentBusy.has(payload.personaId)) return
+
+    const provider = providerOf(persona)
+    if (!provider || provider.keyLocation !== 'local') return
+
+    const apiKey = await loadProviderKey(provider.id)
+    if (!apiKey) return
+
+    momentBusy.add(payload.personaId)
+    try {
+      if (payload.kind === 'comment' && payload.postId) {
+        const [{ post }, { comments }] = await Promise.all([
+          postApi.get(payload.postId),
+          postApi.comments(payload.postId),
+        ])
+        const raw = await invoke<string>('ai_complete', {
+          baseUrl: provider.baseUrl,
+          apiKey,
+          model: persona.modelOverride ?? provider.model,
+          messages: buildMomentCommentPrompt({
+            persona,
+            postAuthor: post.author?.displayName ?? '某人',
+            postContent: post.content,
+            imageCount: post.attachments?.length ?? 0,
+            minutesAgo: Math.max(0, Math.round((Date.now() - post.createdAt) / 60_000)),
+            comments: comments.map((comment) => ({
+              author: comment.author?.displayName ?? '某人',
+              content: comment.content,
+              isMine: comment.personaId === persona.id,
+            })),
+            localTime: new Date().toLocaleString(),
+          }),
+          temperature: 0.95,
+          maxTokens: 120,
+          jsonMode: false,
+        })
+        if (isSkipReply(raw)) return
+        await postApi.comment(payload.postId, {
+          content: cleanGenerated(raw, 200),
+          personaId: persona.id,
+        })
+        return
+      }
+
+      const { posts } = await postApi.feed(undefined, 6)
+      const raw = await invoke<string>('ai_complete', {
+        baseUrl: provider.baseUrl,
+        apiKey,
+        model: persona.modelOverride ?? provider.model,
+        messages: buildMomentPostPrompt({
+          persona,
+          memoryDigest: '',
+          recentMoments: posts.map((post) => ({
+            author: post.author?.displayName ?? '某人',
+            content: post.content.slice(0, 120),
+          })),
+          localTime: new Date().toLocaleString(),
+        }),
+        temperature: 1,
+        maxTokens: 200,
+        jsonMode: false,
+      })
+      if (isSkipReply(raw)) return
+      await postApi.create({
+        content: cleanGenerated(raw, 500),
+        attachmentIds: [],
+        visibility: 'friends',
+        personaId: persona.id,
+      })
+    } catch {
+      /* 配额已被服务端占掉，失败不重试，避免刷屏 */
+    } finally {
+      momentBusy.delete(payload.personaId)
+    }
+  }
+
+  return {
+    providers,
+    personas,
+    globalSettings,
+    streaming,
+    generating,
+    lastError,
+    load,
+    loadSettings,
+    saveSettings,
+    upsertLocal,
+    removeLocal,
+    personaOf,
+    providerOf,
+    streamTextOf,
+    isGenerating,
+    sendTurn,
+    maybeCompact,
+    handleProactiveDue,
+    handleMomentDue,
+    handleGroupDue,
+    estimateTokens,
+  }
+})

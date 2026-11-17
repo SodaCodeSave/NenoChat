@@ -1,0 +1,44 @@
+{
+  "name": "@nenochat/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lobehub/icons-static-svg": "^1.102.0",
+    "@nenochat/shared": "workspace:*",
+    "@tanstack/vue-virtual": "^3",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-fs": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-sql": "^2",
+    "@tauri-apps/plugin-store": "^2",
+    "@vueuse/core": "^13",
+    "pinia": "^3",
+    "reka-ui": "^2",
+    "vue": "^3.5.13",
+    "vue-router": "^4",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "tailwindcss": "^4",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.16",
+    "vitest": "^5",
+    "vue-tsc": "^3.3.5"
+  }
+}

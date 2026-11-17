@@ -1,0 +1,156 @@
+import { defineStore } from 'pinia'
+import { computed, ref } from 'vue'
+import type { ConversationSummary } from '@/api/endpoints'
+import { conversationApi, messageApi } from '@/api/endpoints'
+import {
+  applyConversationSummary,
+  listConversations,
+  patchConversationUnread,
+  upsertConversation,
+} from '@/db/dao/conversations'
+import { hasLocalDb } from '@/platform/db'
+import { useServersStore } from './servers'
+
+/** 会话列表：置顶（含 AI 会话）→ 群聊 → 私聊，未读数与 @ 数由服务端聚合 */
+export const useConversationsStore = defineStore('conversations', () => {
+  const items = ref<ConversationSummary[]>([])
+  const activeId = ref<string | null>(null)
+  const loading = ref(false)
+
+  const serverId = computed(() => useServersStore().currentId ?? '')
+  const byId = computed(() => new Map(items.value.map((c) => [c.id, c])))
+  const active = computed(() => (activeId.value ? (byId.value.get(activeId.value) ?? null) : null))
+  const totalUnread = computed(() => items.value.reduce((sum, c) => sum + (c.unreadCount ?? 0), 0))
+  const totalMentions = computed(() => items.value.reduce((sum, c) => sum + (c.mentionCount ?? 0), 0))
+
+  /** 排序权重：置顶优先，AI 会话默认靠前，其余按最近活跃 */
+  const ordered = computed(() => {
+    return [...items.value]
+      .filter((c) => !c.deletedAt)
+      .sort((a, b) => {
+        const aPinned = a.pinnedAt ?? 0
+        const bPinned = b.pinnedAt ?? 0
+        if (aPinned !== bPinned) return bPinned - aPinned
+        return (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt)
+      })
+  })
+
+  const groups = computed(() => ordered.value.filter((c) => c.type === 'group'))
+  const directs = computed(() => ordered.value.filter((c) => c.type === 'direct'))
+  const aiConversations = computed(() => ordered.value.filter((c) => c.type === 'ai'))
+
+  async function hydrate(): Promise<void> {
+    if (!hasLocalDb() || !serverId.value) return
+    items.value = await listConversations(serverId.value)
+  }
+
+  async function refresh(): Promise<void> {
+    if (!serverId.value) return
+    loading.value = true
+    try {
+      const result = await conversationApi.list()
+      items.value = result.conversations
+      if (hasLocalDb()) {
+        for (const summary of result.conversations) {
+          await applyConversationSummary(serverId.value, summary)
+        }
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function upsert(conversation: ConversationSummary): Promise<void> {
+    const index = items.value.findIndex((c) => c.id === conversation.id)
+    if (index >= 0) {
+      items.value[index] = { ...items.value[index], ...conversation }
+    } else {
+      items.value = [...items.value, conversation]
+    }
+    if (hasLocalDb() && serverId.value) {
+      await upsertConversation(serverId.value, conversation)
+    }
+  }
+
+  function setActive(id: string | null): void {
+    activeId.value = id
+  }
+
+  /** 会话被删除（例如角色被删）时从列表剔除；本地行由 DAO 打 deleted_at 保留可追溯 */
+  function remove(id: string): void {
+    items.value = items.value.filter((c) => c.id !== id)
+    if (activeId.value === id) activeId.value = null
+  }
+
+  /** 清空未读并同步服务端游标 */
+  async function markRead(conversationId: string, seq: number): Promise<void> {
+    const target = byId.value.get(conversationId)
+    if (!target) return
+    if ((target.myLastReadSeq ?? 0) >= seq && (target.unreadCount ?? 0) === 0) return
+
+    target.myLastReadSeq = seq
+    target.unreadCount = 0
+    target.mentionCount = 0
+    if (hasLocalDb() && serverId.value) {
+      await patchConversationUnread(serverId.value, conversationId, {
+        unreadCount: 0,
+        mentionCount: 0,
+        myLastReadSeq: seq,
+      })
+    }
+
+    try {
+      await messageApi.markRead(conversationId, seq)
+    } catch {
+      /* 断网时先本地清零，重连后由游标同步补齐 */
+    }
+  }
+
+  /** 收到别人发的新消息时本地递增未读，避免为每个事件刷新整个列表 */
+  function bumpUnread(conversationId: string, mentioned: boolean): void {
+    const target = byId.value.get(conversationId)
+    if (!target) return
+    if (activeId.value === conversationId) return
+    target.unreadCount = (target.unreadCount ?? 0) + 1
+    if (mentioned) target.mentionCount = (target.mentionCount ?? 0) + 1
+  }
+
+  async function pin(conversationId: string, pinned: boolean): Promise<void> {
+    const result = await conversationApi.pin(conversationId, pinned)
+    const target = byId.value.get(conversationId)
+    if (target) target.pinnedAt = result.member.pinnedAt ?? null
+    if (hasLocalDb() && serverId.value) {
+      await patchConversationUnread(serverId.value, conversationId, {
+        pinnedAt: result.member.pinnedAt ?? null,
+      })
+    }
+  }
+
+  function reset(): void {
+    items.value = []
+    activeId.value = null
+  }
+
+  return {
+    items,
+    ordered,
+    groups,
+    directs,
+    aiConversations,
+    activeId,
+    active,
+    loading,
+    byId,
+    totalUnread,
+    totalMentions,
+    hydrate,
+    refresh,
+    upsert,
+    setActive,
+    remove,
+    markRead,
+    bumpUnread,
+    pin,
+    reset,
+  }
+})

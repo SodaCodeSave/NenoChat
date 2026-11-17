@@ -1,0 +1,225 @@
+@import 'tailwindcss';
+
+/* 深色模式由 <html class="dark"> 驱动，而非媒体查询，便于用户手动切换 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --surface: #ffffff;
+  --surface-2: #f5f6f8;
+  --surface-3: #eceef2;
+  --rail: #eef0f4;
+  --rail-active: #dde2ea;
+  --border: #e3e6ec;
+  --text: #1a1a1e;
+  --text-strong: #0d0d10;
+  --muted: #6b7280;
+  --accent: #2f6bff;
+  --accent-soft: #e8eeff;
+  --accent-text: #ffffff;
+  --danger: #e5484d;
+  --success: #2fa84f;
+  --mention: #7c5cff;
+  --mention-soft: #f0ecff;
+  --bubble-own: #e8eeff;
+  --shadow-soft: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px rgb(16 24 40 / 0.06);
+  --radius-panel: 12px;
+  --radius-bubble: 10px;
+}
+
+.dark {
+  --surface: #1e1f22;
+  --surface-2: #2b2d31;
+  --surface-3: #35373c;
+  --rail: #1a1b1e;
+  --rail-active: #35373c;
+  --border: #3a3d44;
+  --text: #e6e7ea;
+  --text-strong: #f7f8fa;
+  --muted: #949ba4;
+  --accent: #5865f2;
+  --accent-soft: #2f3350;
+  --accent-text: #ffffff;
+  --danger: #f2555a;
+  --success: #3ba55d;
+  --mention: #9d8cff;
+  --mention-soft: #33304d;
+  --bubble-own: #2f3350;
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.32);
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-rail: var(--rail);
+  --color-rail-active: var(--rail-active);
+  --color-line: var(--border);
+  --color-text: var(--text);
+  --color-text-strong: var(--text-strong);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-mention: var(--mention);
+  --color-mention-soft: var(--mention-soft);
+
+  --radius-panel: var(--radius-panel);
+  --radius-bubble: var(--radius-bubble);
+
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+}
+
+/* 主题色变体：设置里切换后由 useTheme 写到 <html data-accent> */
+:root[data-accent='violet'] {
+  --accent: #7c5cff;
+  --accent-soft: #efeaff;
+  --bubble-own: #efeaff;
+}
+.dark[data-accent='violet'] {
+  --accent: #8b74ff;
+  --accent-soft: #322b4d;
+  --bubble-own: #322b4d;
+}
+:root[data-accent='green'] {
+  --accent: #16a34a;
+  --accent-soft: #e6f6ec;
+  --bubble-own: #e6f6ec;
+}
+.dark[data-accent='green'] {
+  --accent: #34c76a;
+  --accent-soft: #1e3527;
+  --bubble-own: #1e3527;
+}
+:root[data-accent='orange'] {
+  --accent: #ea7317;
+  --accent-soft: #fdeee0;
+  --bubble-own: #fdeee0;
+}
+.dark[data-accent='orange'] {
+  --accent: #f08a3c;
+  --accent-soft: #3a2a1a;
+  --bubble-own: #3a2a1a;
+}
+:root[data-accent='pink'] {
+  --accent: #db2f85;
+  --accent-soft: #fce8f2;
+  --bubble-own: #fce8f2;
+}
+.dark[data-accent='pink'] {
+  --accent: #e75c9c;
+  --accent-soft: #3a2130;
+  --bubble-own: #3a2130;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 消息列表需要精细控制滚动位置，避免浏览器锚定干扰 */
+.scroll-area {
+  overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* 减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+[data-reduce-motion='true'] *,
+[data-reduce-motion='true'] *::before,
+[data-reduce-motion='true'] *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}
+
+@keyframes neno-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-up {
+  animation: neno-fade-up 160ms ease-out both;
+}
+
+@keyframes neno-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.typing-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  vertical-align: -0.15em;
+  background: var(--accent);
+  animation: neno-blink 1s steps(2, start) infinite;
+}

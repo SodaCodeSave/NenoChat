@@ -1,0 +1,1185 @@
+import {
+  ContactRelation,
+  ConversationType,
+  Role,
+  buildChatMessages,
+  estimateTokens,
+  segmentDelay,
+  splitSegments,
+  type AiMemoryFact,
+  type AiMemorySummary,
+  type AiPersona,
+  type AiProvider,
+  type Conversation,
+  type Message,
+  type MessageMeta,
+  type ReplyStyle,
+  type SenderType,
+} from '@nenochat/shared'
+import type { DB } from '../db'
+import { withTx } from '../db/tx'
+import * as aiRepo from '../db/repo/ai'
+import * as contactsRepo from '../db/repo/contacts'
+import * as conversationsRepo from '../db/repo/conversations'
+import * as membersRepo from '../db/repo/members'
+import * as messagesRepo from '../db/repo/messages'
+import * as usersRepo from '../db/repo/users'
+import { writeChange } from './change-log'
+import { err } from '../util/errors'
+import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
+import { appendSystemMessage } from './message-service'
+import { emitConversationUpdated, emitMemberRemoved, emitMessageCreated } from '../ws/emitter'
+
+/* ------------------------------ 服务商 ------------------------------ */
+
+function toPublicProvider(row: aiRepo.ProviderRow): AiProvider {
+  let masked: string | null = null
+  if (row.api_key_enc) {
+    try {
+      masked = maskSecret(decryptSecret(row.api_key_enc))
+    } catch {
+      masked = '****'
+    }
+  }
+  return aiRepo.mapProvider(row, masked)
+}
+
+export function listProviders(db: DB, ownerId: string): AiProvider[] {
+  return aiRepo.listProviders(db, ownerId).map(toPublicProvider)
+}
+
+export interface ProviderPayload {
+  name: string
+  baseUrl: string
+  model: string
+  apiKey?: string
+  keyLocation: 'local' | 'server'
+  temperature?: number
+  maxTokens?: number
+  isDefault?: boolean
+}
+
+export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
+  const apiKeyEnc =
+    input.keyLocation === 'server' && input.apiKey ? encryptSecret(input.apiKey) : null
+
+  const row = withTx(db, () =>
+    aiRepo.createProvider(db, {
+      ownerId,
+      name: input.name,
+      baseUrl: input.baseUrl,
+      apiKeyEnc,
+      keyLocation: input.keyLocation,
+      model: input.model,
+      temperature: input.temperature,
+      maxTokens: input.maxTokens,
+      isDefault: input.isDefault,
+    }),
+  )
+  return toPublicProvider(row)
+}
+
+export function updateProvider(db: DB, ownerId: string, id: string, input: Partial<ProviderPayload>): AiProvider {
+  const current = aiRepo.findProvider(db, id)
+  if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
+
+  const apiKeyEnc =
+    input.apiKey === undefined
+      ? undefined
+      : input.apiKey
+        ? encryptSecret(input.apiKey)
+        : null
+
+  const row = withTx(db, () =>
+    aiRepo.updateProvider(db, id, {
+      name: input.name,
+      baseUrl: input.baseUrl,
+      model: input.model,
+      keyLocation: input.keyLocation,
+      temperature: input.temperature,
+      maxTokens: input.maxTokens,
+      isDefault: input.isDefault,
+      apiKeyEnc,
+    }),
+  )
+  return toPublicProvider(row)
+}
+
+export function deleteProvider(db: DB, ownerId: string, id: string): void {
+  const current = aiRepo.findProvider(db, id)
+  if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
+  aiRepo.softDeleteProvider(db, id)
+}
+
+/** 从服务端托管的 key 取明文，仅在 server 模式下可用 */
+export function resolveServerApiKey(row: aiRepo.ProviderRow): string {
+  if (!row.api_key_enc) throw err.validation('该服务商没有托管密钥，请在本机配置')
+  return decryptSecret(row.api_key_enc)
+}
+
+/* ------------------------------- 角色 ------------------------------- */
+
+function toPublicPersona(row: aiRepo.PersonaRow): AiPersona {
+  return aiRepo.mapPersona(row)
+}
+
+export function listPersonas(db: DB, ownerId: string): AiPersona[] {
+  return aiRepo.listPersonas(db, ownerId).map(toPublicPersona)
+}
+
+export interface PersonaPayload {
+  name: string
+  systemPrompt: string
+  avatarUrl?: string | null
+  interests?: string[]
+  card?: string | null
+  cardUrl?: string | null
+  cardFilename?: string | null
+  inContacts?: boolean
+  providerId?: string | null
+  modelOverride?: string | null
+  temperature?: number | null
+  replyStyle?: ReplyStyle
+  greeting?: string | null
+  proactive?: {
+    enabled: boolean
+    minIdleHours: number
+    maxPerDay: number
+    windowStart?: string
+    windowEnd?: string
+  }
+}
+
+/**
+ * 保证一个角色有一条 type='ai' 会话（幂等）。
+ * - 会话、成员、ai_sessions 与 change_log 全在一个事务里，调用方可以放心把它嵌进更大的事务
+ * - 内部不发任何 WS 事件，emit 一律由调用方在事务提交后做，避免「已广播但回滚」
+ * - 没有 providerId 时只建会话不建 ai_sessions，等拿到服务商再补
+ *   （保留「没配服务商也能先建角色」的既有能力）
+ */
+export function ensureAiConversation(
+  db: DB,
+  input: { userId: string; persona: aiRepo.PersonaRow; providerId?: string | null; title?: string | null },
+): { conversationId: string; created: boolean; conversation: Conversation } {
+  const existing = db
+    .prepare(
+      `SELECT * FROM conversations
+       WHERE type = 'ai' AND ai_owner_user_id = ? AND ai_persona_id = ? AND deleted_at IS NULL
+       ORDER BY created_at LIMIT 1`,
+    )
+    .get(input.userId, input.persona.id) as conversationsRepo.ConversationRow | undefined
+
+  if (existing) {
+    return {
+      conversationId: existing.id,
+      created: false,
+      conversation: conversationsRepo.mapConversation(existing),
+    }
+  }
+
+  const row = withTx(db, () => {
+    const conv = conversationsRepo.create(db, {
+      type: ConversationType.Ai,
+      name: input.title ?? input.persona.name,
+      avatarUrl: input.persona.avatar_url,
+      ownerId: input.userId,
+      aiPersonaId: input.persona.id,
+      aiOwnerUserId: input.userId,
+    })
+
+    membersRepo.upsert(db, { conversationId: conv.id, userId: input.userId, role: Role.Owner })
+
+    if (input.providerId) {
+      aiRepo.createSession(db, {
+        conversationId: conv.id,
+        personaId: input.persona.id,
+        providerId: input.providerId,
+      })
+    }
+
+    writeChange(db, {
+      entity: 'conversation',
+      entityId: conv.id,
+      op: 'upsert',
+      conversationId: conv.id,
+      payload: conversationsRepo.mapConversation(conv),
+      actorId: input.userId,
+    })
+    return conv
+  })
+
+  return {
+    conversationId: row.id,
+    created: true,
+    conversation: conversationsRepo.mapConversation(row),
+  }
+}
+
+export function createPersona(db: DB, ownerId: string, input: PersonaPayload): AiPersona {
+  const result = withTx(db, () => {
+    const created = aiRepo.createPersona(db, {
+      ownerId,
+      name: input.name,
+      systemPrompt: input.systemPrompt,
+      avatarUrl: input.avatarUrl ?? null,
+      interests: input.interests,
+      card: input.card ?? null,
+      cardUrl: input.cardUrl ?? null,
+      cardFilename: input.cardFilename ?? null,
+      inContacts: input.inContacts,
+      providerId: input.providerId ?? null,
+      modelOverride: input.modelOverride ?? null,
+      temperature: input.temperature ?? null,
+      replyStyle: input.replyStyle,
+      greeting: input.greeting ?? null,
+      proactive: input.proactive,
+    })
+
+    // 角色同时是一个「用户」：进群、加好友、通讯录都复用它
+    const botId = `bot-${created.id}`
+    const bot = usersRepo.createBot(db, {
+      id: botId,
+      displayName: created.name,
+      avatarUrl: created.avatar_url,
+    })
+    aiRepo.setPersonaUserId(db, created.id, botId)
+    const row = aiRepo.findPersona(db, created.id) ?? created
+
+    // 通讯录里 AI 和真人一视同仁：建角色即成为好友
+    if (row.in_contacts === 1) {
+      const contact = contactsRepo.upsert(db, {
+        ownerId,
+        contactUserId: botId,
+        relation: ContactRelation.Friend,
+      })
+      writeChange(db, {
+        entity: 'contact',
+        entityId: `${ownerId}:${botId}`,
+        op: 'upsert',
+        userId: ownerId,
+        payload: {
+          ownerId,
+          contactUserId: botId,
+          alias: contact.alias,
+          relation: contact.relation,
+          requestMessage: null,
+          createdAt: contact.created_at,
+          updatedAt: contact.updated_at,
+          user: usersRepo.mapPublicUser(bot),
+        },
+        actorId: ownerId,
+      })
+    }
+
+    const mapped = aiRepo.mapPersona(row)
+
+    writeChange(db, {
+      entity: 'ai_persona',
+      entityId: row.id,
+      op: 'upsert',
+      userId: ownerId,
+      payload: mapped,
+      actorId: ownerId,
+    })
+
+    // 产品行为：建好角色就出现在「消息」与「通讯录」里，不用再点一次「聊天」
+    const providerId = row.provider_id ?? aiRepo.defaultProvider(db, ownerId)?.id ?? null
+    const ensured = mapped.inContacts
+      ? ensureAiConversation(db, { userId: ownerId, persona: row, providerId })
+      : null
+
+    return { row, mapped, ensured }
+  })
+
+  // 事务提交后再广播
+  if (result.ensured) {
+    const { conversation, conversationId, created } = result.ensured
+    emitConversationUpdated(db, conversation)
+    if (created && result.row.greeting) {
+      appendAiSegment(db, conversationId, {
+        generationId: `greet-${conversationId}`,
+        index: 0,
+        content: result.row.greeting,
+        clientNonce: `greet-${conversationId}`,
+        personaId: result.row.id,
+      })
+    }
+  }
+
+  return result.mapped
+}
+
+/** 角色改名/换头像后，把其所有 AI 会话的快照一起刷掉（会话列表与聊天头部直接读会话字段） */
+function syncPersonaToConversations(db: DB, persona: aiRepo.PersonaRow): Conversation[] {
+  const rows = db
+    .prepare(`SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`)
+    .all(persona.id) as conversationsRepo.ConversationRow[]
+
+  const out: Conversation[] = []
+  for (const row of rows) {
+    const updated = conversationsRepo.update(db, row.id, {
+      name: persona.name,
+      avatarUrl: persona.avatar_url,
+    })
+    const mapped = conversationsRepo.mapConversation(updated)
+    writeChange(db, {
+      entity: 'conversation',
+      entityId: updated.id,
+      op: 'upsert',
+      conversationId: updated.id,
+      payload: mapped,
+      actorId: persona.owner_id,
+    })
+    out.push(mapped)
+  }
+  return out
+}
+
+export function updatePersona(db: DB, ownerId: string, id: string, input: Partial<PersonaPayload>): AiPersona {
+  const current = aiRepo.findPersona(db, id)
+  if (!current || current.owner_id !== ownerId) throw err.notFound('角色不存在')
+
+  const result = withTx(db, () => {
+    const row = aiRepo.updatePersona(db, id, input)
+    const conversations = syncPersonaToConversations(db, row)
+
+    // 群成员列表与通讯录都读 users 表，角色改名/换头像必须同步影子账号
+    if (row.user_id) {
+      usersRepo.updateBotProfile(db, row.user_id, {
+        displayName: row.name,
+        avatarUrl: row.avatar_url,
+      })
+
+      const existing = contactsRepo.find(db, ownerId, row.user_id)
+      if (row.in_contacts === 1) {
+        if (!existing) {
+          const contact = contactsRepo.upsert(db, {
+            ownerId,
+            contactUserId: row.user_id,
+            relation: ContactRelation.Friend,
+          })
+          writeChange(db, {
+            entity: 'contact',
+            entityId: `${ownerId}:${row.user_id}`,
+            op: 'upsert',
+            userId: ownerId,
+            payload: {
+              ownerId,
+              contactUserId: row.user_id,
+              alias: contact.alias,
+              relation: contact.relation,
+              requestMessage: null,
+              createdAt: contact.created_at,
+              updatedAt: contact.updated_at,
+              user: usersRepo.findById(db, row.user_id)
+                ? usersRepo.mapPublicUser(usersRepo.findById(db, row.user_id)!)
+                : null,
+            },
+            actorId: ownerId,
+          })
+        }
+      } else if (existing) {
+        contactsRepo.removePair(db, ownerId, row.user_id)
+        writeChange(db, {
+          entity: 'contact',
+          entityId: `${ownerId}:${row.user_id}`,
+          op: 'delete',
+          userId: ownerId,
+          payload: { ownerId, contactUserId: row.user_id },
+          actorId: ownerId,
+        })
+      }
+    }
+
+    // 从「不在通讯录」改回「在通讯录」时补建会话
+    let ensured: ReturnType<typeof ensureAiConversation> | null = null
+    if (row.in_contacts === 1) {
+      const providerId = row.provider_id ?? aiRepo.defaultProvider(db, ownerId)?.id ?? null
+      ensured = ensureAiConversation(db, { userId: ownerId, persona: row, providerId })
+    }
+
+    const mapped = aiRepo.mapPersona(row)
+    writeChange(db, {
+      entity: 'ai_persona',
+      entityId: row.id,
+      op: 'upsert',
+      userId: ownerId,
+      payload: mapped,
+      actorId: ownerId,
+    })
+
+    return { mapped, conversations, ensured }
+  })
+
+  for (const conversation of result.conversations) emitConversationUpdated(db, conversation)
+  if (result.ensured?.created) emitConversationUpdated(db, result.ensured.conversation)
+
+  return result.mapped
+}
+
+export function deletePersona(db: DB, ownerId: string, id: string): void {
+  const current = aiRepo.findPersona(db, id)
+  if (!current || current.owner_id !== ownerId) throw err.notFound('角色不存在')
+
+  const result = withTx(db, () => {
+    aiRepo.softDeletePersona(db, id)
+
+    const rows = db
+      .prepare(`SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`)
+      .all(id) as conversationsRepo.ConversationRow[]
+
+    const out: Conversation[] = []
+    for (const row of rows) {
+      conversationsRepo.softDelete(db, row.id)
+      const next = conversationsRepo.findById(db, row.id)
+      if (!next) continue
+      const mapped = conversationsRepo.mapConversation(next)
+      writeChange(db, {
+        entity: 'conversation',
+        entityId: row.id,
+        op: 'delete',
+        conversationId: row.id,
+        payload: mapped,
+        actorId: ownerId,
+      })
+      out.push(mapped)
+    }
+
+    // 影子账号、好友关系、群成员身份一起收尾，避免群里留下一个不会说话的成员
+    const botId = current.user_id
+    const leftGroups: string[] = []
+    if (botId) {
+      contactsRepo.removePair(db, ownerId, botId)
+      writeChange(db, {
+        entity: 'contact',
+        entityId: `${ownerId}:${botId}`,
+        op: 'delete',
+        userId: ownerId,
+        payload: { ownerId, contactUserId: botId },
+        actorId: ownerId,
+      })
+      usersRepo.disableBot(db, botId)
+
+      const memberships = db
+        .prepare('SELECT conversation_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL')
+        .all(botId) as Array<{ conversation_id: string }>
+      for (const membership of memberships) {
+        membersRepo.markLeft(db, membership.conversation_id, botId)
+        writeChange(db, {
+          entity: 'member',
+          entityId: botId,
+          op: 'delete',
+          conversationId: membership.conversation_id,
+          payload: { conversationId: membership.conversation_id, userId: botId },
+          actorId: ownerId,
+        })
+        leftGroups.push(membership.conversation_id)
+      }
+    }
+
+    writeChange(db, {
+      entity: 'ai_persona',
+      entityId: id,
+      op: 'delete',
+      userId: ownerId,
+      payload: { id },
+      actorId: ownerId,
+    })
+    return { conversations: out, leftGroups, botId }
+  })
+
+  for (const conversation of result.conversations) emitConversationUpdated(db, conversation)
+  if (result.botId) {
+    for (const conversationId of result.leftGroups) {
+      emitMemberRemoved(db, conversationId, result.botId, [])
+    }
+  }
+}
+
+/**
+ * 打开与某个角色的会话：同一角色已有会话时复用，
+ * 避免每点一次「聊天」就多出一个空会话。
+ */
+export function openConversation(
+  db: DB,
+  userId: string,
+  input: { personaId: string; providerId?: string; title?: string },
+): Conversation {
+  const persona = aiRepo.findPersona(db, input.personaId)
+  if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
+
+  const providerId = input.providerId ?? persona.provider_id ?? aiRepo.defaultProvider(db, userId)?.id
+  if (!providerId) throw err.validation('请先配置 AI 服务商')
+
+  const provider = aiRepo.findProvider(db, providerId)
+  if (!provider || provider.owner_id !== userId) throw err.notFound('服务商不存在')
+
+  const ensured = ensureAiConversation(db, {
+    userId,
+    persona,
+    providerId,
+    title: input.title ?? null,
+  })
+
+  // 复用已有会话时：服务商可能被换过，或之前没有服务商所以还没建 session
+  if (!ensured.created) {
+    withTx(db, () => {
+      const session = aiRepo.findSession(db, ensured.conversationId)
+      if (!session) {
+        aiRepo.createSession(db, {
+          conversationId: ensured.conversationId,
+          personaId: persona.id,
+          providerId,
+        })
+      } else if (session.provider_id !== providerId) {
+        db.prepare('UPDATE ai_sessions SET provider_id = ?, updated_at = ? WHERE conversation_id = ?').run(
+          providerId,
+          Date.now(),
+          ensured.conversationId,
+        )
+      }
+    })
+  }
+
+  if (ensured.created && persona.greeting) {
+    appendAiSegment(db, ensured.conversationId, {
+      generationId: `greet-${ensured.conversationId}`,
+      index: 0,
+      content: persona.greeting,
+      clientNonce: `greet-${ensured.conversationId}`,
+      personaId: persona.id,
+    })
+  }
+
+  return ensured.conversation
+}
+
+/* ---------------------------- AI 消息落库 ---------------------------- */
+
+/**
+ * 追加一条 AI 分段消息。
+ * 分段在服务端与客户端都按「一条消息一个片段」处理，
+ * 这样置顶、未读、搜索、离线补拉全部复用普通消息能力。
+ */
+export function appendAiSegment(
+  db: DB,
+  conversationId: string,
+  input: {
+    generationId: string
+    index: number
+    content: string
+    clientNonce?: string
+    model?: string
+    totalSegments?: number
+    personaId?: string
+    proactive?: boolean
+  },
+): Message {
+  const conv = conversationsRepo.findById(db, conversationId)
+  if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
+
+  // 幂等：greeting 与主动消息在某些并发路径下可能被调两次
+  if (input.clientNonce) {
+    const dup = messagesRepo.findByNonceInConversation(db, conversationId, input.clientNonce)
+    if (dup) return messagesRepo.mapMessage(dup)
+  }
+
+  const session = aiRepo.findSession(db, conversationId)
+  const personaId = input.personaId ?? session?.persona_id ?? conv.ai_persona_id ?? undefined
+
+  const meta: MessageMeta = {
+    ai: {
+      generationId: input.generationId,
+      index: input.index,
+      model: input.model,
+      personaId,
+      totalSegments: input.totalSegments,
+      ...(input.proactive ? { proactive: true } : {}),
+    },
+  }
+
+  const message = appendSystemMessage(db, {
+    conversationId,
+    senderType: 'ai' as SenderType,
+    type: 'text',
+    content: input.content,
+    meta,
+    aiGenerationId: input.generationId,
+    aiIndex: input.index,
+    clientNonce: input.clientNonce ?? null,
+  })
+
+  if (session) {
+    aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(input.content))
+  }
+  return message
+}
+
+/* ------------------------------- 记忆 ------------------------------- */
+
+export function listMemory(
+  db: DB,
+  userId: string,
+  conversationId: string,
+): { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } {
+  assertOwned(db, userId, conversationId)
+  return {
+    summaries: aiRepo.listSummaries(db, conversationId),
+    facts: aiRepo.listFacts(db, conversationId).map(aiRepo.mapFact),
+  }
+}
+
+export function deleteFact(db: DB, userId: string, conversationId: string, factId: string): void {
+  assertOwned(db, userId, conversationId)
+  withTx(db, () => aiRepo.rejectFact(db, conversationId, factId))
+}
+
+export interface MemoryWritePayload {
+  summary?: { fromSeq: number; toSeq: number; text: string; model?: string | null }
+  facts?: Array<{
+    subject: 'user' | 'persona' | 'relation' | 'world'
+    key: string
+    value: string
+    confidence?: number
+  }>
+}
+
+/** 客户端压缩完成后回传结果，服务端负责落库与滚动链维护 */
+export function writeMemory(db: DB, userId: string, conversationId: string, payload: MemoryWritePayload): void {
+  assertOwned(db, userId, conversationId)
+
+  withTx(db, () => {
+    if (payload.summary) {
+      aiRepo.insertSummary(db, {
+        conversationId,
+        fromSeq: payload.summary.fromSeq,
+        toSeq: payload.summary.toSeq,
+        summary: payload.summary.text,
+        tokenEstimate: estimateTokens(payload.summary.text),
+        model: payload.summary.model ?? null,
+      })
+      aiRepo.markCompacted(db, conversationId, payload.summary.toSeq)
+    }
+
+    for (const fact of payload.facts ?? []) {
+      aiRepo.upsertFact(db, {
+        conversationId,
+        subject: fact.subject,
+        key: fact.key,
+        value: fact.value,
+        confidence: fact.confidence ?? 0.7,
+      })
+    }
+  })
+}
+
+function assertOwned(db: DB, userId: string, conversationId: string): void {
+  const conv = conversationsRepo.findById(db, conversationId)
+  if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
+  if (conv.ai_owner_user_id !== userId) throw err.forbidden('无权访问该 AI 会话')
+}
+
+/* --------------------------- 服务端生成模式 --------------------------- */
+
+export interface ServerGenerationInput {
+  conversationId: string
+  userId: string
+  content: string
+  clientNonce: string
+  providerId?: string
+}
+
+export interface ServerGenerationResult {
+  generationId: string
+  segments: number
+}
+
+/**
+ * 密钥托管在服务端时由服务端调用上游。
+ * 不逐 token 推送，而是拿到完整回复后按分条策略拆开、
+ * 逐条延迟落库，客户端通过普通 message.created 事件看到「像真人分批发消息」。
+ */
+export async function generateOnServer(
+  db: DB,
+  input: ServerGenerationInput,
+): Promise<ServerGenerationResult> {
+  assertOwned(db, input.userId, input.conversationId)
+
+  const conversation = conversationsRepo.findById(db, input.conversationId)
+  if (!conversation || conversation.type !== 'ai') throw err.notFound('AI 会话不存在')
+
+  // 老版本建出来的会话可能没有 ai_sessions 行，这里补建而不是直接报错
+  let session = aiRepo.findSession(db, input.conversationId)
+  const personaId = session?.persona_id ?? conversation.ai_persona_id
+  if (!personaId) throw err.notFound('角色不存在')
+
+  const persona = aiRepo.findPersona(db, personaId)
+  if (!persona) throw err.notFound('角色不存在')
+
+  const providerId =
+    input.providerId ??
+    session?.provider_id ??
+    persona.provider_id ??
+    aiRepo.defaultProvider(db, input.userId)?.id
+  if (!providerId) throw err.validation('请先配置 AI 服务商')
+
+  const provider = aiRepo.findProvider(db, providerId)
+  if (!provider) throw err.notFound('服务商不存在')
+
+  if (!session) {
+    withTx(db, () =>
+      aiRepo.createSession(db, {
+        conversationId: input.conversationId,
+        personaId,
+        providerId,
+      }),
+    )
+    session = aiRepo.findSession(db, input.conversationId)
+  }
+  if (provider.key_location !== 'server') {
+    throw err.validation('该服务商的密钥在本机，请使用桌面客户端生成')
+  }
+  const apiKey = resolveServerApiKey(provider)
+
+  // 先落用户消息，保证即使上游失败用户输入也不丢
+  const userMessageId = appendUserMessage(
+    db,
+    input.conversationId,
+    input.userId,
+    input.content,
+    input.clientNonce,
+  )
+
+  // 用户是在引用某条历史消息后发问时，把被引原文一并交给模型
+  const userRow = messagesRepo.findById(db, userMessageId)
+  const quotedRow = userRow?.reply_to_id ? messagesRepo.findById(db, userRow.reply_to_id) : null
+  const quoted =
+    quotedRow && quotedRow.conversation_id === input.conversationId && !quotedRow.deleted_at
+      ? quotedRow.content.trim().slice(0, 400)
+      : null
+
+  // 当前输入由 buildChatMessages 统一追加一次，这里把它从 recent 里摘掉，
+  // 否则模型会看到两遍同样的话（并发插入的 AI 消息也不影响这个判断）
+  const recent = loadRecentMessages(db, input.conversationId, 61).filter(
+    (message) => message.id !== userMessageId,
+  ).slice(-60)
+  const facts = aiRepo.listFacts(db, input.conversationId).map(aiRepo.mapFact)
+  const summary = aiRepo.latestSummary(db, input.conversationId)
+  const owner = db.prepare('SELECT display_name FROM users WHERE id = ?').get(input.userId) as
+    | { display_name: string }
+    | undefined
+
+  const chatMessages = buildChatMessages({
+    persona: aiRepo.mapPersona(persona),
+    facts,
+    summary,
+    recent,
+    userInput: input.content,
+    userName: owner?.display_name ?? '用户',
+    quoted,
+  })
+
+  const generationId = aiRepo.createGeneration(db, {
+    conversationId: input.conversationId,
+    userId: input.userId,
+    userMessageId: null,
+    providerId: provider.id,
+    personaId: persona.id,
+    runLocation: 'server',
+    model: persona.model_override ?? provider.model,
+  })
+
+  let reply = ''
+  try {
+    reply = await callUpstream({
+      baseUrl: provider.base_url,
+      apiKey,
+      model: persona.model_override ?? provider.model,
+      temperature: persona.temperature ?? provider.temperature,
+      maxTokens: provider.max_tokens,
+      messages: chatMessages,
+    })
+  } catch (e) {
+    aiRepo.finishGeneration(db, generationId, {
+      status: 'error',
+      error: e instanceof Error ? e.message : '上游失败',
+    })
+    throw e
+  }
+
+  const settings = aiRepo.readGlobalSettings(db, input.userId)
+  const segments = splitSegments(reply, {
+    enabled: settings.segmentEnabled,
+    pattern: settings.segmentPattern,
+  })
+  if (segments.length === 0) {
+    aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds: [] })
+    return { generationId, segments: 0 }
+  }
+
+  // 逐条延迟投递，模拟真人打字节奏；第一条立即发出
+  let delay = 0
+  const messageIds: string[] = []
+  segments.forEach((segment, index) => {
+    delay += index === 0 ? 0 : segmentDelay(segment)
+    setTimeout(() => {
+      try {
+        const message = appendAiSegment(db, input.conversationId, {
+          generationId,
+          index,
+          content: segment,
+          model: persona.model_override ?? provider.model,
+          totalSegments: segments.length,
+          personaId: persona.id,
+        })
+        messageIds.push(message.id)
+        if (messageIds.length === segments.length) {
+          aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds })
+        }
+      } catch (e) {
+        aiRepo.finishGeneration(db, generationId, {
+          status: 'error',
+          error: e instanceof Error ? e.message : '落库失败',
+        })
+      }
+    }, delay)
+  })
+
+  return { generationId, segments: segments.length }
+}
+
+function appendUserMessage(
+  db: DB,
+  conversationId: string,
+  userId: string,
+  content: string,
+  clientNonce: string,
+): string {
+  const existing = messagesRepo.findByNonce(db, userId, clientNonce)
+  if (existing) return existing.id
+
+  /**
+   * 兜底：客户端已经用另一个 nonce 把这句话发出来了（旧版本、并发重试等），
+   * 再插一条就会在历史里出现两份。15 秒内同会话、同发送者、同内容视为同一条。
+   * 正常客户端会先 findByNonce 命中，走不到这里。
+   */
+  const duplicate = db
+    .prepare(
+      `SELECT id FROM messages
+       WHERE conversation_id = ? AND sender_id = ? AND sender_type = 'user'
+         AND deleted_at IS NULL AND content = ? AND created_at >= ?
+       ORDER BY seq DESC LIMIT 1`,
+    )
+    .get(conversationId, userId, content, Date.now() - 15_000) as { id: string } | undefined
+  if (duplicate) return duplicate.id
+
+  const seq = conversationsRepo.nextSeq(db, conversationId)
+  const ts = Date.now()
+  const row = messagesRepo.insert(db, {
+    conversationId,
+    channelId: null,
+    senderId: userId,
+    senderType: 'user',
+    type: 'text',
+    content,
+    meta: null,
+    seq,
+    clientNonce,
+    createdAt: ts,
+  })
+  conversationsRepo.touchLastMessage(db, conversationId, row.id, ts)
+  const message = messagesRepo.mapMessage(row)
+  writeChange(db, {
+    entity: 'message',
+    entityId: row.id,
+    op: 'upsert',
+    conversationId,
+    payload: message,
+    actorId: userId,
+  })
+  emitMessageCreated(db, message, clientNonce)
+  return row.id
+}
+
+function loadRecentMessages(db: DB, conversationId: string, limit: number): Message[] {
+  const rows = messagesRepo.page(db, { conversationId, limit, before: null, after: null })
+  return rows.reverse().map(messagesRepo.mapMessage)
+}
+
+/** 非流式调用一次 OpenAI 兼容端点。主动消息等场景也复用它。 */
+export async function callUpstream(input: {
+  baseUrl: string
+  apiKey: string
+  model: string
+  temperature: number
+  maxTokens: number
+  messages: Array<{ role: string; content: string }>
+}): Promise<string> {
+  const base = input.baseUrl.trimEnd().replace(/\/$/, '')
+  const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 120000)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${input.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: input.messages,
+        temperature: input.temperature,
+        max_tokens: input.maxTokens,
+        stream: false,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw err.upstreamAi(`上游返回 ${response.status}`, text.slice(0, 300))
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    const content = payload.choices?.[0]?.message?.content
+    if (!content) throw err.upstreamAi('上游没有返回内容')
+    return content
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/* ----------------------------- 连接测试 ----------------------------- */
+/** 用最小代价探一次上游：验证地址、密钥与模型名是否匹配 */
+export async function testProvider(input: {
+  baseUrl: string
+  apiKey: string
+  model: string
+}): Promise<{ ok: boolean; sample: string }> {
+  const base = input.baseUrl.trimEnd().replace(/\/$/, '')
+  const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20000)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(input.apiKey ? { authorization: `Bearer ${input.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [{ role: 'user', content: '说“连接成功”四个字' }],
+        max_tokens: 32,
+        stream: false,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw err.upstreamAi(`上游返回 ${response.status}`, text.slice(0, 200))
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    const sample = payload.choices?.[0]?.message?.content ?? ''
+    return { ok: true, sample }
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('连接超时')
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/* ----------------------------- 余额探测 ----------------------------- */
+
+/** 探测成功的余额结果 */
+export interface BalanceHit {
+  amount: string
+  currency: string
+}
+
+interface ExtractedBalance {
+  amount: number
+  currency: string
+  /** 订阅接口只给总额度，需要再查 usage 才能算出剩余 */
+  needsUsage?: boolean
+}
+
+/** 把各家余额接口的响应收敛成统一结构，认不出返回 null */
+export function extractBalance(url: string, payload: unknown): ExtractedBalance | null {
+  const obj = payload as Record<string, unknown>
+  const num = (v: unknown): number | null => {
+    const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+
+  // 硅基流动：{ data: { totalBalance, balance } }，单位 CNY
+  if (url.includes('/user/info')) {
+    const data = obj.data as Record<string, unknown> | undefined
+    const total = num(data?.totalBalance) ?? num(data?.balance)
+    return total === null ? null : { amount: total, currency: 'CNY' }
+  }
+  // Kimi / Moonshot：{ data: { available_balance } }，单位 CNY
+  if (url.includes('/users/me/balance')) {
+    const data = obj.data as Record<string, unknown> | undefined
+    const available = num(data?.available_balance)
+    return available === null ? null : { amount: available, currency: 'CNY' }
+  }
+  // DeepSeek：{ balance_infos: [{ currency, total_balance }] }
+  if (url.includes('/user/balance')) {
+    const infos = obj.balance_infos as Array<{ currency?: string; total_balance?: string }> | undefined
+    const total = num(infos?.[0]?.total_balance)
+    return total === null ? null : { amount: total, currency: infos?.[0]?.currency ?? 'CNY' }
+  }
+  // OpenRouter：{ data: { total_credits, total_usage } }，单位 USD
+  if (url.endsWith('/credits')) {
+    const data = obj.data as Record<string, unknown> | undefined
+    const credits = num(data?.total_credits)
+    const usage = num(data?.total_usage)
+    if (credits === null || usage === null) return null
+    return { amount: credits - usage, currency: 'USD' }
+  }
+  // one-api / new-api 中转站：hard_limit_usd 是总额度，剩余要减 usage；部分站点直接给 balance
+  if (url.includes('/dashboard/billing/subscription')) {
+    const direct = num(obj.balance)
+    if (direct !== null) return { amount: direct, currency: 'USD' }
+    const hardLimit = num(obj.hard_limit_usd)
+    return hardLimit === null ? null : { amount: hardLimit, currency: 'USD', needsUsage: true }
+  }
+  return null
+}
+
+/** 单个候选接口的探测：非 2xx、非 JSON 或解析不出余额都视为不命中 */
+async function probeCandidate(url: string, apiKey: string): Promise<BalanceHit | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${apiKey}`,
+        // 个别中转站会拦默认 UA，补一个常规值
+        'user-agent': 'NenoChat/0.1',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const payload = (await response.json().catch(() => null)) as unknown
+    if (!payload || typeof payload !== 'object') return null
+    const hit = extractBalance(url, payload)
+    if (!hit) return null
+
+    if (hit.needsUsage) {
+      const usageUrl = `${url.replace(/subscription$/, 'usage')}?start_date=${usageDate(100)}&end_date=${usageDate(-1)}`
+      const usedCents = await fetchUsageCents(usageUrl, apiKey)
+      if (usedCents === null) return null
+      const remaining = hit.amount - usedCents / 100
+      if (!Number.isFinite(remaining) || remaining < 0) return null
+      return { amount: remaining.toFixed(2), currency: hit.currency }
+    }
+    return { amount: String(hit.amount), currency: hit.currency }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function usageDate(offsetDays: number): string {
+  const d = new Date(Date.now() - offsetDays * 86_400_000)
+  return d.toISOString().slice(0, 10)
+}
+
+/** one-api 的 usage 接口返回 total_usage（已用美分） */
+async function fetchUsageCents(url: string, apiKey: string): Promise<number | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { accept: 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'NenoChat/0.1' },
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const payload = (await response.json().catch(() => null)) as { total_usage?: unknown } | null
+    const cents = typeof payload?.total_usage === 'number' ? payload.total_usage : NaN
+    return Number.isFinite(cents) ? cents : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 由服务商的 base_url 推导所有可能的余额接口，base 与站点根各试一遍 */
+function balanceCandidateUrls(baseUrl: string): string[] {
+  const base = baseUrl.trim().replace(/\/+$/, '')
+  let origin = base
+  try {
+    origin = new URL(base).origin
+  } catch {
+    /* 地址解析失败就只试原地址 */
+  }
+  const urls: string[] = []
+  for (const stem of [...new Set([base, origin])]) {
+    urls.push(`${stem}/user/info`)
+    urls.push(`${stem}/users/me/balance`)
+    urls.push(`${stem}/user/balance`)
+    urls.push(`${stem}/credits`)
+    urls.push(`${stem}/dashboard/billing/subscription`)
+  }
+  return [...new Set(urls)]
+}
+
+/**
+ * 并发探测所有候选余额接口，按候选顺序取第一个命中的结果。
+ * 覆盖：硅基流动、Kimi/Moonshot、DeepSeek、OpenRouter、one-api/new-api 系中转站。
+ */
+export async function fetchProviderBalance(input: {
+  baseUrl: string
+  apiKey: string
+}): Promise<BalanceHit | null> {
+  const urls = balanceCandidateUrls(input.baseUrl)
+  const results = await Promise.allSettled(urls.map((url) => probeCandidate(url, input.apiKey)))
+  for (let i = 0; i < urls.length; i++) {
+    const result = results[i]
+    if (result?.status === 'fulfilled' && result.value) return result.value
+  }
+  return null
+}
+
+/** 刷新某个服务商的余额并缓存，返回更新后的服务商 */
+export async function refreshProviderBalance(
+  db: DB,
+  ownerId: string,
+  providerId: string,
+  clientApiKey?: string,
+): Promise<AiProvider> {
+  const row = aiRepo.findProvider(db, providerId)
+  if (!row || row.owner_id !== ownerId) throw err.notFound('服务商不存在')
+
+  const apiKey =
+    clientApiKey?.trim() ||
+    (row.key_location === 'server' && row.api_key_enc ? resolveServerApiKey(row) : '')
+  if (!apiKey) throw err.validation('没有可用密钥，本机密钥模式需要在请求里带上 API Key')
+
+  const hit = await fetchProviderBalance({ baseUrl: row.base_url, apiKey })
+  aiRepo.saveProviderBalance(db, providerId, hit)
+
+  const updated = aiRepo.findProvider(db, providerId)
+  if (!updated) throw err.notFound('服务商不存在')
+  return toPublicProvider(updated)
+}

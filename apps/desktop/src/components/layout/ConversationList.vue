@@ -1,0 +1,182 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import Icon from '@/components/ui/Icon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import ConversationItem from './ConversationItem.vue'
+import NewChatDialog from './NewChatDialog.vue'
+import { useConversationsStore } from '@/stores/conversations'
+import { useMessagesStore } from '@/stores/messages'
+import { useUiStore } from '@/stores/ui'
+import { conversationTitle } from '@/composables/conversation'
+
+const router = useRouter()
+const conversations = useConversationsStore()
+const messages = useMessagesStore()
+const ui = useUiStore()
+
+const keyword = ref('')
+const dialogOpen = ref(false)
+const menu = ref<{ id: string; x: number; y: number } | null>(null)
+
+const filtered = computed(() => {
+  const q = keyword.value.trim().toLowerCase()
+  if (!q) return conversations.ordered
+  return conversations.ordered.filter((c) => conversationTitle(c).toLowerCase().includes(q))
+})
+
+const pinnedAi = computed(() => filtered.value.filter((c) => c.type === 'ai' && c.pinnedAt))
+const aiRest = computed(() => filtered.value.filter((c) => c.type === 'ai' && !c.pinnedAt))
+const groups = computed(() => filtered.value.filter((c) => c.type === 'group'))
+const directs = computed(() => filtered.value.filter((c) => c.type === 'direct'))
+
+const menuTarget = computed(() => (menu.value ? conversations.byId.get(menu.value.id) : null))
+
+function open(id: string): void {
+  void router.push(`/c/${id}`)
+  ui.drawerOpen = false
+}
+
+function openMenu(payload: { id: string; x: number; y: number }): void {
+  menu.value = payload
+}
+
+async function handlePin(): Promise<void> {
+  const target = menuTarget.value
+  if (!target) return
+  await conversations.pin(target.id, !target.pinnedAt)
+  menu.value = null
+}
+
+async function handleMarkRead(): Promise<void> {
+  const target = menuTarget.value
+  if (!target) return
+  const last = messages.lastMessageOf(target.id)
+  await conversations.markRead(target.id, last?.seq ?? 0)
+  menu.value = null
+}
+
+function handleCreated(id: string): void {
+  dialogOpen.value = false
+  open(id)
+}
+
+onMounted(() => {
+  const close = (): void => {
+    menu.value = null
+  }
+  window.addEventListener('click', close)
+  window.addEventListener('scroll', close, true)
+})
+</script>
+
+<template>
+  <aside
+    class="flex w-[300px] shrink-0 flex-col border-r border-line bg-surface-2"
+    :class="ui.isTablet ? 'w-[260px]' : ''"
+  >
+    <!-- 搜索栏与新建 -->
+    <header class="flex items-center gap-1.5 px-3 pt-3 pb-2">
+      <div class="relative flex-1">
+        <span class="absolute top-1/2 left-2.5 -translate-y-1/2 text-muted">
+          <Icon name="search" :size="15" />
+        </span>
+        <input
+          v-model="keyword"
+          type="search"
+          placeholder="搜索会话"
+          class="h-8 w-full rounded-lg border border-transparent bg-surface pl-8 pr-2 text-[13px] outline-none transition-colors placeholder:text-muted focus:border-accent"
+        />
+      </div>
+      <IconButton icon="search" label="全局搜索（Ctrl+K）" :size="17" @click="ui.commandOpen = true" />
+      <IconButton icon="plus" label="发起新会话" :size="18" @click="dialogOpen = true" />
+    </header>
+
+    <div class="scroll-area flex-1 px-2 pb-3">
+      <section v-if="pinnedAi.length > 0" class="mb-1">
+        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">置顶</p>
+        <ConversationItem
+          v-for="item in pinnedAi"
+          :key="item.id"
+          :conversation="item"
+          :active="item.id === conversations.activeId"
+          @select="open"
+          @context="openMenu"
+        />
+      </section>
+
+      <section v-if="aiRest.length > 0" class="mb-1">
+        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">AI 角色</p>
+        <ConversationItem
+          v-for="item in aiRest"
+          :key="item.id"
+          :conversation="item"
+          :active="item.id === conversations.activeId"
+          @select="open"
+          @context="openMenu"
+        />
+      </section>
+
+      <section v-if="groups.length > 0" class="mb-1">
+        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">群聊</p>
+        <ConversationItem
+          v-for="item in groups"
+          :key="item.id"
+          :conversation="item"
+          :active="item.id === conversations.activeId"
+          @select="open"
+          @context="openMenu"
+        />
+      </section>
+
+      <section v-if="directs.length > 0" class="mb-1">
+        <p class="px-2 py-1 text-[11px] font-medium tracking-wide text-muted">私聊</p>
+        <ConversationItem
+          v-for="item in directs"
+          :key="item.id"
+          :conversation="item"
+          :active="item.id === conversations.activeId"
+          @select="open"
+          @context="openMenu"
+        />
+      </section>
+
+      <div
+        v-if="filtered.length === 0"
+        class="mt-10 flex flex-col items-center gap-2 px-4 text-center text-[12.5px] text-muted"
+      >
+        <Icon name="message" :size="28" class="opacity-40" />
+        <p>{{ keyword ? '没有匹配的会话' : '还没有会话，点右上角 + 开始吧' }}</p>
+      </div>
+    </div>
+
+    <!-- 右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="menu"
+        class="fixed z-50 min-w-[168px] overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-[var(--shadow-soft)]"
+        :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-surface-2"
+          @click="handlePin"
+        >
+          <Icon name="pin" :size="14" />
+          {{ menuTarget?.pinnedAt ? '取消置顶' : '置顶会话' }}
+        </button>
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-surface-2"
+          @click="handleMarkRead"
+        >
+          <Icon name="check" :size="14" />
+          标为已读
+        </button>
+      </div>
+    </Teleport>
+
+    <NewChatDialog v-if="dialogOpen" @close="dialogOpen = false" @created="handleCreated" />
+  </aside>
+</template>
