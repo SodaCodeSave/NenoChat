@@ -42,6 +42,9 @@ const activeKey = computed(() => {
   return 'messages'
 })
 
+/** 会话列表的收起按钮只在聊天区出现，其它页面本来就自动收起 */
+const isChatArea = computed(() => route.name === 'home' || route.name === 'conversation')
+
 const connectionTone = computed(() => {
   switch (sync.status) {
     case 'live':
@@ -120,6 +123,18 @@ const connectionTone = computed(() => {
     </button>
 
     <div class="mt-auto flex flex-col items-center gap-1">
+      <button
+        v-if="isChatArea"
+        type="button"
+        class="grid h-9 w-9 place-items-center rounded-xl transition-colors hover:bg-rail-active hover:text-text"
+        :class="ui.conversationListCollapsed ? 'text-accent' : 'text-muted'"
+        :title="ui.conversationListCollapsed ? '展开会话列表' : '收起会话列表'"
+        :aria-label="ui.conversationListCollapsed ? '展开会话列表' : '收起会话列表'"
+        :aria-pressed="ui.conversationListCollapsed"
+        @click="ui.toggleConversationList()"
+      >
+        <Icon name="panelRight" :size="18" />
+      </button>
       <button
         type="button"
         class="grid h-9 w-9 place-items-center rounded-xl text-muted transition-colors hover:bg-rail-active hover:text-text"

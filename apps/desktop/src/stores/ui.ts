@@ -5,6 +5,7 @@ import { useMediaQuery } from '@vueuse/core'
 
 const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
+const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
 export type MobileTab = 'messages' | 'contacts' | 'moments' | 'me'
@@ -23,6 +24,10 @@ export const useUiStore = defineStore('ui', () => {
   const fontScale = ref(1)
   const reduceMotion = ref(false)
   const sendKey = ref<'enter' | 'ctrl+enter'>('enter')
+  /** 桌面端会话列表的手动收起状态，跨会话记住 */
+  const conversationListCollapsed = ref(
+    localStorage.getItem(CONVERSATION_LIST_KEY) === 'true',
+  )
 
   const navSection = ref<NavSection>('messages')
   const mobileTab = ref<MobileTab>('messages')
@@ -62,6 +67,15 @@ export const useUiStore = defineStore('ui', () => {
     applyTheme()
   }
 
+  function setConversationListCollapsed(next: boolean): void {
+    conversationListCollapsed.value = next
+    localStorage.setItem(CONVERSATION_LIST_KEY, String(next))
+  }
+
+  function toggleConversationList(): void {
+    setConversationListCollapsed(!conversationListCollapsed.value)
+  }
+
   /** 服务端下发的用户设置覆盖本地默认值 */
   function applyServerSettings(settings: UserSettings): void {
     theme.value = settings.theme
@@ -88,6 +102,7 @@ export const useUiStore = defineStore('ui', () => {
     fontScale,
     reduceMotion,
     sendKey,
+    conversationListCollapsed,
     navSection,
     mobileTab,
     rightPanel,
@@ -101,6 +116,8 @@ export const useUiStore = defineStore('ui', () => {
     setTheme,
     toggleTheme,
     setAccent,
+    setConversationListCollapsed,
+    toggleConversationList,
     applyServerSettings,
   }
 })

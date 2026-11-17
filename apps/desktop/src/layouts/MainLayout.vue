@@ -24,9 +24,13 @@ watch(
 )
 
 const isConversation = computed(() => route.name === 'conversation')
+/** 只有消息首页与具体会话属于聊天区，其它页面（设置、通讯录、动态）让内容占满宽度 */
+const isChatArea = computed(() => route.name === 'home' || route.name === 'conversation')
 /** 手机端：首页 = 会话列表全屏；进入会话/子页面后只显示内容区 */
 const isMobileHome = computed(() => ui.isMobile && route.name === 'home')
-const showList = computed(() => (ui.isMobile ? isMobileHome.value : true))
+const showList = computed(() =>
+  ui.isMobile ? isMobileHome.value : isChatArea.value && !ui.conversationListCollapsed,
+)
 const showMain = computed(() => (ui.isMobile ? !isMobileHome.value : true))
 /** 只在四个一级 Tab 页显示底栏，会话设置等子页面保持沉浸 */
 const tabVisible = computed(

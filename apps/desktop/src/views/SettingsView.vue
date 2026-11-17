@@ -459,7 +459,7 @@ onBeforeUnmount(() => {
     <div class="flex min-h-0 min-w-0 flex-1">
       <div ref="scrollEl" class="scroll-area min-w-0 flex-1">
         <div
-          class="mx-auto w-full max-w-[720px] px-4 pb-10 md:px-8"
+          class="mx-auto w-full max-w-[880px] px-4 pb-10 md:px-8"
           :class="ui.isMobile ? 'pt-4' : 'pt-6'"
         >
           <div v-if="!currentMeta.selfHeader" class="mb-4">
