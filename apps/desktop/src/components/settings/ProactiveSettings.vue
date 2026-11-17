@@ -36,6 +36,8 @@ const DEFAULTS: Editable = {
   momentsLikesPerDay: MOMENT_AI_DEFAULTS.likesPerDay,
   groupEnabled: true,
   groupRepliesPerDay: GROUP_AI_DEFAULTS.repliesPerDay,
+  groupReplyProbability: null,
+  groupReplyCooldownMinutes: null,
   groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
   debugMode: false,
   segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
@@ -112,6 +114,32 @@ function toggleUnlimited(event: Event): void {
   const unlimited = (event.target as HTMLInputElement).checked
   form.maxPerDay = unlimited ? -1 : PROACTIVE_DEFAULTS.maxPerDay
   void commit({ maxPerDay: form.maxPerDay })
+}
+
+/** 群接话的无上限勾选 */
+function toggleGroupUnlimited(event: Event): void {
+  const unlimited = (event.target as HTMLInputElement).checked
+  form.groupRepliesPerDay = unlimited ? -1 : GROUP_AI_DEFAULTS.repliesPerDay
+  void commit({ groupRepliesPerDay: form.groupRepliesPerDay })
+}
+
+/** 可空数字：清空输入表示恢复默认行为，存 null */
+function onNullableNumber(
+  key: 'groupReplyProbability' | 'groupReplyCooldownMinutes',
+  event: Event,
+  min: number,
+  max: number,
+): void {
+  const raw = (event.target as HTMLInputElement).value.trim()
+  if (raw === '') {
+    form[key] = null
+    void commit({ [key]: null })
+    return
+  }
+  const num = Number(raw)
+  const value = Number.isFinite(num) ? Math.min(max, Math.max(min, Math.round(num))) : min
+  form[key] = value
+  void commit({ [key]: value })
 }
 
 /** 一键把所有角色切回跟随全局，省得逐个进角色编辑器 */
@@ -343,7 +371,7 @@ async function followAll(): Promise<void> {
           <span class="min-w-0">
             <span class="block text-[12.5px] font-medium text-text-strong">允许角色在群里接话</span>
             <span class="block text-[11px] leading-relaxed text-muted">
-              被点名一定回；其他时候先按冷却、额度、体力筛选，再由角色自己决定要不要插话。安静够久时也可能主动开个话题。
+              被点名一定回；其他时候先按冷却与额度筛选再掷概率，最后由角色自己决定要不要插话。安静够久时也可能主动开个话题。
             </span>
           </span>
         </label>
@@ -351,14 +379,26 @@ async function followAll(): Promise<void> {
         <div v-if="form.groupEnabled" class="mt-2 grid grid-cols-2 gap-2 pl-[22px]">
           <label class="block">
             <span class="mb-0.5 block text-[11px] text-muted">每群每天最多插话</span>
-            <input
-              :value="form.groupRepliesPerDay"
-              type="number"
-              min="0"
-              max="50"
-              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
-              @change="onNumber('groupRepliesPerDay', $event, 0, 50)"
-            />
+            <div class="flex items-center gap-1.5">
+              <input
+                :value="form.groupRepliesPerDay"
+                type="number"
+                min="0"
+                max="50"
+                :disabled="form.groupRepliesPerDay < 0"
+                class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent disabled:opacity-40"
+                @change="onNumber('groupRepliesPerDay', $event, 0, 50)"
+              />
+              <label class="flex shrink-0 items-center gap-1 text-[11px] text-muted">
+                <input
+                  type="checkbox"
+                  :checked="form.groupRepliesPerDay < 0"
+                  class="h-3 w-3 accent-[var(--color-accent)]"
+                  @change="toggleGroupUnlimited"
+                />
+                无上限
+              </label>
+            </div>
           </label>
           <label class="block">
             <span class="mb-0.5 block text-[11px] text-muted">每群每天主动开口</span>
@@ -369,6 +409,30 @@ async function followAll(): Promise<void> {
               max="10"
               class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent"
               @change="onNumber('groupAutonomyPerDay', $event, 0, 10)"
+            />
+          </label>
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">接话概率（%）</span>
+            <input
+              :value="form.groupReplyProbability ?? ''"
+              type="number"
+              min="0"
+              max="100"
+              placeholder="智能"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent placeholder:text-muted/60"
+              @change="onNullableNumber('groupReplyProbability', $event, 0, 100)"
+            />
+          </label>
+          <label class="block">
+            <span class="mb-0.5 block text-[11px] text-muted">两次接话最少隔（分钟）</span>
+            <input
+              :value="form.groupReplyCooldownMinutes ?? ''"
+              type="number"
+              min="0"
+              max="1440"
+              placeholder="默认 45 秒"
+              class="h-7 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent placeholder:text-muted/60"
+              @change="onNullableNumber('groupReplyCooldownMinutes', $event, 0, 1440)"
             />
           </label>
         </div>

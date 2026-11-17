@@ -8,18 +8,18 @@ export interface UploadOptions {
 }
 
 /**
- * 上传文件。
+ * 以 multipart 上传一个文件，返回解析后的 JSON 响应体。
  *
  * 用 XMLHttpRequest 而不是 fetch：fetch 拿不到上传进度。
  * 用 FormData + <input type="file">：不碰 Tauri 的 fs scope，
  * 桌面端与浏览器端走同一份代码。
  */
-export function uploadFile(file: File, options: UploadOptions = {}): Promise<Attachment> {
+export function postFile<T>(path: string, file: File, options: UploadOptions = {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const form = new FormData()
     form.append('file', file, file.name)
 
-    const url = `${getBaseUrl().replace(/\/$/, '')}${API_PREFIX}/files?kind=${options.kind ?? 'file'}`
+    const url = `${getBaseUrl().replace(/\/$/, '')}${path}`
     const xhr = new XMLHttpRequest()
     xhr.open('POST', url)
 
@@ -45,12 +45,7 @@ export function uploadFile(file: File, options: UploadOptions = {}): Promise<Att
       }
 
       if (xhr.status >= 200 && xhr.status < 300) {
-        const attachment = (body as { attachment?: Attachment } | null)?.attachment
-        if (!attachment) {
-          reject(new Error('服务端没有返回附件信息'))
-          return
-        }
-        resolve(attachment)
+        resolve(body as T)
         return
       }
 
@@ -64,4 +59,15 @@ export function uploadFile(file: File, options: UploadOptions = {}): Promise<Att
 
     xhr.send(form)
   })
+}
+
+/** 上传文件。上传完由调用方决定怎么使用返回的附件 */
+export async function uploadFile(file: File, options: UploadOptions = {}): Promise<Attachment> {
+  const body = await postFile<{ attachment?: Attachment }>(
+    `${API_PREFIX}/files?kind=${options.kind ?? 'file'}`,
+    file,
+    options,
+  )
+  if (!body?.attachment) throw new Error('服务端没有返回附件信息')
+  return body.attachment
 }

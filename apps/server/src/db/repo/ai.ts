@@ -460,6 +460,8 @@ export interface GlobalSettingsRow {
   moments_likes_per_day: number
   group_enabled: number
   group_replies_per_day: number
+  group_reply_probability: number | null
+  group_reply_cooldown_minutes: number | null
   group_autonomy_per_day: number
   segment_enabled: number
   segment_pattern: string
@@ -496,6 +498,8 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     momentsLikesPerDay: MOMENT_AI_DEFAULTS.likesPerDay,
     groupEnabled: true,
     groupRepliesPerDay: GROUP_AI_DEFAULTS.repliesPerDay,
+    groupReplyProbability: null,
+    groupReplyCooldownMinutes: null,
     groupAutonomyPerDay: GROUP_AI_DEFAULTS.autonomyPerDay,
     segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
     segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
@@ -528,6 +532,8 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     momentsLikesPerDay: row.moments_likes_per_day,
     groupEnabled: row.group_enabled === 1,
     groupRepliesPerDay: row.group_replies_per_day,
+    groupReplyProbability: row.group_reply_probability ?? null,
+    groupReplyCooldownMinutes: row.group_reply_cooldown_minutes ?? null,
     groupAutonomyPerDay: row.group_autonomy_per_day,
     segmentEnabled: row.segment_enabled === 1,
     segmentPattern: row.segment_pattern || fallback.segmentPattern,
@@ -550,8 +556,9 @@ export function writeGlobalSettings(
     `INSERT INTO ai_global_settings
        (user_id, proactive_enabled, proactive_config, moments_enabled, moments_posts_per_day,
         moments_comments_per_day, moments_likes_per_day, group_enabled, group_replies_per_day,
-        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled, debug_mode, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        group_reply_probability, group_reply_cooldown_minutes, group_autonomy_per_day,
+        segment_enabled, segment_pattern, stream_enabled, debug_mode, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        proactive_enabled = excluded.proactive_enabled,
        proactive_config = excluded.proactive_config,
@@ -561,6 +568,8 @@ export function writeGlobalSettings(
        moments_likes_per_day = excluded.moments_likes_per_day,
        group_enabled = excluded.group_enabled,
        group_replies_per_day = excluded.group_replies_per_day,
+       group_reply_probability = excluded.group_reply_probability,
+       group_reply_cooldown_minutes = excluded.group_reply_cooldown_minutes,
        group_autonomy_per_day = excluded.group_autonomy_per_day,
        segment_enabled = excluded.segment_enabled,
        segment_pattern = excluded.segment_pattern,
@@ -586,6 +595,8 @@ export function writeGlobalSettings(
     next.momentsLikesPerDay,
     next.groupEnabled ? 1 : 0,
     next.groupRepliesPerDay,
+    next.groupReplyProbability ?? null,
+    next.groupReplyCooldownMinutes ?? null,
     next.groupAutonomyPerDay,
     next.segmentEnabled ? 1 : 0,
     next.segmentPattern,

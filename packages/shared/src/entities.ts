@@ -369,8 +369,12 @@ export interface AiGlobalSettings {
   momentsLikesPerDay: number
   /** 群聊自动互动总开关：关掉后角色不再插话，也不再主动开口 */
   groupEnabled: boolean
-  /** 每个角色在每个群里每天最多插话几条 */
+  /** 每个角色在每个群里每天最多插话几条；-1 表示无上限，0 表示不插话 */
   groupRepliesPerDay: number
+  /** 固定接话概率（0-100）；不配置时走体力与话题相关度的公式 */
+  groupReplyProbability?: number | null
+  /** 两次插话最少隔几分钟；不配置用默认 45 秒，0 表示不限制（被点名始终必回） */
+  groupReplyCooldownMinutes?: number | null
   /** 每个角色在每个群里每天最多主动开几次话题 */
   groupAutonomyPerDay: number
   /** 是否把 AI 回复拆成多条消息发送 */

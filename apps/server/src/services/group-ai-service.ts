@@ -1,6 +1,7 @@
 import {
   GROUP_AI_DEFAULTS,
   buildGroupPrompt,
+  extractStickerMarker,
   isSkipReply,
   splitSegments,
   ulid,
@@ -18,10 +19,11 @@ import * as conversationsRepo from '../db/repo/conversations'
 import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
+import * as stickersRepo from '../db/repo/stickers'
 import * as usersRepo from '../db/repo/users'
 import { err } from '../util/errors'
 import { now } from '../util/clock'
-import { callUpstream, resolveServerApiKey } from './ai-service'
+import { aiStickerOptions, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
 import { appendSystemMessage } from './message-service'
 import { createNotification } from './notification-service'
 import {
@@ -208,7 +210,7 @@ function reserveTurn(
 ): ReservedTurn | null {
   return withTx(db, () => {
     const used = countToday(db, input.conversationId, input.member.persona.id, input.dayKey, input.kind)
-    if (used >= input.maxPerDay) return null
+    if (input.maxPerDay >= 0 && used >= input.maxPerDay) return null
 
     const ts = now()
     const logId = ulid()
@@ -379,6 +381,7 @@ function buildTurnPrompt(
     members: rosterOf(db, input.conversationId, input.member.botUserId),
     recent: toPromptRecent(db, messages, input.member.botUserId, nameById),
     mode: input.kind,
+    stickers: aiStickerOptions(db, input.member.persona.owner_id),
     trigger: input.trigger
       ? {
           speaker: input.trigger.speaker,
@@ -404,6 +407,95 @@ function conversationLastMessageAt(db: DB, conversationId: string): number {
 
 /* ------------------------------ 消息落库 ------------------------------ */
 
+/**
+ * 群聊 AI 分段落库的公共入口：服务端生成与客户端回传都走这里。
+ * 分段里若带有效的表情标记，拆成文字与表情两条消息；最多解析一个标记。
+ */
+function appendGroupSegmentCore(
+  db: DB,
+  input: {
+    conversationId: string
+    channelId: string | null
+    persona: aiRepo.PersonaRow
+    generationId: string
+    index: number
+    content: string
+    totalSegments: number
+    model?: string | null
+    proactive?: boolean
+    replyToId?: string | null
+    clientNonce: string
+  },
+): Message {
+  const existing = messagesRepo.findByNonceInConversation(db, input.conversationId, input.clientNonce)
+  if (existing) return messagesRepo.mapMessage(existing)
+
+  const enabledIds = new Set(
+    stickersRepo.listAiStickers(db, input.persona.owner_id).map((row) => row.id),
+  )
+  const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
+  const text = marker?.stickerId ? marker.text : input.content
+
+  const buildMeta = (index: number): MessageMeta => ({
+    ai: {
+      generationId: input.generationId,
+      index,
+      personaId: input.persona.id,
+      totalSegments: input.totalSegments,
+      model: input.model ?? undefined,
+      ...(input.proactive ? { proactive: true } : {}),
+    },
+  })
+
+  const appendText = (content: string, index: number, replyToId: string | null): Message =>
+    appendSystemMessage(db, {
+      conversationId: input.conversationId,
+      channelId: input.channelId,
+      senderType: 'ai' as SenderType,
+      senderId: input.persona.user_id,
+      type: 'text',
+      content,
+      meta: buildMeta(index),
+      replyToId,
+      aiGenerationId: input.generationId,
+      aiIndex: index,
+      clientNonce: input.clientNonce,
+    })
+
+  const stickerNonce = `${input.clientNonce}-s`
+  const stickerAppend = (index: number, replyToId: string | null): Message | null =>
+    appendStickerMessage(db, {
+      conversationId: input.conversationId,
+      channelId: input.channelId,
+      stickerId: marker!.stickerId!,
+      generationId: input.generationId,
+      index,
+      clientNonce: stickerNonce,
+      personaId: input.persona.id,
+      model: input.model ?? undefined,
+      totalSegments: input.totalSegments,
+      proactive: input.proactive,
+    }) ?? null
+
+  // replyToId 只挂在第一片上：文字在前挂文字，表情在前挂表情
+  if (marker?.stickerId && marker.stickerFirst) {
+    const sticker = stickerAppend(input.index, input.replyToId ?? null)
+    const textIndex = sticker ? input.index + 1 : input.index
+    const first = sticker ?? appendText(text, input.index, input.replyToId ?? null)
+    if (text.trim()) appendText(text, textIndex, null)
+    return first
+  }
+
+  const hasText = text.trim().length > 0
+  if (marker?.stickerId) {
+    const textMessage = hasText ? appendText(text, input.index, input.replyToId ?? null) : null
+    const sticker = stickerAppend(textMessage ? input.index + 1 : input.index, textMessage ? null : input.replyToId ?? null)
+    return textMessage ?? sticker!
+  }
+
+  return appendText(text, input.index, input.replyToId ?? null)
+}
+
 function appendGroupSegment(
   db: DB,
   input: {
@@ -419,33 +511,9 @@ function appendGroupSegment(
     replyToId?: string | null
   },
 ): Message {
-  const clientNonce = `${input.generationId}-${input.index}`
-  const existing = messagesRepo.findByNonceInConversation(db, input.conversationId, clientNonce)
-  if (existing) return messagesRepo.mapMessage(existing)
-
-  const meta: MessageMeta = {
-    ai: {
-      generationId: input.generationId,
-      index: input.index,
-      personaId: input.persona.id,
-      totalSegments: input.totalSegments,
-      model: input.model ?? undefined,
-      ...(input.proactive ? { proactive: true } : {}),
-    },
-  }
-
-  return appendSystemMessage(db, {
-    conversationId: input.conversationId,
-    channelId: input.channelId,
-    senderType: 'ai' as SenderType,
-    senderId: input.persona.user_id,
-    type: 'text',
-    content: input.content,
-    meta,
-    replyToId: input.replyToId ?? null,
-    aiGenerationId: input.generationId,
-    aiIndex: input.index,
-    clientNonce,
+  return appendGroupSegmentCore(db, {
+    ...input,
+    clientNonce: `${input.generationId}-${input.index}`,
   })
 }
 
@@ -618,6 +686,11 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       repliesToday: countToday(db, trigger.conversationId, member.persona.id, dayKey, 'reply'),
       maxRepliesPerDay: settings.groupRepliesPerDay,
       lastReplyAt: state.lastReplyAt,
+      cooldownMs:
+        settings.groupReplyCooldownMinutes === null || settings.groupReplyCooldownMinutes === undefined
+          ? GROUP_AI_DEFAULTS.replyCooldownMs
+          : settings.groupReplyCooldownMinutes * 60_000,
+      probabilityPercent: settings.groupReplyProbability ?? null,
       energy: state.energy,
       mustReply: mentioned,
       relevance: relevanceOf(trigger.content, mapped.name, mapped.interests),
@@ -748,27 +821,18 @@ export function appendClientGroupSegment(
     throw err.validation('这次发言机会已经结束')
   }
 
-  const message = appendSystemMessage(db, {
+  const message = appendGroupSegmentCore(db, {
     conversationId: input.conversationId,
     channelId: input.channelId ?? null,
-    senderType: 'ai' as SenderType,
-    senderId: persona.user_id,
-    type: 'text',
+    persona,
+    generationId: input.generationId,
+    index: input.index,
     content: input.content,
-    meta: {
-      ai: {
-        generationId: input.generationId,
-        index: input.index,
-        personaId: persona.id,
-        totalSegments: input.totalSegments,
-        model: input.model,
-        ...(log?.kind === 'autonomy' ? { proactive: true } : {}),
-      },
-    },
+    totalSegments: input.totalSegments ?? 1,
+    model: input.model ?? null,
+    ...(log?.kind === 'autonomy' ? { proactive: true } : {}),
     // 与本地生成保持一致：只有第一条分条引用触发它的消息
     replyToId: input.index === 0 ? (log?.reply_to_id ?? null) : null,
-    aiGenerationId: input.generationId,
-    aiIndex: input.index,
     clientNonce: input.clientNonce,
   })
 

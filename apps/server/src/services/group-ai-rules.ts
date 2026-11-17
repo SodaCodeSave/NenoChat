@@ -48,8 +48,13 @@ export interface GroupReplyDecisionInput {
   now: number
   enabled: boolean
   repliesToday: number
+  /** -1 表示无上限 */
   maxRepliesPerDay: number
   lastReplyAt: number | null
+  /** 两次接话的最小间隔；0 表示不限制（被点名仍受 8 秒防抖约束） */
+  cooldownMs: number
+  /** 固定接话概率百分比；null 时走体力与相关度公式 */
+  probabilityPercent: number | null
   energy: number
   /** 被点名或被直接提问 */
   mustReply: boolean
@@ -65,17 +70,18 @@ export interface GroupReplyDecision {
 
 /**
  * 判定顺序：总开关 → 配额 → 冷却 → 体力/概率。
- * 被点名时跳过体力与概率，但仍受配额和较短的冷却约束。
+ * 被点名时跳过冷却、体力与概率，直接放行（仅保留 8 秒防抖）。
+ * 配置了固定概率时，概率掷骰替代体力公式；掷中与否最终都由模型自己决定说不说。
  */
 export function decideGroupReply(input: GroupReplyDecisionInput): GroupReplyDecision {
   if (!input.enabled) return { fire: false, reason: 'disabled' }
-  if (input.maxRepliesPerDay <= 0) return { fire: false, reason: 'quota_zero' }
-  if (input.repliesToday >= input.maxRepliesPerDay) {
+  if (input.maxRepliesPerDay === 0) return { fire: false, reason: 'quota_zero' }
+  if (input.maxRepliesPerDay > 0 && input.repliesToday >= input.maxRepliesPerDay) {
     return { fire: false, reason: 'quota_exhausted' }
   }
 
-  const cooldown = input.mustReply ? 8_000 : GROUP_AI_DEFAULTS.replyCooldownMs
-  if (input.lastReplyAt !== null && input.now - input.lastReplyAt < cooldown) {
+  const cooldown = input.mustReply ? 8_000 : input.cooldownMs
+  if (cooldown > 0 && input.lastReplyAt !== null && input.now - input.lastReplyAt < cooldown) {
     return { fire: false, reason: 'cooldown' }
   }
 
@@ -85,8 +91,11 @@ export function decideGroupReply(input: GroupReplyDecisionInput): GroupReplyDeci
     return { fire: false, reason: 'low_energy' }
   }
 
-  // 体力越高、话题越相关，越可能接话；上限 0.9，避免每条都抢
-  const chance = Math.min(0.9, 0.1 + input.energy / 400 + input.relevance * 0.55)
+  // 固定概率直接掷骰；否则体力越高、话题越相关，越可能接话，上限 0.9 避免每条都抢
+  const chance =
+    input.probabilityPercent !== null
+      ? Math.min(1, Math.max(0, input.probabilityPercent / 100))
+      : Math.min(0.9, 0.1 + input.energy / 400 + input.relevance * 0.55)
   if (input.random() > chance) return { fire: false, reason: 'not_in_mood' }
 
   return { fire: true, reason: 'in_mood' }

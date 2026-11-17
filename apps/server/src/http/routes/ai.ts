@@ -155,6 +155,14 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true }
   })
 
+  /** 服务端识图分析一张表情包的情绪标签（密钥托管模式）；本机密钥由客户端自行分析 */
+  app.post('/ai/stickers/analyze', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(z.object({ stickerId: z.string().min(1) }), request.body)
+    const tags = await aiService.analyzeStickerOnServer(db, userId, input.stickerId)
+    return { tags }
+  })
+
   /* ------------------------------ 群聊 AI ------------------------------ */
 
   /** 本机密钥：客户端生成好一条群消息后交回服务端落库 */

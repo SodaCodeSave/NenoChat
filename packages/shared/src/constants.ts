@@ -26,6 +26,10 @@ export const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000
 
 export const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
 export const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024
+/** 导入表情包 zip 的上限；图片本身已压缩，正常整包在这个量级 */
+export const MAX_STICKER_PACK_BYTES = 300 * 1024 * 1024
+/** 单次导入的表情张数上限，防止一个包塞进成千上万张小图 */
+export const MAX_STICKER_PACK_FILES = 300
 export const MAX_GROUP_MEMBERS_DEFAULT = 200
 export const MAX_POST_IMAGES = 9
 export const POST_PAGE_SIZE = 20

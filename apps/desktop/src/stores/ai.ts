@@ -15,6 +15,8 @@ import {
   segmentDelay,
   SEGMENT_REPLY_DEFAULTS,
   splitSegments,
+  stickerOptionsFromPacks,
+  stripStickerMarkers,
   ulid,
   type AiGlobalSettings,
   type AiMemoryFact,
@@ -39,6 +41,7 @@ import { useAuthStore } from './auth'
 import { useConversationsStore } from './conversations'
 import { useMessagesStore } from './messages'
 import { useServersStore } from './servers'
+import { useStickersStore } from './stickers'
 
 interface StreamDelta {
   generation_id: string
@@ -220,7 +223,8 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   function streamTextOf(conversationId: string): string {
-    return streaming.value[conversationId]?.text ?? ''
+    // 表情标记落库时才拆成真正的表情消息，打字气泡里不能露出原始标记
+    return stripStickerMarkers(streaming.value[conversationId]?.text ?? '')
   }
 
   function isGenerating(conversationId: string): boolean {
@@ -259,6 +263,7 @@ export const useAiStore = defineStore('ai', () => {
       quoted: quoted ?? null,
       userImages: images,
       includeImages,
+      stickers: stickerOptionsFromPacks(useStickersStore().packs),
     })
 
     return { chat, memories }
@@ -446,7 +451,7 @@ export const useAiStore = defineStore('ai', () => {
         pending += event.payload.delta
         cutNow(false)
         const current = streaming.value[conversationId]
-        if (current) current.text = pending
+        if (current) current.text = stripStickerMarkers(pending)
       }).then((off) => unlisteners.push(off))
 
       void listen<StreamDone>('ai://done', (event) => {
@@ -939,6 +944,7 @@ export const useAiStore = defineStore('ai', () => {
             replyTo: quotedContextOf(message),
           })),
         mode: payload.kind,
+        stickers: stickerOptionsFromPacks(useStickersStore().packs),
         trigger:
           trigger && payload.kind === 'reply'
             ? {

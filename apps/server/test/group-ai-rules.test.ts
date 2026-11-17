@@ -17,6 +17,8 @@ function replyInput(overrides: Partial<Parameters<typeof decideGroupReply>[0]> =
     repliesToday: 0,
     maxRepliesPerDay: 5,
     lastReplyAt: null,
+    cooldownMs: GROUP_AI_DEFAULTS.replyCooldownMs,
+    probabilityPercent: null,
     energy: 80,
     mustReply: false,
     relevance: 0.6,
@@ -95,6 +97,34 @@ describe('群聊插话判定', () => {
   it('概率不足时安静，概率命中时接话', () => {
     expect(decideGroupReply(replyInput({ random: () => 0.99 })).fire).toBe(false)
     expect(decideGroupReply(replyInput({ random: () => 0.01 })).fire).toBe(true)
+  })
+
+  it('配额 -1 表示无上限', () => {
+    const decision = decideGroupReply(
+      replyInput({ repliesToday: 999, maxRepliesPerDay: -1, random: () => 0.01 }),
+    )
+    expect(decision.fire).toBe(true)
+  })
+
+  it('固定概率替代体力公式：即使相关度为 0 也按配置概率掷骰', () => {
+    const hit = decideGroupReply(replyInput({ probabilityPercent: 50, relevance: 0, random: () => 0.49 }))
+    const miss = decideGroupReply(replyInput({ probabilityPercent: 50, relevance: 0, random: () => 0.51 }))
+    expect(hit.fire).toBe(true)
+    expect(miss.fire).toBe(false)
+    expect(miss.reason).toBe('not_in_mood')
+  })
+
+  it('冷却分钟数可配：0 表示不受冷却限制', () => {
+    const decision = decideGroupReply(replyInput({ cooldownMs: 0, lastReplyAt: NOW - 1_000, random: () => 0.01 }))
+    expect(decision.fire).toBe(true)
+  })
+
+  it('冷却分钟数覆盖默认值', () => {
+    const decision = decideGroupReply(
+      replyInput({ cooldownMs: 10 * 60_000, lastReplyAt: NOW - 60_000, random: () => 0.01 }),
+    )
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('cooldown')
   })
 })
 

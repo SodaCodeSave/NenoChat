@@ -5,8 +5,10 @@ import {
   buildChatMessages,
   cutStreamingSegments,
   estimateTokens,
+  extractStickerMarker,
   segmentDelay,
   splitSegments,
+  stripStickerMarkers,
   type AiMemoryFact,
   type AiMemorySummary,
   type AiDebugSummary,
@@ -17,6 +19,7 @@ import {
   type AiUsageKind,
   type ChatMessage,
   type Conversation,
+  type AttachmentRef,
   type Message,
   type MessageMeta,
   type ReplyStyle,
@@ -36,6 +39,7 @@ import * as conversationsRepo from '../db/repo/conversations'
 import * as debugRepo from '../db/repo/debug'
 import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
+import * as stickersRepo from '../db/repo/stickers'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
@@ -584,10 +588,74 @@ export function openConversation(
 
 /* ---------------------------- AI 消息落库 ---------------------------- */
 
+/** 表情消息的附件快照，与客户端手动发表情时构造的 meta 保持同一形态 */
+function stickerAttachmentRef(sticker: stickersRepo.StickerRow, attachment: attachmentsRepo.AttachmentRow): AttachmentRef {
+  return {
+    id: sticker.attachment_id ?? sticker.id,
+    kind: 'sticker',
+    filename: `${sticker.id}.${sticker.kind === 'gif' ? 'gif' : 'png'}`,
+    mime: sticker.kind === 'gif' ? 'image/gif' : 'image/png',
+    size: 0,
+    url: `/files/${attachment.storage_key}`,
+  }
+}
+
+/**
+ * 落一条 AI 的表情消息。表情可能刚被删掉或文件丢失，
+ * 此时返回 null 让调用方只发文字，不要让整条回复消失。
+ */
+export function appendStickerMessage(
+  db: DB,
+  input: {
+    conversationId: string
+    channelId?: string | null
+    stickerId: string
+    generationId: string
+    index: number
+    clientNonce?: string | null
+    personaId?: string
+    model?: string
+    totalSegments?: number
+    proactive?: boolean
+  },
+): Message | null {
+  const sticker = stickersRepo.findSticker(db, input.stickerId)
+  if (!sticker || !sticker.attachment_id) return null
+  const attachment = attachmentsRepo.findById(db, sticker.attachment_id)
+  if (!attachment) return null
+
+  const meta: MessageMeta = {
+    ai: {
+      generationId: input.generationId,
+      index: input.index,
+      model: input.model,
+      personaId: input.personaId,
+      totalSegments: input.totalSegments,
+      ...(input.proactive ? { proactive: true } : {}),
+    },
+    stickerId: sticker.id,
+    attachments: [stickerAttachmentRef(sticker, attachment)],
+  }
+
+  return appendSystemMessage(db, {
+    conversationId: input.conversationId,
+    channelId: input.channelId ?? null,
+    senderType: 'ai' as SenderType,
+    type: 'sticker',
+    content: '',
+    meta,
+    aiGenerationId: input.generationId,
+    aiIndex: input.index,
+    clientNonce: input.clientNonce ?? null,
+  })
+}
+
 /**
  * 追加一条 AI 分段消息。
  * 分段在服务端与客户端都按「一条消息一个片段」处理，
  * 这样置顶、未读、搜索、离线补拉全部复用普通消息能力。
+ * 分段里若带有效的表情标记，会拆成文字与表情两条消息；
+ * 每条分段最多解析一个标记，其余标记按噪音剔除。
  */
 export function appendAiSegment(
   db: DB,
@@ -614,33 +682,73 @@ export function appendAiSegment(
 
   const session = aiRepo.findSession(db, conversationId)
   const personaId = input.personaId ?? session?.persona_id ?? conv.ai_persona_id ?? undefined
+  const ownerId = conv.ai_owner_user_id ?? null
 
-  const meta: MessageMeta = {
+  // 表情标记解析：清单为空（没授权任何表情包）时按普通文字处理
+  const enabledIds = ownerId
+    ? new Set(stickersRepo.listAiStickers(db, ownerId).map((row) => row.id))
+    : new Set<string>()
+  const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
+  const text = marker?.stickerId ? marker.text : input.content
+
+  const buildMeta = (index: number): MessageMeta => ({
     ai: {
       generationId: input.generationId,
-      index: input.index,
+      index,
       model: input.model,
       personaId,
       totalSegments: input.totalSegments,
       ...(input.proactive ? { proactive: true } : {}),
     },
-  }
-
-  const message = appendSystemMessage(db, {
-    conversationId,
-    senderType: 'ai' as SenderType,
-    type: 'text',
-    content: input.content,
-    meta,
-    aiGenerationId: input.generationId,
-    aiIndex: input.index,
-    clientNonce: input.clientNonce ?? null,
   })
 
-  if (session) {
-    aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(input.content))
+  const stickerPayload = (index: number, clientNonce: string | null) => ({
+    conversationId,
+    channelId: null,
+    stickerId: marker!.stickerId!,
+    generationId: input.generationId,
+    index,
+    clientNonce,
+    personaId,
+    model: input.model,
+    totalSegments: input.totalSegments,
+    proactive: input.proactive,
+  })
+
+  const appendText = (content: string, index: number, clientNonce?: string | null): Message =>
+    appendSystemMessage(db, {
+      conversationId,
+      senderType: 'ai' as SenderType,
+      type: 'text',
+      content,
+      meta: buildMeta(index),
+      aiGenerationId: input.generationId,
+      aiIndex: index,
+      clientNonce: clientNonce ?? input.clientNonce ?? null,
+    })
+
+  let first: Message
+  if (marker?.stickerId && marker.stickerFirst) {
+    const sticker = appendStickerMessage(db, stickerPayload(input.index, input.clientNonce ? `${input.clientNonce}-s` : null))
+    const textIndex = sticker ? input.index + 1 : input.index
+    first = sticker ?? appendText(text, input.index)
+    if (text.trim()) appendText(text, textIndex)
+  } else if (marker?.stickerId) {
+    const textMessage = text.trim() ? appendText(text, input.index) : null
+    const sticker = appendStickerMessage(
+      db,
+      stickerPayload(textMessage ? input.index + 1 : input.index, input.clientNonce ? `${input.clientNonce}-s` : null),
+    )
+    // 文字与表情都没落成时退回原文，宁可显示标记也不能丢整条回复
+    first = textMessage ?? sticker ?? appendText(input.content, input.index)
+  } else {
+    first = appendText(text, input.index)
   }
-  return message
+
+  if (session) {
+    aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(text))
+  }
+  return first
 }
 
 /* ------------------------------- 记忆 ------------------------------- */
@@ -811,6 +919,7 @@ export async function generateOnServer(
     quoted,
     userImages: imageInput.userImages,
     includeImages: imageInput.includeImages,
+    stickers: aiStickerOptions(db, input.userId),
   })
 
   const settings = aiRepo.readGlobalSettings(db, input.userId)
@@ -965,7 +1074,8 @@ export async function generateOnServer(
         generationId,
         conversationId: input.conversationId,
         index: segIndex + i,
-        text: ready[i]!,
+        // 表情标记在落库时才拆成真正的表情消息，实时气泡里不能露出原始标记
+        text: stripStickerMarkers(ready[i]!),
       })
     }
     appendReady(ready)
@@ -1248,6 +1358,91 @@ export function saveImageDescriptionToMessage(
 
   const message = messagesRepo.mapMessage(row)
   writeAttachmentDescriptions(db, message, { [input.attachmentId]: input.description })
+}
+
+/* ---------------------------- 表情包情绪分析 ---------------------------- */
+
+const STICKER_TAG_PROMPT =
+  '这是聊天软件里的一张表情包。请给出 3~5 个描述它的情绪或使用场景的中文标签，' +
+  '用逗号分隔（例如：开心,庆祝,可爱）。只输出标签，不要任何解释。'
+
+/** 提示词里可用的表情清单：id + 情绪标签，来自「允许 AI 使用」的分组 */
+export function aiStickerOptions(db: DB, ownerId: string): Array<{ id: string; tags: string[] }> {
+  return stickersRepo.listAiStickers(db, ownerId).map((row) => ({ id: row.id, tags: row.keywords }))
+}
+
+/** "开心,庆祝、 可爱" 这类上游输出收敛成干净的标签数组 */
+function parseStickerTags(raw: string): string[] {
+  const seen = new Set<string>()
+  for (const piece of raw.split(/[，,、;；\s]+/)) {
+    const tag = piece.trim().slice(0, 24)
+    if (!tag) continue
+    seen.add(tag)
+    if (seen.size >= 5) break
+  }
+  return [...seen]
+}
+
+/**
+ * 服务端识图分析一张表情包的情绪标签，结果合并进 keywords。
+ * 只有密钥托管在服务端且配了识图模型的服务商可用；本机密钥由客户端自行分析后回传。
+ */
+export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: string): Promise<string[]> {
+  const sticker = stickersRepo.findSticker(db, stickerId)
+  if (!sticker || !sticker.attachment_id) throw err.notFound('表情不存在')
+  const pack = stickersRepo.findPack(db, sticker.pack_id)
+  if (!pack || pack.owner_id !== userId) throw err.forbidden('无权操作该表情')
+
+  const attachment = attachmentsRepo.findById(db, sticker.attachment_id)
+  if (!attachment) throw err.notFound('表情文件不存在')
+
+  const provider = aiRepo
+    .listProviders(db, userId)
+    .find((row) => row.vision_model && row.key_location === 'server' && row.api_key_enc)
+  if (!provider) {
+    throw err.validation('没有可用的识图模型：需要配置识图模型且密钥托管在服务端的服务商，或使用桌面客户端分析')
+  }
+
+  const dataUrl = imageDataUrl(attachment)
+  if (!dataUrl) throw err.validation('表情文件读取失败')
+
+  const raw = (
+    await callUpstream({
+      baseUrl: provider.base_url,
+      apiKey: resolveServerApiKey(provider),
+      model: provider.vision_model!,
+      temperature: 0.2,
+      maxTokens: 120,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: STICKER_TAG_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      record: {
+        db,
+        ownerId: userId,
+        providerId: provider.id,
+        kind: 'vision',
+        refId: stickerId,
+      },
+    })
+  )
+    .content
+    .trim()
+
+  const tags = parseStickerTags(raw)
+  if (tags.length === 0) throw err.upstreamAi('识图模型没有返回有效的情绪标签')
+
+  const existing = sticker.keywords
+    ? (JSON.parse(sticker.keywords) as unknown[]).filter((k): k is string => typeof k === 'string')
+    : []
+  const merged = [...new Set([...existing, ...tags])].slice(0, 10)
+  stickersRepo.updateStickerKeywords(db, stickerId, merged)
+  return merged
 }
 
 /** 上游返回的真实 token 用量；上游不给时字段为 null */

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { AiPersona, Conversation, Member, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import AvatarUploader from '@/components/settings/AvatarUploader.vue'
+import PersonaEditor from '@/components/settings/PersonaEditor.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { conversationApi, userApi } from '@/api/endpoints'
 import { useAiStore } from '@/stores/ai'
@@ -50,6 +51,24 @@ const isOwner = computed(() => me.value?.role === 'owner')
 const isAdmin = computed(() => me.value?.role === 'admin')
 const canManage = computed(() => isOwner.value || isAdmin.value)
 const isGroup = computed(() => detail.value?.conversation.type === 'group')
+const isAiConversation = computed(() => detail.value?.conversation.type === 'ai')
+
+/** 会话标题：群聊是「群设置」，AI 会话是「AI 设置」 */
+const pageTitle = computed(() => {
+  if (isAiConversation.value) return 'AI 设置'
+  if (isGroup.value) return '群设置'
+  return '会话设置'
+})
+
+/** 会话里直接改角色：改的是全局 persona，它参与的所有会话同步生效 */
+const editingPersona = computed<AiPersona | null>(() => ai.personaOf(conversationId.value) ?? null)
+const personaProviders = computed(() => ai.providers)
+
+async function onPersonaSaved(persona: AiPersona): Promise<void> {
+  ai.upsertLocal(persona)
+  await conversations.refresh().catch(() => undefined)
+  notice.value = `已保存角色「${persona.name}」，它参与的所有会话都会生效`
+}
 
 const personaByUserId = computed(() => {
   const map = new Map<string, AiPersona>()
@@ -264,7 +283,7 @@ function backToChat(): void {
       <button type="button" class="rounded-md p-1 text-muted hover:bg-surface-2" @click="backToChat">
         <Icon name="arrowLeft" :size="18" />
       </button>
-      <h1 class="text-[14px] font-semibold text-text-strong">群设置</h1>
+      <h1 class="text-[14px] font-semibold text-text-strong">{{ pageTitle }}</h1>
     </header>
 
     <div class="scroll-area flex-1 px-5 py-5">
@@ -275,9 +294,27 @@ function backToChat(): void {
         <p v-if="loading && !detail" class="py-10 text-center text-[12px] text-muted">加载中…</p>
 
         <template v-else-if="detail">
-          <section v-if="!isGroup" class="rounded-xl border border-dashed border-line p-6 text-center">
+          <!-- AI 会话：直接编辑角色，提示词、角色卡、兴趣在这里改完全局生效 -->
+          <template v-if="isAiConversation">
+            <p v-if="editingPersona" class="rounded-xl border border-line bg-surface p-3 text-[11.5px] leading-relaxed text-muted">
+              这里改的是 AI 角色「{{ editingPersona.name }}」本身，保存后它参与的私聊与群聊都会生效。
+              想让它发表情包，到「设置 → 表情包」给分组开启「允许 AI 使用」。
+            </p>
+            <PersonaEditor
+              v-if="editingPersona"
+              :persona="editingPersona"
+              :providers="personaProviders"
+              @saved="onPersonaSaved"
+              @cancel="backToChat"
+            />
+            <section v-else class="rounded-xl border border-dashed border-line p-6 text-center">
+              <p class="text-[13px] text-text">这个会话还没有绑定 AI 角色</p>
+            </section>
+          </template>
+
+          <section v-else-if="!isGroup" class="rounded-xl border border-dashed border-line p-6 text-center">
             <p class="text-[13px] text-text">这里是群设置</p>
-            <p class="mt-1 text-[11.5px] text-muted">私聊与 AI 会话的资料请到「设置」里修改</p>
+            <p class="mt-1 text-[11.5px] text-muted">私聊资料请到「设置」里修改</p>
           </section>
 
           <template v-else>

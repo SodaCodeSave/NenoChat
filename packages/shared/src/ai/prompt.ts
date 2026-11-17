@@ -1,6 +1,7 @@
 import { AI_CONTEXT_BUDGET, AI_SKIP_TOKEN } from '../constants'
 import type { AiMemoryFact, AiMemorySummary, AiPersona, AttachmentRef, Message } from '../entities'
 import { estimateTokens } from './tokens'
+import { renderStickerBlock, type StickerOption } from './sticker-markers'
 
 /** OpenAI 兼容的多模态 content 分片 */
 export type ChatContentPart =
@@ -32,6 +33,8 @@ export interface BuildContextInput {
   userImages?: TurnImage[]
   /** 直传模式：没有识图模型时把图片以 image_url 分片交给主模型 */
   includeImages?: boolean
+  /** 可选的表情包清单：非空时模型可以在回复里输出 [[sticker:id]] 标记 */
+  stickers?: StickerOption[]
   now?: number
 }
 
@@ -62,9 +65,17 @@ function formatTime(ts: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** 消息里的图片附件 */
+/**
+ * 消息里的图片附件
+ */
 function imagesOf(message: Message): AttachmentRef[] {
   return (message.meta?.attachments ?? []).filter((a) => a.kind === 'image')
+}
+
+/** 表情消息在上下文里的占位描述，让模型知道对方发过一张表情 */
+function stickerNoteOf(message: Message): string | null {
+  if (message.type !== 'sticker') return null
+  return message.content.trim() ? `（发了表情包：${message.content.trim()}）` : '（发了一个表情包）'
 }
 
 /**
@@ -125,6 +136,11 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     content: truncateByToken(renderPersonaBlock(input.persona, input.userName, now), AI_CONTEXT_BUDGET.system),
   })
 
+  const stickerBlock = renderStickerBlock(input.stickers ?? [])
+  if (stickerBlock) {
+    messages.push({ role: 'system', content: stickerBlock })
+  }
+
   if (input.facts.length > 0) {
     const factLines = input.facts
       .slice(0, 40)
@@ -177,7 +193,8 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
 
   for (const message of recentLines) {
     const role: ChatMessage['role'] = message.senderType === 'ai' ? 'assistant' : 'user'
-    const note = historyImageNote(message)
+    const stickerNote = stickerNoteOf(message)
+    const note = stickerNote ?? historyImageNote(message)
     const text = note ? (message.content ? `${message.content}\n${note}` : note) : message.content
     messages.push({ role, content: text })
   }
@@ -325,6 +342,8 @@ export interface GroupPromptInput {
   } | null
   /** autonomy 模式：群里安静了多久 */
   idleHours?: number
+  /** 可选的表情包清单：非空时模型可以在回复里输出 [[sticker:id]] 标记 */
+  stickers?: StickerOption[]
   localTime: string
 }
 
@@ -351,6 +370,7 @@ export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
     input.persona.systemPrompt,
     card ? `【角色卡】\n${card}` : '',
     interests.length > 0 ? `【兴趣】${interests.join('、')}。聊到这些会更投入。` : '',
+    renderStickerBlock(input.stickers ?? []),
     PLATFORM_RULES,
     [
       `你正在群聊「${input.groupName}」里，群成员：${roster}。`,

@@ -38,8 +38,8 @@ pub fn run() {
             secrets::secret_delete,
         ])
         .setup(|app| {
-            // 调试构建自动打开开发者工具，方便看日志
-            #[cfg(debug_assertions)]
+            // 调试构建自动打开开发者工具，方便看日志（open_devtools 仅桌面端可用）
+            #[cfg(all(desktop, debug_assertions))]
             {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();

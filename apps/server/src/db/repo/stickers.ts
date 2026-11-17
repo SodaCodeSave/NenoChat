@@ -7,6 +7,7 @@ export interface StickerPackRow {
   owner_id: string | null
   name: string
   kind: string
+  allow_ai: number
   position: number
   created_at: number
   updated_at: number
@@ -64,6 +65,28 @@ export function renamePack(db: DB, id: string, name: string): void {
   db.prepare('UPDATE sticker_packs SET name = ?, updated_at = ? WHERE id = ?').run(name, now(), id)
 }
 
+/** 分组改名与 AI 授权开关共用一个更新入口；传 undefined 的字段不动 */
+export function updatePack(
+  db: DB,
+  id: string,
+  patch: { name?: string; allowAi?: boolean },
+): void {
+  const sets: string[] = []
+  const args: Array<string | number> = []
+  if (patch.name !== undefined) {
+    sets.push('name = ?')
+    args.push(patch.name)
+  }
+  if (patch.allowAi !== undefined) {
+    sets.push('allow_ai = ?')
+    args.push(patch.allowAi ? 1 : 0)
+  }
+  if (sets.length === 0) return
+  sets.push('updated_at = ?')
+  args.push(now(), id)
+  db.prepare(`UPDATE sticker_packs SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+}
+
 export function deletePack(db: DB, id: string): void {
   db.prepare('DELETE FROM sticker_packs WHERE id = ?').run(id)
 }
@@ -111,6 +134,58 @@ export function createSticker(
 
 export function deleteSticker(db: DB, id: string): void {
   db.prepare('DELETE FROM stickers WHERE id = ?').run(id)
+}
+
+/** 覆写一个表情的关键词（AI 情绪分析结果写回用） */
+export function updateStickerKeywords(db: DB, id: string, keywords: string[]): void {
+  db.prepare('UPDATE stickers SET keywords = ?, updated_at = ? WHERE id = ?').run(
+    keywords.length > 0 ? JSON.stringify(keywords) : null,
+    now(),
+    id,
+  )
+}
+
+/**
+ * 某个用户名下所有「允许 AI 使用」的图片表情及其情绪标签。
+ * 提示词清单与落库时校验标记合法性都从这里取数据。
+ */
+export function listAiStickers(db: DB, ownerId: string): Array<{ id: string; keywords: string[] }> {
+  const rows = db
+    .prepare(
+      `SELECT s.id, s.keywords FROM stickers s
+       JOIN sticker_packs p ON p.id = s.pack_id
+       WHERE p.allow_ai = 1 AND p.owner_id = ?
+         AND s.kind IN ('image', 'gif') AND s.keywords IS NOT NULL`,
+    )
+    .all(ownerId) as Array<{ id: string; keywords: string | null }>
+
+  const out: Array<{ id: string; keywords: string[] }> = []
+  for (const row of rows) {
+    if (!row.keywords) continue
+    try {
+      const parsed = JSON.parse(row.keywords)
+      if (Array.isArray(parsed)) {
+        const tags = parsed.filter((k): k is string => typeof k === 'string' && k.length > 0)
+        if (tags.length > 0) out.push({ id: row.id, keywords: tags })
+      }
+    } catch {
+      /* 坏数据跳过 */
+    }
+  }
+  return out
+}
+
+/** 某个用户名下还没有任何情绪标签的图片表情，供一键补扫遍历 */
+export function listStickersMissingTags(db: DB, ownerId: string): Array<{ id: string; attachment_id: string }> {
+  return db
+    .prepare(
+      `SELECT s.id, s.attachment_id FROM stickers s
+       JOIN sticker_packs p ON p.id = s.pack_id
+       WHERE p.owner_id = ? AND p.kind = 'image'
+         AND s.kind IN ('image', 'gif') AND s.attachment_id IS NOT NULL
+         AND (s.keywords IS NULL OR s.keywords = '[]' OR s.keywords = '')`,
+    )
+    .all(ownerId) as Array<{ id: string; attachment_id: string }>
 }
 
 export function countInPack(db: DB, packId: string): number {
