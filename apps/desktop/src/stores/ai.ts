@@ -19,6 +19,8 @@ import {
   segmentDelay,
   SEGMENT_REPLY_DEFAULTS,
   splitSegments,
+  renderWebSearchContext,
+  shouldSearchWeb,
   stickerOptionsFromPacks,
   stripStickerMarkers,
   ulid,
@@ -36,6 +38,7 @@ import {
   type TurnImage,
 } from '@nenochat/shared'
 import { aiApi } from '@/api/ai'
+import { connectorApi } from '@/api/connectors'
 import { resolveFileUrl } from '@/api/http'
 import { conversationApi, messageApi } from '@/api/endpoints'
 import { postApi } from '@/api/posts'
@@ -387,6 +390,20 @@ export const useAiStore = defineStore('ai', () => {
     // 日程只影响角色「此刻是谁」，取不到就照常回复
     const schedule = await ensureSchedule(persona.id).catch(() => null)
 
+    /**
+     * 本机密钥模式下服务端不参与生成，连接器资料在这里取好再注入；
+     * 搜索失败不影响回复。
+     */
+    let connectorContext: string | null = null
+    if (shouldSearchWeb(userInput)) {
+      try {
+        const { results } = await connectorApi.search(userInput)
+        connectorContext = renderWebSearchContext(userInput, results) || null
+      } catch {
+        connectorContext = null
+      }
+    }
+
     const chat = buildChatMessages({
       persona,
       facts: memories.facts,
@@ -400,6 +417,7 @@ export const useAiStore = defineStore('ai', () => {
       stickers: stickerOptionsFromPacks(useStickersStore().packs),
       schedule,
       scheduleNowMinutes: minutesOfLocalDay(),
+      connectorContext,
     })
 
     return { chat, memories }

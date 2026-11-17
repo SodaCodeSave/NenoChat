@@ -42,6 +42,7 @@ import * as messagesRepo from '../db/repo/messages'
 import * as scheduleRepo from '../db/repo/schedule'
 import * as stickersRepo from '../db/repo/stickers'
 import { localDayKey, minutesOfDay, serverTzOffsetMinutes } from './proactive-rules'
+import { buildConnectorContext } from './connector-context'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
@@ -918,6 +919,9 @@ export async function generateOnServer(
     localDayKey(Date.now(), TZ_OFFSET_MIN),
   )
 
+  // 连接器资料（网页搜索 / B 站视频）只进提示词，失败不影响回复
+  const connectorContext = await buildConnectorContext(db, input.userId, input.content)
+
   const chatMessages = buildChatMessages({
     persona: aiRepo.mapPersona(persona),
     facts,
@@ -931,6 +935,7 @@ export async function generateOnServer(
     stickers: aiStickerOptions(db, input.userId),
     schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
+    connectorContext,
   })
 
   const settings = aiRepo.readGlobalSettings(db, input.userId)
