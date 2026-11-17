@@ -30,5 +30,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0004_notifications.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "member_notification_level",
+            sql: include_str!("../migrations/0005_member_notification_level.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
