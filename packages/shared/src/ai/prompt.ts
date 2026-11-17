@@ -113,6 +113,8 @@ function historyImageNote(message: Message): string | null {
 /**
  * 人设的三块料：提示词（怎么说话）、角色卡（是谁／经历过什么）、兴趣（爱聊什么）。
  * 分开渲染而不是简单拼接，是为了让模型明确哪一段是「行为约束」、哪一段是「设定资料」。
+ * 注意：{{time}} 占位符会替换成分钟级时间，含 {{time}} 的人设会让这一块
+ * 每轮都不同，等于主动放弃这一段的前缀缓存——是否使用由人设作者自己权衡。
  */
 function renderPersonaBlock(persona: AiPersona, userName: string, now: number): string {
   const prompt = persona.systemPrompt
@@ -155,8 +157,12 @@ function renderScheduleBlock(schedule: AiSchedule, nowMinutes?: number): string 
 
 /**
  * 组装一次对话所需的完整消息数组。
- * 顺序固定为 规则 → 人设 → 事实 → 摘要 → 最近原文 → 本次输入，
- * 每一段都有独立 token 预算，避免长会话把上下文挤爆。
+ * 顺序固定为 规则+对方名字 → 人设 → 事实 → 摘要 → 表情包 → 日程 → 连接器资料 →
+ * 最近原文 → 本次输入 → 当前时间，按「稳定 → 易变」排列，每一段都有独立 token
+ * 预算，避免长会话把上下文挤爆。
+ * 之所以这么排：上游的自动前缀缓存按「最长字节相同前缀」命中，
+ * 分钟级时间戳、心情这类每轮都变的内容一旦出现在前部，缓存立刻失效（命中率归零），
+ * 所以易变内容一律后置，时间戳固定为最后一条消息。
  * 平台规则单独成一条且不参与截断：人设再长也不能把「别写 Markdown」挤掉。
  */
 export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
@@ -165,48 +171,13 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
 
   messages.push({
     role: 'system',
-    content: [PLATFORM_RULES, `当前时间：${formatTime(now)}；正在对话的人叫「${input.userName}」。`].join('\n\n'),
+    content: [PLATFORM_RULES, `正在对话的人叫「${input.userName}」。`].join('\n\n'),
   })
 
   messages.push({
     role: 'system',
     content: truncateByToken(renderPersonaBlock(input.persona, input.userName, now), AI_CONTEXT_BUDGET.system),
   })
-
-  if (input.schedule && input.schedule.items.length > 0) {
-    messages.push({
-      role: 'system',
-      content: truncateByToken(
-        renderScheduleBlock(input.schedule, input.scheduleNowMinutes),
-        AI_CONTEXT_BUDGET.schedule,
-      ),
-    })
-  }
-
-  const stickerBlock = renderStickerBlock(input.stickers ?? [])
-  if (stickerBlock) {
-    messages.push({ role: 'system', content: stickerBlock })
-  }
-
-  if (input.connectorContext?.trim()) {
-    messages.push({
-      role: 'system',
-      content: truncateByToken(
-        input.connectorContext.trim(),
-        AI_CONTEXT_BUDGET.connector,
-      ),
-    })
-  }
-
-  if (input.connectorFetchContext?.trim()) {
-    messages.push({
-      role: 'system',
-      content: truncateByToken(
-        input.connectorFetchContext.trim(),
-        AI_CONTEXT_BUDGET.connectorFetch,
-      ),
-    })
-  }
 
   if (input.facts.length > 0) {
     const factLines = input.facts
@@ -225,6 +196,41 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
       content: truncateByToken(
         `之前聊过的内容摘要：\n${input.summary.summary}`,
         AI_CONTEXT_BUDGET.summary,
+      ),
+    })
+  }
+
+  const stickerBlock = renderStickerBlock(input.stickers ?? [])
+  if (stickerBlock) {
+    messages.push({ role: 'system', content: stickerBlock })
+  }
+
+  if (input.schedule && input.schedule.items.length > 0) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        renderScheduleBlock(input.schedule, input.scheduleNowMinutes),
+        AI_CONTEXT_BUDGET.schedule,
+      ),
+    })
+  }
+
+  if (input.connectorContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorContext.trim(),
+        AI_CONTEXT_BUDGET.connector,
+      ),
+    })
+  }
+
+  if (input.connectorFetchContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorFetchContext.trim(),
+        AI_CONTEXT_BUDGET.connectorFetch,
       ),
     })
   }
@@ -292,20 +298,23 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
       }
       if (parts.length === 0) parts.push({ type: 'text', text: '（发送了一张图片）' })
       messages.push({ role: 'user', content: parts })
-      return messages
-    }
+    } else {
+      if (userImages.length > 0) {
+        const descriptions = userImages
+          .map((image) => image.description?.trim())
+          .filter((text): text is string => Boolean(text))
+        const note =
+          descriptions.length > 0 ? `（随消息发来了图片：${descriptions.join('；')}）` : '（发送了一张图片）'
+        userContent = userContent ? `${userContent}\n${note}` : note
+      }
 
-    if (userImages.length > 0) {
-      const descriptions = userImages
-        .map((image) => image.description?.trim())
-        .filter((text): text is string => Boolean(text))
-      const note =
-        descriptions.length > 0 ? `（随消息发来了图片：${descriptions.join('；')}）` : '（发送了一张图片）'
-      userContent = userContent ? `${userContent}\n${note}` : note
+      messages.push({ role: 'user', content: userContent })
     }
-
-    messages.push({ role: 'user', content: userContent })
   }
+
+  // 时间戳是每轮都变的内容，固定放在整个请求的最末尾：
+  // 它之前的所有字节都保持稳定，上游前缀缓存才能命中。
+  messages.push({ role: 'system', content: `当前时间：${formatTime(now)}` })
   return messages
 }
 
@@ -383,6 +392,7 @@ export function buildCompactionPrompt(input: {
 /**
  * 主动消息的生成提示词：短、自然、基于记忆与兴趣找话题。
  * 和普通回复一样带上角色卡，否则「主动开口」的那个人会突然不像自己。
+ * system 只放稳定内容；日程这类分钟级易变的信息放进 user 行（尾部），保住前缀缓存。
  */
 export function buildProactivePrompt(input: {
   persona: AiPersona
@@ -402,9 +412,6 @@ export function buildProactivePrompt(input: {
         input.persona.systemPrompt,
         card ? `【角色卡】\n${card}` : '',
         interests.length > 0 ? `【兴趣】${interests.join('、')}` : '',
-        input.schedule && input.schedule.items.length > 0
-          ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
-          : '',
         PLATFORM_RULES,
         '现在是你主动找对方聊天，不是回复。',
         '要求：1~2 句话，自然开启话题；可以从你的兴趣或对方记得的事里挑一个切口。',
@@ -416,11 +423,16 @@ export function buildProactivePrompt(input: {
     {
       role: 'user',
       content: [
+        input.schedule && input.schedule.items.length > 0
+          ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
+          : '',
         `现在时间：${input.localTime}`,
         `对方已经 ${input.idleHours} 小时没说话了。`,
         input.memoryDigest ? `你记得的事：\n${input.memoryDigest}` : '你还没有关于对方的记忆。',
         '请直接给出你要发的第一句话。',
-      ].join('\n\n'),
+      ]
+        .filter((part) => part.length > 0)
+        .join('\n\n'),
     },
   ]
 }
@@ -487,19 +499,18 @@ export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
     })
     .join('\n')
 
+  // system 只放跨轮稳定的内容（人设、规则、群身份）：
+  // 心情/体力/日程每条消息都在变，放进 user 行（尾部），保证 system 前缀字节级稳定，
+  // 让上游的自动前缀缓存能命中。
   const system = [
     input.persona.systemPrompt,
     card ? `【角色卡】\n${card}` : '',
     interests.length > 0 ? `【兴趣】${interests.join('、')}。聊到这些会更投入。` : '',
-    input.schedule && input.schedule.items.length > 0
-      ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
-      : '',
     renderStickerBlock(input.stickers ?? []),
     PLATFORM_RULES,
     [
       `你正在群聊「${input.groupName}」里，群成员：${roster}。`,
       '你是群里的一员，不是客服，不需要回应每条消息，也可以一直沉默。',
-      `你现在的状态：心情「${input.mood}」，体力 ${Math.round(input.energy)}/100。体力低时更懒得说话。`,
       '被点名或被直接问到时必须回应；否则没兴趣、没把握、或单纯不想说时，只回答 SKIP。',
       '回复最多两句、总共不超过 80 字；不要 Markdown；不要复述别人刚说的话；不要解释你在做什么。',
     ].join('\n'),
@@ -507,7 +518,14 @@ export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
     .filter((part) => part.length > 0)
     .join('\n\n')
 
-  const lines: string[] = [`现在时间：${input.localTime}`]
+  const lines: string[] = []
+  if (input.schedule && input.schedule.items.length > 0) {
+    lines.push(renderScheduleBlock(input.schedule, input.scheduleNowMinutes))
+  }
+  lines.push(
+    `你现在的状态：心情「${input.mood}」，体力 ${Math.round(input.energy)}/100。体力低时更懒得说话。`,
+    `现在时间：${input.localTime}`,
+  )
 
   if (input.mode === 'reply') {
     lines.push(transcript ? `最近的群聊：\n${transcript}` : '群里还没有其他消息。')

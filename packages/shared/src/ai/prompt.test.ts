@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AI_SKIP_TOKEN } from '../constants'
-import type { AiPersona } from '../entities'
+import type { AiMemoryFact, AiMemorySummary, AiPersona, AiSchedule } from '../entities'
 import { ReplyStyle } from '../enums'
 import {
   buildChatMessages,
@@ -10,6 +10,7 @@ import {
   buildProactivePrompt,
   isSkipReply,
 } from './prompt'
+import type { StickerOption } from './sticker-markers'
 
 function persona(patch: Partial<AiPersona> = {}): AiPersona {
   const now = 1_700_000_000_000
@@ -108,9 +109,10 @@ describe('buildChatMessages', () => {
       userName: '阿岚',
     })
 
-    const last = messages[messages.length - 1]!
-    expect(last.role).toBe('user')
-    expect(last.content).toContain('昨天那条消息')
+    // 末尾固定是时间戳 system，引用内容在它前面那条 user 消息里
+    const lastUser = messages[messages.length - 2]!
+    expect(lastUser.role).toBe('user')
+    expect(lastUser.content).toContain('昨天那条消息')
   })
 
   it('兴趣与角色卡都进入人设段', () => {
@@ -161,7 +163,7 @@ describe('buildChatMessages', () => {
     expect(joined.length).toBeLessThan(8000 * 2)
   })
 
-  it('顺序为 规则 → 人设 → 本次输入', () => {
+  it('顺序为 规则+名字 → 人设 → 本次输入 → 时间戳，时间戳不在前部', () => {
     const messages = buildChatMessages({
       persona: persona(),
       facts: [],
@@ -169,12 +171,114 @@ describe('buildChatMessages', () => {
       recent: [],
       userInput: '你好',
       userName: '阿岚',
+      now: 1_700_000_000_000,
     })
 
-    expect(messages).toHaveLength(3)
+    expect(messages).toHaveLength(4)
     expect(messages[0]!.role).toBe('system')
+    expect(messages[0]!.content).toContain('正在对话的人叫「阿岚」')
+    // 分钟级时间戳一旦出现在前部，前缀缓存立即失效，首条 system 不允许出现
+    expect(messages[0]!.content).not.toContain('当前时间')
     expect(messages[1]!.role).toBe('system')
     expect(messages[2]).toEqual({ role: 'user', content: '你好' })
+    // 时间戳固定是最后一条消息，之后不再有任何字节
+    expect(messages[3]!.role).toBe('system')
+    expect(messages[3]!.content).toMatch(/^当前时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  })
+
+  it('连续两轮提示词前缀字节级一致（前缀缓存回归）', () => {
+    // 两轮共享的稳定块：人设 / 事实 / 摘要 / 表情包 / 日程全部相同
+    const facts: AiMemoryFact[] = [
+      {
+        id: 'f1',
+        conversationId: 'c1',
+        subject: 'user',
+        key: '职业',
+        value: '程序员',
+        confidence: 0.9,
+        status: 'active',
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]
+    const summary: AiMemorySummary = {
+      id: 's1',
+      conversationId: 'c1',
+      fromSeq: 1,
+      toSeq: 10,
+      summary: '之前聊过工作和猫。',
+      tokenEstimate: 20,
+      createdAt: 0,
+    }
+    const stickers: StickerOption[] = [{ id: 'stk1', tags: ['开心'] }]
+    const schedule: AiSchedule = {
+      personaId: 'p1',
+      dayKey: '2026-11-17',
+      items: [
+        { start: '09:00', end: '12:00', activity: '写代码' },
+        { start: '13:00', end: '18:00', activity: '改 bug' },
+      ],
+      source: 'manual',
+      updatedAt: 0,
+    }
+    const stablePersona = persona({ interests: ['独立音乐'], card: '你住在一间临街旧书店的楼上。' })
+
+    // 第一轮：还没有历史，用户说了第一句话
+    const turn1 = buildChatMessages({
+      persona: stablePersona,
+      facts,
+      summary,
+      stickers,
+      schedule,
+      scheduleNowMinutes: 600,
+      recent: [],
+      userInput: '今天好累',
+      userName: '阿岚',
+      now: 1_700_000_000_000,
+    })
+
+    // 第二轮：第一轮的输入已落库进入历史，用户又发了一句，时间已经过去
+    const turn2 = buildChatMessages({
+      persona: stablePersona,
+      facts,
+      summary,
+      stickers,
+      schedule,
+      scheduleNowMinutes: 600,
+      recent: [
+        { ...baseMessage, id: 'm1', content: '今天好累', createdAt: 1_700_000_000_000 },
+        {
+          ...baseMessage,
+          id: 'm2',
+          senderType: 'ai',
+          content: '怎么了，还好吗',
+          createdAt: 1_700_000_000_100,
+        },
+        { ...baseMessage, id: 'm3', content: '想听歌', createdAt: 1_700_000_000_200 },
+      ],
+      userInput: '想听歌',
+      userName: '阿岚',
+      now: 1_700_006_000_000,
+    })
+
+    // (a) 首条 system（规则+对方名字）两轮字节级一致
+    expect(turn1[0]).toEqual(turn2[0])
+    // (b) 稳定头部（人设/事实/摘要/表情包/日程）逐条字节级一致
+    const stableHeadLength = turn1.length - 2 // 去掉末尾时间戳与本次输入后，剩下的稳定系统块
+    for (let i = 1; i < stableHeadLength; i++) {
+      expect(turn2[i]).toEqual(turn1[i]!)
+    }
+    // (c) 每轮最后一条都是当前时间 system，且两轮时间不同
+    expect(turn1[turn1.length - 1]!.role).toBe('system')
+    expect(turn2[turn2.length - 1]!.role).toBe('system')
+    expect(turn1[turn1.length - 1]!.content).toMatch(/^当前时间：/)
+    expect(turn2[turn2.length - 1]!.content).toMatch(/^当前时间：/)
+    expect(turn2[turn2.length - 1]!.content).not.toBe(turn1[turn1.length - 1]!.content)
+    // (d) 第二轮去掉时间戳后的完整序列，是第一轮去掉时间戳序列的超集：
+    // 公共前缀一路延伸进历史消息，新消息只追加在尾部
+    const head1 = turn1.slice(0, -1)
+    expect(turn2.slice(0, head1.length)).toEqual(head1)
+    expect(turn2.length).toBeGreaterThan(turn1.length)
   })
 })
 
@@ -195,6 +299,27 @@ describe('buildProactivePrompt', () => {
     const user = messages[1]!.content
     expect(user).toContain('8 小时')
     expect(user).toContain('聊天应用')
+  })
+
+  it('日程属于易变内容，只出现在 user 行，system 保持稳定', () => {
+    const messages = buildProactivePrompt({
+      persona: persona(),
+      memoryDigest: '',
+      idleHours: 3,
+      localTime: '2026-11-17 10:00',
+      schedule: {
+        personaId: 'p1',
+        dayKey: '2026-11-17',
+        items: [{ start: '09:00', end: '12:00', activity: '写代码' }],
+        source: 'manual',
+        updatedAt: 0,
+      },
+      scheduleNowMinutes: 600,
+    })
+
+    expect(messages[0]!.content).not.toContain('今日日程')
+    expect(messages[1]!.content).toContain('你此刻正在：写代码')
+    expect(messages[1]!.content).toContain('现在时间：')
   })
 })
 
@@ -270,6 +395,13 @@ describe('buildGroupPrompt', () => {
     const user = messages[1]!.content
     expect(user).toContain('阿岚（回复 小禾「你最近在看什么」）：那本书我读完了')
     expect(user).toContain('这是在回复 小禾')
+    // 心情/体力/日程都是每轮会变的内容，只在 user 行出现，system 保持字节级稳定
+    const system = messages[0]!.content
+    expect(system).not.toContain('心情「平静」')
+    expect(system).not.toContain('今日日程')
+    expect(user).toContain('心情「平静」')
+    expect(user).toContain('体力 60/100')
+    expect(user).toContain('现在时间：')
   })
 })
 
