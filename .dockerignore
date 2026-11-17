@@ -1,0 +1,15 @@
+# Git 仓库与本地工具目录不进构建上下文
+.git
+.vscode
+.agents
+
+# 依赖由 pnpm install 在镜像内重建
+**/node_modules
+
+# 只构建 server：桌面端与本地数据目录不进上下文
+apps/desktop
+apps/server/data
+
+# 文档镜像用不到（README/DESIGN.md 等）
+*.md
+DESIGN.md

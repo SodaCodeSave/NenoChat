@@ -12,7 +12,7 @@
     "dev:server": "pnpm --filter @nenochat/server dev",
     "dev:web": "pnpm --filter @nenochat/desktop dev",
     "dev:app": "pnpm --filter @nenochat/desktop tauri:dev",
-    "build:server": "pnpm --filter @nenochat/server build",
+    "build:server": "pnpm --filter @nenochat/server typecheck",
     "build:web": "pnpm --filter @nenochat/desktop build",
     "build:app": "pnpm --filter @nenochat/desktop tauri:build",
     "typecheck": "pnpm -r --parallel typecheck",

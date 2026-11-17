@@ -35,5 +35,24 @@ export default defineConfig(() => ({
   build: {
     target: 'chrome110',
     sourcemap: false,
+    // 稳定的第三方库拆成独立 chunk：改业务代码不会使 vendor chunk 的缓存失效
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined
+          // vue 全家桶（vue 本体与 @vue/* 运行时、vue-router、pinia）
+          if (/[\\/]node_modules[\\/]@vue[\\/]|[\\/]node_modules[\\/](vue|vue-router|pinia)[\\/]/.test(id)) {
+            return 'vue-vendor'
+          }
+          if (/[\\/]node_modules[\\/]reka-ui[\\/]/.test(id)) return 'ui-vendor'
+          if (/[\\/]node_modules[\\/]zod[\\/]/.test(id)) return 'zod-vendor'
+          if (/[\\/]node_modules[\\/]@vueuse[\\/]/.test(id)) return 'vueuse-vendor'
+          if (/[\\/]node_modules[\\/]@tanstack[\\/](vue-virtual|virtual-core)[\\/]/.test(id)) {
+            return 'virtual-vendor'
+          }
+          return undefined
+        },
+      },
+    },
   },
 }))

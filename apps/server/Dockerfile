@@ -31,13 +31,17 @@ ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 ENV npm_config_registry=https://registry.npmmirror.com
 
 RUN corepack enable && corepack prepare pnpm@12 --activate \
-    && mkdir -p /app/apps/server/data
+    && mkdir -p /app/apps/server/data \
+    && chown -R node:node /app
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=8787
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=node:node /app /app
+
+# 以非 root 的 node 用户运行（node:22-alpine 自带 uid=1000 的 node 用户）
+USER node
 
 WORKDIR /app/apps/server
 
