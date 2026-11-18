@@ -297,6 +297,7 @@ const heights = ref<Record<string, number>>({})
 const scrollTop = ref(0)
 const viewportHeight = ref(0)
 const highlighted = ref<string | null>(null)
+let highlightTimer = 0
 
 function heightOf(row: Row): number {
   return heights.value[row.key] ?? ESTIMATE[row.kind]
@@ -419,9 +420,9 @@ function focusMessage(id: string): boolean {
   stickBottom = false
   el.scrollTop = Math.max(0, layout.value.offsets[index]! - 80)
   scrollTop.value = el.scrollTop
+  window.clearTimeout(highlightTimer)
   highlighted.value = id
-
-  window.setTimeout(() => {
+  highlightTimer = window.setTimeout(() => {
     if (highlighted.value === id) highlighted.value = null
   }, 2400)
   return true
@@ -559,6 +560,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(measureRaf)
   cancelAnimationFrame(scrollRaf)
+  window.clearTimeout(highlightTimer)
 })
 
 defineExpose({ scrollToBottom })

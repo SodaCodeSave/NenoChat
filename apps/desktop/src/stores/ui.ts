@@ -7,6 +7,8 @@ const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
 const MESSAGE_STYLE_KEY = 'nenochat.messageStyle'
 const LINK_DISPLAY_KEY = 'nenochat.linkDisplay'
+const SEND_KEY_KEY = 'nenochat.sendKey'
+const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
@@ -28,8 +30,10 @@ export const useUiStore = defineStore('ui', () => {
   const accent = ref<string>(localStorage.getItem(ACCENT_KEY) || 'blue')
   const density = ref<'cozy' | 'compact'>('cozy')
   const fontScale = ref(1)
-  const reduceMotion = ref(false)
-  const sendKey = ref<'enter' | 'ctrl+enter'>('enter')
+  const reduceMotion = ref(localStorage.getItem(REDUCE_MOTION_KEY) === 'true')
+  const sendKey = ref<'enter' | 'ctrl+enter'>(
+    localStorage.getItem(SEND_KEY_KEY) === 'ctrl+enter' ? 'ctrl+enter' : 'enter',
+  )
   /** 消息排版风格，纯本地偏好不进服务器设置 */
   const messageStyle = ref<MessageStyle>(
     localStorage.getItem(MESSAGE_STYLE_KEY) === 'qq' ? 'qq' : 'discord',
@@ -96,6 +100,17 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(LINK_DISPLAY_KEY, next)
   }
 
+  function setSendKey(next: 'enter' | 'ctrl+enter'): void {
+    sendKey.value = next
+    localStorage.setItem(SEND_KEY_KEY, next)
+  }
+
+  function setReduceMotion(next: boolean): void {
+    reduceMotion.value = next
+    localStorage.setItem(REDUCE_MOTION_KEY, String(next))
+    applyTheme()
+  }
+
   function toggleConversationList(): void {
     setConversationListCollapsed(!conversationListCollapsed.value)
   }
@@ -106,8 +121,8 @@ export const useUiStore = defineStore('ui', () => {
     accent.value = settings.accent
     density.value = settings.density
     fontScale.value = settings.fontScale
-    sendKey.value = settings.sendKey
-    reduceMotion.value = settings.reduceMotion
+    setSendKey(settings.sendKey)
+    setReduceMotion(settings.reduceMotion)
     localStorage.setItem(THEME_KEY, settings.theme)
     localStorage.setItem(ACCENT_KEY, settings.accent)
     applyTheme()
@@ -144,6 +159,8 @@ export const useUiStore = defineStore('ui', () => {
     setAccent,
     setMessageStyle,
     setLinkDisplay,
+    setSendKey,
+    setReduceMotion,
     setConversationListCollapsed,
     toggleConversationList,
     applyServerSettings,

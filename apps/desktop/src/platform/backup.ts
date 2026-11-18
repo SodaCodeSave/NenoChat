@@ -70,9 +70,18 @@ export async function pickBackupFile(): Promise<PickedBackupFile | null> {
     document.body.appendChild(input)
 
     let settled = false
+    let focusTimer = 0
+    const onFocus = (): void => {
+      // 浏览器取消选择不会触发 change，用窗口重新获得焦点兜底
+      focusTimer = window.setTimeout(() => {
+        if (!input.files || input.files.length === 0) finish(null)
+      }, 500)
+    }
     const finish = (value: PickedBackupFile | null): void => {
       if (settled) return
       settled = true
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('focus', onFocus)
       input.remove()
       resolve(value)
     }
@@ -85,16 +94,7 @@ export async function pickBackupFile(): Promise<PickedBackupFile | null> {
       }
       void file.text().then((text) => finish({ fileName: file.name, text }))
     }
-    // 浏览器取消选择不会触发 change，用窗口重新获得焦点兜底
-    window.addEventListener(
-      'focus',
-      () => {
-        window.setTimeout(() => {
-          if (!input.files || input.files.length === 0) finish(null)
-        }, 500)
-      },
-      { once: true },
-    )
+    window.addEventListener('focus', onFocus)
 
     input.click()
   })

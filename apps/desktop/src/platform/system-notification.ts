@@ -138,7 +138,7 @@ export async function sendSystemNotification(input: SystemNotificationInput): Pr
       const { isPermissionGranted, sendNotification } = await import('@tauri-apps/plugin-notification')
       if (!(await isPermissionGranted())) return false
       await ensureTauriActionListener()
-      sendNotification({
+      await sendNotification({
         title: input.title,
         body: input.body,
         silent: input.silent,

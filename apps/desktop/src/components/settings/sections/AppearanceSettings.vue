@@ -21,12 +21,6 @@ const themeOptions = [
   { value: ThemeMode.Dark, label: '深色', icon: 'moon' as const },
   { value: ThemeMode.System, label: '跟随系统', icon: 'settings' as const },
 ]
-
-/** 减少动效写入 html 根节点，CSS 会立刻生效 */
-function setReduceMotion(value: boolean): void {
-  ui.reduceMotion = value
-  ui.applyTheme()
-}
 </script>
 
 <template>
@@ -112,7 +106,7 @@ function setReduceMotion(value: boolean): void {
             { value: 'ctrl+enter', label: 'Ctrl + Enter 发送' },
           ]"
           aria-label="发送方式"
-          @update:model-value="ui.sendKey = $event as 'enter' | 'ctrl+enter'"
+          @update:model-value="ui.setSendKey($event as 'enter' | 'ctrl+enter')"
         />
       </SettingRow>
     </SettingsCard>
@@ -122,7 +116,7 @@ function setReduceMotion(value: boolean): void {
         <Switch
           :model-value="ui.reduceMotion"
           aria-label="减少动效"
-          @update:model-value="setReduceMotion"
+          @update:model-value="ui.setReduceMotion"
         />
       </SettingRow>
     </SettingsCard>
