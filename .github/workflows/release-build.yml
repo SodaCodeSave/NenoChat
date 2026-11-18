@@ -99,10 +99,14 @@ jobs:
         env:
           CI: 'true'
 
-      # Tauri release 构建默认产出 unsigned APK，这里用 Android 标准 debug key
-      # 签名，保证产物可直接安装（不能上架应用商店）。
-      - name: Sign APK with debug key
+      # Tauri release 构建默认产出 unsigned APK。配置了 ANDROID_KEY_* secrets 时用正式
+      # 密钥签名（可上架、签名稳定）；否则用标准 debug key 兜底（仅可安装）。
+      - name: Sign APK
         shell: bash
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           APK=$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk \
@@ -111,19 +115,43 @@ jobs:
             echo "::error::未找到 unsigned APK，构建可能未产出 arm64 包"
             exit 1
           fi
-          keytool -genkeypair -v \
-            -keystore "$RUNNER_TEMP/debug.keystore" \
-            -alias androiddebugkey -storepass android -keypass android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+
+          # apksigner 位于 build-tools/<version>/bin，不在 PATH 中，取最高版本
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner \
+            | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::未找到 apksigner，请确认 build-tools 已安装"
+            exit 1
+          fi
+
           mkdir -p release
           OUTPUT="release/NenoChat-${GITHUB_REF_NAME}-android-arm64.apk"
-          apksigner sign \
-            --ks "$RUNNER_TEMP/debug.keystore" \
-            --ks-key-alias androiddebugkey \
-            --ks-pass pass:android --key-pass pass:android \
-            --out "$OUTPUT" "$APK"
-          apksigner verify --verbose "$OUTPUT"
+
+          if [ -n "$ANDROID_KEY_BASE64" ] && [ -n "$ANDROID_KEY_ALIAS" ] \
+            && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "使用正式 keystore 签名"
+            echo "$ANDROID_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            "$APKSIGNER" sign \
+              --ks "$RUNNER_TEMP/release.jks" \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass pass:"$ANDROID_KEY_PASSWORD" \
+              --key-pass pass:"$ANDROID_KEY_PASSWORD" \
+              --out "$OUTPUT" "$APK"
+          else
+            echo "未配置 ANDROID_KEY_* secrets，使用 debug key 签名"
+            keytool -genkeypair -v \
+              -keystore "$RUNNER_TEMP/debug.keystore" \
+              -alias androiddebugkey -storepass android -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+            "$APKSIGNER" sign \
+              --ks "$RUNNER_TEMP/debug.keystore" \
+              --ks-key-alias androiddebugkey \
+              --ks-pass pass:android --key-pass pass:android \
+              --out "$OUTPUT" "$APK"
+          fi
+
+          "$APKSIGNER" verify --verbose "$OUTPUT"
 
       - name: Upload Android APK to Release
         uses: softprops/action-gh-release@v2
