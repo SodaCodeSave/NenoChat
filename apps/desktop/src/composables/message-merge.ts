@@ -32,7 +32,12 @@ export function mergeMessages(
     }
 
     const existing = byId.get(message.id)
-    byId.set(message.id, existing ? { ...existing, ...message } : message)
+    byId.set(
+      message.id,
+      existing
+        ? { ...existing, ...message, meta: { ...existing.meta, ...message.meta } }
+        : message,
+    )
   }
 
   return sortAndTrim([...byId.values()], window)

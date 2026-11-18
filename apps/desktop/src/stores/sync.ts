@@ -119,7 +119,9 @@ export const useSyncStore = defineStore('sync', () => {
         }
         case 'message': {
           const message = payload as unknown as Message
-          messages.mergeUpdated(message)
+          // 用 upsert 而非 mergeUpdated：追批里可能含离线期间的新消息，
+          // 该会话可能从未加载过，mergeUpdated 在消息不存在时会直接丢弃。
+          messages.mergeIncoming(message)
           messageRows.set(message.id, { ...message, localStatus: 'synced' })
           break
         }
@@ -332,7 +334,12 @@ export const useSyncStore = defineStore('sync', () => {
       // 若固定在启动时的值，长会话每次断线重连都会重放全部增量
       getCursor: async () => cursor.value,
       onStatus: (next) => {
+        const wasLive = isLive.value
         status.value = next
+        // 断线重连并追平后，重放离线期间落 outbox 的发送消息
+        if (next === 'live' && !wasLive) {
+          void useMessagesStore().flushOutbox()
+        }
       },
       onFatal: (reason) => {
         lastError.value = reason

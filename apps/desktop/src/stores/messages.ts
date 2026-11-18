@@ -17,6 +17,8 @@ import {
   upsertMessage,
   upsertMessagesBatched,
 } from '@/db/dao/messages'
+import { bumpOutboxAttempt, enqueue, listOutbox, removeOutbox } from '@/db/dao/sync'
+import { isRetryableSendError } from '@/composables/send-retry'
 import { mergeMessages, sortAndTrim } from '@/composables/message-merge'
 import { hasLocalDb } from '@/platform/db'
 import { wsClient } from '@/realtime/ws-client'
@@ -32,6 +34,16 @@ interface ConversationMessages {
 
 function emptyBucket(): ConversationMessages {
   return { messages: [], hasMoreOlder: false, loading: false, loaded: false }
+}
+
+/** outbox 条目里序列化的发送请求 */
+interface OutboxSendPayload {
+  conversationId: string
+  clientNonce: string
+  type: MessageTypeT
+  content: string
+  meta?: MessageMeta
+  replyToId?: string | null
 }
 
 /** 启动预载的并发度：一组 3 个会话并行拉取，冷启动几十个会话也不会挤爆网络与 IPC */
@@ -209,17 +221,17 @@ export const useMessagesStore = defineStore('messages', () => {
       await insertPending(serverId.value, optimistic)
     }
 
+    const payload: OutboxSendPayload = {
+      conversationId,
+      clientNonce: nonce,
+      type: options.type ?? MessageType.Text,
+      content: options.content,
+      meta: options.meta ?? undefined,
+      replyToId: options.replyToId ?? null,
+    }
+
     sending.value = true
     try {
-      const payload = {
-        conversationId,
-        clientNonce: nonce,
-        type: options.type ?? MessageType.Text,
-        content: options.content,
-        meta: options.meta ?? undefined,
-        replyToId: options.replyToId ?? null,
-      }
-
       const result = wsClient.isOnline()
         ? ((await wsClient.request('message.send', payload)) as { message: Message })
         : await messageApi.send(payload)
@@ -238,10 +250,47 @@ export const useMessagesStore = defineStore('messages', () => {
       }))
       if (hasLocalDb() && serverId.value) {
         await markFailed(serverId.value, optimistic.id, reason)
+        // 网络类失败落 outbox，重连后按 nonce 重放；服务端幂等，不会重复
+        if (isRetryableSendError(e)) {
+          await enqueue({
+            id: optimistic.id,
+            serverId: serverId.value,
+            op: 'message.send',
+            payload,
+            conversationId,
+          })
+        }
       }
       throw e
     } finally {
       sending.value = false
+    }
+  }
+
+  /**
+   * 重连进入 live 后重放发件箱。逐条走 WS 请求，成功即按 nonce 转正并出队；
+   * 仍失败则按指数退避推迟下次尝试。离线时直接跳过，等下一次 live。
+   */
+  async function flushOutbox(): Promise<void> {
+    if (!hasLocalDb() || !serverId.value || !wsClient.isOnline()) return
+    const rows = await listOutbox(serverId.value, 50)
+    for (const row of rows) {
+      if (!wsClient.isOnline()) break
+      let payload: OutboxSendPayload
+      try {
+        payload = JSON.parse(row.payload) as OutboxSendPayload
+      } catch {
+        await removeOutbox(row.id)
+        continue
+      }
+      try {
+        const result = (await wsClient.request('message.send', payload)) as { message: Message }
+        await applyConfirmed(payload.conversationId, payload.clientNonce, result.message)
+        await removeOutbox(row.id)
+      } catch (e) {
+        const delay = Math.min(1000 * 2 ** Math.min(row.attempts, 6), 60000)
+        await bumpOutboxAttempt(row.id, e instanceof Error ? e.message : '重发失败', delay)
+      }
     }
   }
 
@@ -286,6 +335,18 @@ export const useMessagesStore = defineStore('messages', () => {
     })
   }
 
+  /**
+   * 追批用的同步 upsert：新消息插入、已有消息替换，不落库（落库由 sync 第二遍批量完成）。
+   * 与 mergeUpdated 的区别是后者在会话未加载/消息不存在时直接丢弃，
+   * 而追批里的消息可能既未在内存、也还没加载过该会话。
+   */
+  function mergeIncoming(message: Message): void {
+    patchBucket(message.conversationId, (bucket) => ({
+      ...bucket,
+      messages: merge(bucket.messages, [message]),
+    }))
+  }
+
   async function applyUpdated(message: Message): Promise<void> {
     mergeUpdated(message)
     if (hasLocalDb() && serverId.value) {
@@ -325,6 +386,8 @@ export const useMessagesStore = defineStore('messages', () => {
     applyConfirmed,
     applyCreated,
     mergeUpdated,
+    mergeIncoming,
+    flushOutbox,
     applyUpdated,
     edit,
     recall,

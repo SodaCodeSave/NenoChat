@@ -36,6 +36,22 @@ describe('mergeMessages', () => {
     expect(merged[0]!.content).toBe('新')
   })
 
+  it('同 id 合并时 meta 深合并，部分更新不丢字段', () => {
+    const old = make({
+      id: 'm1',
+      meta: { mentions: ['u1'], clientNonce: 'n1' },
+    })
+    const next = make({ id: 'm1', meta: { emoji: '👍' } })
+
+    const merged = mergeMessages([old], [next])
+
+    expect(merged[0]!.meta).toMatchObject({
+      mentions: ['u1'],
+      clientNonce: 'n1',
+      emoji: '👍',
+    })
+  })
+
   it('不同 nonce 的不同消息都保留', () => {
     const a = make({ id: 'm1', clientNonce: 'n1', seq: 1 })
     const b = make({ id: 'm2', clientNonce: 'n2', seq: 2 })
