@@ -37,7 +37,8 @@ describe('assertPublicUrl', () => {
   })
 
   it('允许公网地址', async () => {
-    await expect(assertPublicUrl('https://api.openai.com/v1')).resolves.toBeInstanceOf(URL)
+    // 用 IP 字面量避免测试依赖外部 DNS 解析结果
+    await expect(assertPublicUrl('https://1.1.1.1/v1')).resolves.toBeInstanceOf(URL)
   })
 
   it('allowPrivate 放行 localhost 与内网 IP', async () => {

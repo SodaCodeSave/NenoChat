@@ -313,6 +313,24 @@ describe('会话与消息', () => {
     expect(recalled.json.message.deletedAt).not.toBeNull()
     expect(recalled.json.message.content).toBe('')
   })
+
+  it('普通成员不能撤回他人消息', async () => {
+    const group = await api<{ conversation: { id: string } }>('POST', '/conversations', {
+      token: alice.accessToken,
+      body: { type: 'group', name: '撤回权限', memberIds: [bob.user.id] },
+    })
+    const conversationId = group.json.conversation.id
+
+    const sent = await api<{ message: { id: string } }>('POST', '/messages', {
+      token: alice.accessToken,
+      body: { conversationId, clientNonce: 'recall-perm-1', type: 'text', content: '群主发的消息' },
+    })
+
+    const denied = await api('DELETE', `/messages/${sent.json.message.id}`, {
+      token: bob.accessToken,
+    })
+    expect(denied.status).toBe(403)
+  })
 })
 
 describe('同步变更日志', () => {

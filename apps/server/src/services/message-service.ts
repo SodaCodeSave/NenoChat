@@ -14,7 +14,7 @@ import * as membersRepo from '../db/repo/members'
 import * as readCursorsRepo from '../db/repo/read-cursors'
 import * as usersRepo from '../db/repo/users'
 import { writeChange } from './change-log'
-import { assertMember, assertPermission, isMuted } from './permission-service'
+import { assertMember, assertPermission, can, isMuted } from './permission-service'
 import { err } from '../util/errors'
 import { now } from '../util/clock'
 import { hub } from '../ws/hub'
@@ -248,8 +248,9 @@ export function recall(db: DB, input: { messageId: string; userId: string }): Me
     if (!member) throw err.forbidden('你不在这个会话中')
 
     const isOwn = row.sender_id === input.userId
-    const canManage = (member.allow & Permission.MANAGE_MESSAGES) !== 0 || member.role !== 'member'
-    if (!isOwn && !canManage) throw err.forbidden('没有权限撤回他人消息')
+    // 撤回他人消息需要明确的管理权限位（含角色默认权限，并尊重 deny），
+    // 不再用“非 member 即可”这种过宽判定
+    if (!isOwn && !can(member, Permission.MANAGE_MESSAGES)) throw err.forbidden('没有权限撤回他人消息')
 
     const updated = messagesRepo.softDelete(db, row.id, input.userId, now())
     const mapped = messagesRepo.mapMessage(updated)
