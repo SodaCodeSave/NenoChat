@@ -187,11 +187,11 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div
       v-if="ui.commandOpen"
-      class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-0 pt-[var(--safe-top)] md:px-4 md:pt-[10vh]"
+      class="animate-fade-in fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-0 pt-[var(--safe-top)] md:px-4 md:pt-[10vh]"
       @click.self="close"
     >
       <div
-        class="w-full max-w-xl overflow-hidden rounded-none border-0 bg-surface shadow-2xl md:rounded-2xl md:border md:border-line"
+        class="animate-rise-in w-full max-w-xl overflow-hidden rounded-none border-0 bg-surface shadow-2xl md:rounded-2xl md:border md:border-line"
       >
         <div class="flex items-center gap-2 border-b border-line px-3">
           <Icon name="search" :size="16" class="text-muted" />

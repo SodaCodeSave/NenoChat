@@ -19,4 +19,10 @@
 
 - 以黑白灰为底，颜色留给内容、强调色和危险操作；不加渐变、毛玻璃装饰、霓虹边（移动端底栏滚动穿透的轻微 blur 属功能性，可保留）。
 - 动画只用于反馈（spinner、骨架屏），不加回弹、漂浮等装饰动画。
+  - 时长 100–180ms，位移不超过 4px（抽屉与底部面板从自身边缘滑入），只动 `opacity` / `transform`，不动宽高与布局。
+  - 统一用 `index.css` 里的 `animate-fade-in` / `animate-rise-in` / `animate-sheet-up` / `animate-sheet-side`；不要再写裸 keyframes 或内联 animation。
+  - 新消息入场只要 120ms 淡入。消息列表是虚拟滚动，动画只能按「新到的 id」临时触发（`MessageList` 的 `freshIds`），挂整行上会随滚动反复重播。
+  - 图片（头像、附件、贴纸、链接封面）统一 `.img-fade` + `data-loaded`，加载完淡入；不要留占位跳动。
+  - 首屏加载用骨架屏（`Skeleton.vue` + `.skeleton`），不做扫光渐变。
+  - 所有动效必须能被「减少动效」开关关掉。CSS 之外的滚动（`scrollTo` / `scrollIntoView` 的 `smooth`）CSS 拦不住，要用 `composables/motion.ts` 判断。
 - 图标统一走 `Icon` 组件一套，正文和按钮里不放 emoji。

@@ -9,6 +9,7 @@ const props = defineProps<{ url: string }>()
 
 const preview = ref<LinkPreview | null>(null)
 const loaded = ref(false)
+const imageLoaded = ref(false)
 const imageFailed = ref(false)
 const expanded = ref(false)
 const summary = ref<string | null>(null)
@@ -48,6 +49,7 @@ watch(
     summary.value = null
     summaryError.value = null
     imageFailed.value = false
+    imageLoaded.value = false
     void load()
   },
 )
@@ -96,9 +98,11 @@ onMounted(() => {
         v-if="preview.image && !imageFailed"
         :src="preview.image"
         alt=""
-        class="h-[68px] w-[96px] shrink-0 rounded-md object-cover"
+        class="img-fade h-[68px] w-[96px] shrink-0 rounded-md object-cover"
+        :data-loaded="imageLoaded ? 'true' : 'false'"
         loading="lazy"
         referrerpolicy="no-referrer"
+        @load="imageLoaded = true"
         @error="imageFailed = true"
       />
     </div>

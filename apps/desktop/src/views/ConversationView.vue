@@ -456,12 +456,12 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="ui.isMobile && mobileMembersOpen"
-        class="fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
         @click.self="mobileMembersOpen = false"
       >
         <MemberSidebar
           mobile
-          class="h-full w-[82vw] max-w-[320px] shadow-xl"
+          class="animate-sheet-side h-full w-[82vw] max-w-[320px] shadow-xl"
           :groups="memberGroups"
           @open-profile="() => {}"
           @mention="mentionFromMobile"
@@ -471,12 +471,12 @@ onBeforeUnmount(() => {
 
       <div
         v-if="ui.isMobile && isAi && mobileMemoryOpen"
-        class="fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
         @click.self="mobileMemoryOpen = false"
       >
         <MemoryPanel
           mobile
-          class="h-full w-[88vw] max-w-[360px] shadow-xl"
+          class="animate-sheet-side h-full w-[88vw] max-w-[360px] shadow-xl"
           :conversation-id="conversationId"
           @close="mobileMemoryOpen = false"
         />
@@ -484,12 +484,12 @@ onBeforeUnmount(() => {
 
       <div
         v-if="ui.isMobile && isAi && mobileScheduleOpen"
-        class="fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
         @click.self="mobileScheduleOpen = false"
       >
         <SchedulePanel
           mobile
-          class="h-full w-[88vw] max-w-[360px] shadow-xl"
+          class="animate-sheet-side h-full w-[88vw] max-w-[360px] shadow-xl"
           :conversation-id="conversationId"
           @close="mobileScheduleOpen = false"
         />
@@ -515,7 +515,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="previewUrl"
-        class="fixed inset-0 z-40 grid place-items-center bg-black/70 p-6"
+        class="animate-fade-in fixed inset-0 z-40 grid place-items-center bg-black/70 p-6"
         @click="previewUrl = null"
       >
         <img :src="previewUrl" alt="图片预览" class="max-h-[88vh] max-w-[92vw] rounded-lg object-contain" />

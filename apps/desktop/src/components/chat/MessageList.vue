@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AUTOSCROLL_THRESHOLD_PX, MESSAGE_GROUP_WINDOW_MS, type Message } from '@nenochat/shared'
 import MessageItem from './MessageItem.vue'
 import DecisionStrip from './DecisionStrip.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
+import { smoothScrollBehavior } from '@/composables/motion'
 import { describeUsage } from './debug-labels'
 import { useAiStore } from '@/stores/ai'
 import { useAuthStore } from '@/stores/auth'
@@ -299,6 +301,19 @@ const viewportHeight = ref(0)
 const highlighted = ref<string | null>(null)
 let highlightTimer = 0
 
+/** 刚追加的消息 id：只给它们放入场动画，滚动回来重新挂载时不重播 */
+const freshIds = ref<Set<string>>(new Set())
+let freshTimer = 0
+
+function markFresh(ids: string[]): void {
+  if (ids.length === 0) return
+  freshIds.value = new Set([...freshIds.value, ...ids])
+  window.clearTimeout(freshTimer)
+  freshTimer = window.setTimeout(() => {
+    freshIds.value = new Set()
+  }, 240)
+}
+
 function heightOf(row: Row): number {
   return heights.value[row.key] ?? ESTIMATE[row.kind]
 }
@@ -389,7 +404,11 @@ function scrollToBottom(smooth = false): void {
   if (!el) return
   cancelAnimationFrame(scrollRaf)
   scrollRaf = requestAnimationFrame(() => {
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    el.scrollTo({
+      top: el.scrollHeight,
+      // 平滑滚动由 JS 发起，CSS 的减少动效拦不住，这里自己判断
+      behavior: smooth ? smoothScrollBehavior() : 'auto',
+    })
     scrollTop.value = el.scrollTop
   })
 }
@@ -469,6 +488,12 @@ watch(
     if (el && added > 0 && !stickBottom) pendingAnchor = el.scrollHeight
 
     const wasStick = stickBottom
+
+    // 贴底时新到的消息是能感知到的「到达」，给一段入场；翻历史补进来的不播
+    if (added > 0 && (prev ?? 0) > 0 && wasStick && !pendingJump.value) {
+      markFresh(props.messages.slice(prev ?? 0).map((message) => message.id))
+    }
+
     await nextTick()
     scheduleMeasure()
 
@@ -561,6 +586,7 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(measureRaf)
   cancelAnimationFrame(scrollRaf)
   window.clearTimeout(highlightTimer)
+  window.clearTimeout(freshTimer)
 })
 
 defineExpose({ scrollToBottom })
@@ -575,6 +601,18 @@ defineExpose({ scrollToBottom })
       {{ loading ? '加载中…' : '上滑加载更多历史消息' }}
     </div>
 
+    <!-- 首次加载：骨架屏占位，数据到了直接替换 -->
+    <div v-if="loading && messages.length === 0" class="space-y-4 px-4 py-3" aria-hidden="true">
+      <div v-for="index in 5" :key="index" class="flex gap-2.5">
+        <Skeleton circle width="36px" height="36px" />
+        <div class="min-w-0 flex-1 space-y-2 pt-0.5">
+          <Skeleton :width="`${28 + (index % 3) * 10}%`" height="11px" />
+          <Skeleton :width="`${52 + (index % 4) * 11}%`" height="12px" />
+          <Skeleton v-if="index % 2 === 0" :width="`${26 + (index % 5) * 9}%`" height="12px" />
+        </div>
+      </div>
+    </div>
+
     <!-- 上方留白：代表被窗口化裁掉的行 -->
     <div v-if="topSpacer > 0" :style="{ height: `${topSpacer}px` }" aria-hidden="true" />
 
@@ -583,11 +621,12 @@ defineExpose({ scrollToBottom })
       :key="row.key"
       :data-row-key="row.key"
       class="flow-root"
-      :class="
+      :class="[
         row.kind === 'message' && highlighted === row.message.id
           ? 'animate-pulse bg-accent-soft/60'
-          : ''
-      "
+          : '',
+        row.kind === 'message' && freshIds.has(row.message.id) ? 'animate-fade-up' : '',
+      ]"
     >
       <div v-if="row.kind === 'day'" class="my-3 flex items-center gap-3 px-4">
         <span class="h-px flex-1 bg-line" />

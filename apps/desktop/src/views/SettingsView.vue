@@ -16,6 +16,7 @@ import NotificationSettings from '@/components/settings/NotificationSettings.vue
 import StorageSettings from '@/components/settings/StorageSettings.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { smoothScrollBehavior } from '@/composables/motion'
 
 type SectionKey =
   | 'account'
@@ -230,7 +231,7 @@ async function goToSection(key: SectionKey, anchorId = ''): Promise<void> {
   await nextTick()
   if (!anchorId) return
   const element = document.getElementById(anchorId)
-  element?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  element?.scrollIntoView({ block: 'start', behavior: smoothScrollBehavior() })
   activeAnchor.value = anchorId
 }
 

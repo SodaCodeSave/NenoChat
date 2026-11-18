@@ -16,10 +16,12 @@ const props = withDefaults(
 )
 
 const failed = ref(false)
+const loaded = ref(false)
 watch(
   () => props.src,
   () => {
     failed.value = false
+    loaded.value = false
   },
 )
 
@@ -67,9 +69,11 @@ const style = computed(() => ({
       v-if="showImage"
       :src="resolvedSrc!"
       :alt="props.name ?? ''"
-      class="h-full w-full object-cover"
+      class="img-fade h-full w-full object-cover"
       :class="[props.square ? 'rounded-[28%]' : 'rounded-full', props.ring ? 'ring-2 ring-surface' : '']"
       :style="style"
+      :data-loaded="loaded ? 'true' : 'false'"
+      @load="loaded = true"
       @error="failed = true"
     />
     <div

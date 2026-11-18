@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import type { AiPersona, Contact, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import { conversationApi, userApi } from '@/api/endpoints'
 import { aiApi } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
@@ -231,6 +232,26 @@ onBeforeUnmount(() => {
         </div>
 
         <p v-if="error" class="mt-2 text-[12px] text-danger">{{ error }}</p>
+
+        <!-- 首次加载：联系人列表骨架屏 -->
+        <div
+          v-if="contacts.loading && friends.length === 0 && !keyword"
+          class="mt-5 space-y-1"
+          aria-hidden="true"
+        >
+          <Skeleton width="72px" height="11px" class="mb-2" />
+          <div
+            v-for="index in 5"
+            :key="index"
+            class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2"
+          >
+            <Skeleton circle width="38px" height="38px" />
+            <div class="min-w-0 flex-1 space-y-1.5">
+              <Skeleton :width="`${34 + (index % 3) * 10}%`" height="12px" />
+              <Skeleton :width="`${48 + (index % 4) * 8}%`" height="10px" />
+            </div>
+          </div>
+        </div>
 
         <section v-if="showPersonaPicker" class="mt-3 rounded-xl border border-line bg-surface-2 p-3">
           <div class="mb-2 flex items-center justify-between">

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { Post } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
@@ -215,12 +216,27 @@ onMounted(() => {
         </section>
 
         <!-- 信息流 -->
-        <p
+        <div
           v-if="moments.loading && moments.posts.length === 0"
-          class="py-8 text-center text-[12px] text-muted"
+          class="mt-3 space-y-3"
+          aria-hidden="true"
         >
-          加载中…
-        </p>
+          <div
+            v-for="index in 2"
+            :key="index"
+            class="rounded-2xl border border-line bg-surface p-3"
+          >
+            <div class="flex items-start gap-3">
+              <Skeleton circle width="38px" height="38px" />
+              <div class="min-w-0 flex-1 space-y-2 pt-0.5">
+                <Skeleton width="38%" height="12px" />
+                <Skeleton width="88%" height="12px" />
+                <Skeleton width="64%" height="12px" />
+                <Skeleton width="100%" height="104px" />
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div v-else-if="moments.isEmpty" class="py-12 text-center">
           <Icon name="compass" :size="28" class="mx-auto mb-2 text-muted opacity-50" />

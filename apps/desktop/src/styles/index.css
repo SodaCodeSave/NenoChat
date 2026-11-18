@@ -77,6 +77,20 @@
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
 }
 
+/*
+ * 动效令牌：只做反馈，不做装饰。
+ * 时长 100–180ms，位移不超过 4px（抽屉与底部面板从自身边缘滑入），只动 opacity/transform。
+ * 需要动画的地方直接用 animate-fade-in / animate-rise-in / animate-sheet-up / animate-sheet-side，
+ * 不要再写裸 keyframes；「减少动效」开关会把这里的时长统一压到 0.001ms。
+ */
+@theme {
+  --animate-fade-in: neno-fade-in 140ms ease-out both;
+  --animate-fade-out: neno-fade-out 110ms ease-in both;
+  --animate-rise-in: neno-rise-in 140ms ease-out both;
+  --animate-sheet-up: neno-sheet-up 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-sheet-side: neno-sheet-side 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* 主题色变体：设置里切换后由 useTheme 写到 <html data-accent> */
 :root[data-accent='violet'] {
   --accent: #7c5cff;
@@ -251,6 +265,7 @@ textarea {
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
 }
@@ -259,6 +274,7 @@ textarea {
 [data-reduce-motion='true'] *::before,
 [data-reduce-motion='true'] *::after {
   animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
 }
 
@@ -294,4 +310,91 @@ textarea {
   vertical-align: -0.15em;
   background: var(--accent);
   animation: neno-blink 1s steps(2, start) infinite;
+}
+
+/* ---------------------------- 反馈动效 ---------------------------- */
+
+@keyframes neno-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes neno-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes neno-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes neno-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes neno-sheet-side {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* 轻提示：Vue Transition 的 name="fade"，只淡入淡出，不碰 transform（元素本身靠 translate 居中） */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 140ms ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/*
+ * 图片淡入：图片数据到位后从 0 过渡到 1，避免网络图凭空弹出。
+ * 组件里把 data-loaded 置为 true 即可；减少动效时过渡被压掉，只剩瞬间显示。
+ */
+.img-fade {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+.img-fade[data-loaded='true'] {
+  opacity: 1;
+}
+
+/* 骨架屏：首屏加载用，只做很轻的呼吸，不做扫光渐变（DESIGN 不允许装饰性渐变） */
+.skeleton {
+  background-color: var(--surface-3);
+  animation: neno-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes neno-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }

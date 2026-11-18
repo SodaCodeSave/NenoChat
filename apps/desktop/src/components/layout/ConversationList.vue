@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Badge from '@/components/ui/Badge.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import ConversationItem from './ConversationItem.vue'
 import NewChatDialog from './NewChatDialog.vue'
 import { useConversationsStore } from '@/stores/conversations'
@@ -151,6 +152,21 @@ onBeforeUnmount(() => {
       class="scroll-area flex-1 px-2 pb-3"
       :class="props.mobile ? 'pb-[calc(var(--mobile-tab-h)+var(--safe-bottom)+0.75rem)]' : ''"
     >
+      <!-- 首次加载：先用骨架屏占位，数据到了直接替换，避免整列空白 -->
+      <div
+        v-if="conversations.loading && conversations.ordered.length === 0"
+        class="space-y-1 px-1 pt-2"
+        aria-hidden="true"
+      >
+        <div v-for="index in 6" :key="index" class="flex items-center gap-2.5 px-1.5 py-2">
+          <Skeleton circle width="36px" height="36px" />
+          <div class="min-w-0 flex-1 space-y-1.5">
+            <Skeleton :width="`${46 + (index % 3) * 12}%`" height="11px" />
+            <Skeleton :width="`${68 - (index % 4) * 9}%`" height="10px" />
+          </div>
+        </div>
+      </div>
+
       <section v-if="pinnedAi.length > 0" class="mb-1">
         <p class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium tracking-wide text-muted">
           置顶
@@ -232,9 +248,9 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <template v-if="menu">
         <!-- 手机端：底部操作面板，比坐标浮层更好点 -->
-        <div v-if="ui.isMobile" class="fixed inset-0 z-50 bg-black/40" @click="closeMenu">
+        <div v-if="ui.isMobile" class="animate-fade-in fixed inset-0 z-50 bg-black/40" @click="closeMenu">
           <div
-            class="absolute inset-x-0 bottom-0 overflow-hidden rounded-t-2xl border-t border-line bg-surface pb-[var(--safe-bottom)]"
+            class="animate-sheet-up absolute inset-x-0 bottom-0 overflow-hidden rounded-t-2xl border-t border-line bg-surface pb-[var(--safe-bottom)]"
             @click.stop
           >
             <p class="truncate border-b border-line px-4 py-3 text-center text-[12px] text-muted">
@@ -268,7 +284,7 @@ onBeforeUnmount(() => {
 
         <div
           v-else
-          class="fixed z-50 min-w-[168px] overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-[var(--shadow-soft)]"
+          class="animate-rise-in fixed z-50 min-w-[168px] overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-[var(--shadow-soft)]"
           :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
           @click.stop
         >

@@ -155,11 +155,11 @@ async function submit(): Promise<void> {
 <template>
   <Teleport to="body">
     <div
-      class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 md:grid md:place-items-center md:p-6"
+      class="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 md:grid md:place-items-center md:p-6"
       @click.self="emit('close')"
     >
       <div
-        class="animate-fade-up flex max-h-[90dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-line bg-surface shadow-[var(--shadow-soft)] md:rounded-2xl"
+        class="animate-sheet-up flex max-h-[90dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-line bg-surface shadow-[var(--shadow-soft)] md:animate-rise-in md:rounded-2xl"
       >
         <header
           class="flex shrink-0 items-center justify-between border-b border-line px-4 pb-3 pt-[calc(0.75rem+var(--safe-top))] md:py-3"

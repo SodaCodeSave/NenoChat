@@ -173,6 +173,13 @@ const showAiTail = computed(
 
 /* --------------------------- 连接器调用提示 --------------------------- */
 
+/** 已加载完的图片/贴纸 id：数据到位后再淡入，避免网络图凭空弹出 */
+const loadedImages = ref<Set<string>>(new Set())
+
+function markImageLoaded(id: string): void {
+  loadedImages.value.add(id)
+}
+
 const bilibiliIcon = connectorPresetOf('bilibili')?.icon ?? null
 
 /** 固化提示：本次回复用过的连接器动作，仅在该次生成的第一条消息上显示 */
@@ -367,8 +374,11 @@ const liveConnectorLabel = computed(() => {
               <img
                 :src="attachment.displayUrl"
                 :alt="attachment.filename"
-                class="max-h-[300px] w-auto max-w-full object-cover"
+                class="img-fade max-h-[300px] w-auto max-w-full object-cover"
+                :data-loaded="loadedImages.has(attachment.id) ? 'true' : 'false'"
                 loading="lazy"
+                @load="markImageLoaded(attachment.id)"
+                @error="markImageLoaded(attachment.id)"
               />
             </button>
             <p v-if="message.content" class="text-[13px]">{{ message.content }}</p>
@@ -381,7 +391,10 @@ const liveConnectorLabel = computed(() => {
               :key="attachment.id"
               :src="attachment.displayUrl"
               :alt="attachment.filename"
-              class="block max-h-[160px] max-w-[200px] rounded-lg object-contain"
+              class="img-fade block max-h-[160px] max-w-[200px] rounded-lg object-contain"
+              :data-loaded="loadedImages.has(attachment.id) ? 'true' : 'false'"
+              @load="markImageLoaded(attachment.id)"
+              @error="markImageLoaded(attachment.id)"
             />
           </div>
 
@@ -420,7 +433,7 @@ const liveConnectorLabel = computed(() => {
     <!-- hover 操作条 -->
     <div
       v-if="!ui.isMobile && !deleted && !ephemeral"
-      class="absolute -top-3 hidden items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[var(--shadow-soft)] group-hover:flex"
+      class="invisible absolute -top-3 flex items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 opacity-0 shadow-[var(--shadow-soft)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
       :class="qqOwn ? 'left-4' : 'right-4'"
     >
       <button

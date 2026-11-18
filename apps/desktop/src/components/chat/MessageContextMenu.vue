@@ -99,15 +99,15 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="ui.isMobile" class="fixed inset-0 z-50 bg-black/40" @click.self="requestClose" />
+    <div v-if="ui.isMobile" class="animate-fade-in fixed inset-0 z-50 bg-black/40" @click.self="requestClose" />
 
     <div
       ref="menu"
       class="fixed z-50 border-line bg-surface"
       :class="
         ui.isMobile
-          ? 'inset-x-0 bottom-0 rounded-t-2xl border-t pb-[var(--safe-bottom)]'
-          : 'w-[168px] rounded-xl border py-1 shadow-[var(--shadow-soft)]'
+          ? 'animate-sheet-up inset-x-0 bottom-0 rounded-t-2xl border-t pb-[var(--safe-bottom)]'
+          : 'animate-rise-in w-[168px] rounded-xl border py-1 shadow-[var(--shadow-soft)]'
       "
       :style="ui.isMobile ? undefined : position"
     >
