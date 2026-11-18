@@ -65,6 +65,14 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     return { results }
   })
 
+  /** 获取已启用的和风天气，供桌面端本机密钥模式注入上下文 */
+  app.get('/connectors/heweather/current', async (request) => {
+    const userId = await requireUserId(request)
+    const row = connectorService.enabledConnectorOfType(db, userId, 'heweather')
+    if (!row) throw err.validation('还没有启用和风天气连接器')
+    return { weather: await connectorService.fetchHeweather(row) }
+  })
+
   /** 用 DeepSeek fetch 抓取网页正文；客户端模式拿到正文后本地总结再注入 */
   app.post('/connectors/deepseek/fetch', async (request) => {
     const userId = await requireUserId(request)

@@ -7,6 +7,7 @@ import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import { buildMemoryDigest } from './ai-shared'
 import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
+import { enabledConnectorOfType, fetchHeweather } from './connector-service'
 import * as scheduleService from './schedule-service'
 import {
   decideProactiveFire,
@@ -278,6 +279,17 @@ async function fireOnServer(
     schedule,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
   })
+  let weatherContext: string | null = null
+  const weather = enabledConnectorOfType(db, candidate.owner_id, 'heweather')
+  if (weather) {
+    try {
+      const config = JSON.parse(weather.config || '{}') as Record<string, unknown>
+      if (config.weatherOnUserMessage) weatherContext = await fetchHeweather(weather)
+    } catch { /* weather is optional context */ }
+  }
+  if (weatherContext && messages.length > 0) {
+    messages[0] = { ...messages[0]!, content: `${messages[0]!.content}\n\n${weatherContext}` }
+  }
 
   let reply: string
   try {

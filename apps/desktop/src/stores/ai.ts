@@ -480,6 +480,20 @@ export const useAiStore = defineStore('ai', () => {
 
     const connectorActions: ConnectorActionMeta[] = []
 
+    // 和风天气可以在本机密钥模式下由服务端代取，再静默注入当前提示词。
+    try {
+      const { connectors } = await connectorApi.list()
+      const weather = connectors.find((item) => item.type === 'heweather' && item.enabled)
+      const mentioned = /天气|气温|温度|下雨|降雨|晴天|阴天|预报|几度|穿什么/.test(userInput)
+      const config = weather?.config
+      if (weather && config && (config.weatherAlways || (config.weatherOnMention && mentioned) || (config.weatherTool && mentioned))) {
+        contextBlocks.push((await connectorApi.weather()).weather)
+        connectorActions.push({ kind: 'weather' as ConnectorActionMeta['kind'] })
+      }
+    } catch {
+      /* 天气失败不阻断回复 */
+    }
+
     const videoInput = findBilibiliInput(userInput)
     if (videoInput) {
       try {

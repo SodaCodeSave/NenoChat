@@ -19,6 +19,13 @@ export interface ConnectorInput {
     baseUrl?: string | null
     count?: number | null
     maxComments?: number | null
+    location?: string | null
+    latitude?: number | null
+    longitude?: number | null
+    weatherAlways?: boolean
+    weatherOnUserMessage?: boolean
+    weatherOnMention?: boolean
+    weatherTool?: boolean
   }
   secret?: {
     apiKey?: string
@@ -40,6 +47,8 @@ export const connectorApi = {
   /** 用已启用的 DeepSeek 搜索连接器检索网页 */
   search: (query: string) =>
     http.post<{ results: ConnectorSearchResult[] }>(p('/connectors/search'), { query }),
+
+  weather: () => http.get<{ weather: string }>(p('/connectors/heweather/current')),
 
   /** 用 DeepSeek fetch 抓取网页正文，客户端本地总结后注入 */
   fetchPage: (url: string) =>

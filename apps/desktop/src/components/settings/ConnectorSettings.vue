@@ -33,6 +33,13 @@ const form = ref({
   baseUrl: '',
   count: 5 as number | null,
   maxComments: 8 as number | null,
+  location: '',
+  latitude: null as number | null,
+  longitude: null as number | null,
+  weatherAlways: false,
+  weatherOnUserMessage: false,
+  weatherOnMention: true,
+  weatherTool: false,
 })
 
 function connectorOf(type: ConnectorType): Connector | null {
@@ -66,6 +73,13 @@ function openForm(preset: ConnectorPreset): void {
     baseUrl: existing?.config.baseUrl ?? '',
     count: existing?.config.count ?? 5,
     maxComments: existing?.config.maxComments ?? 8,
+    location: existing?.config.location ?? '',
+    latitude: existing?.config.latitude ?? null,
+    longitude: existing?.config.longitude ?? null,
+    weatherAlways: existing?.config.weatherAlways ?? false,
+    weatherOnUserMessage: existing?.config.weatherOnUserMessage ?? false,
+    weatherOnMention: existing?.config.weatherOnMention ?? true,
+    weatherTool: existing?.config.weatherTool ?? false,
   }
   error.value = null
   notice.value = null
@@ -91,6 +105,14 @@ async function save(): Promise<void> {
     error.value = 'DeepSeek 搜索需要填写 API Key'
     return
   }
+  if (preset.type === 'heweather' && !editingId.value && !form.value.apiKey.trim()) {
+    error.value = '和风天气需要填写 API Key'
+    return
+  }
+  if (preset.type === 'heweather' && !form.value.location.trim() && (form.value.latitude === null || form.value.longitude === null)) {
+    error.value = '请填写默认城市，或同时填写经纬度'
+    return
+  }
 
   const config =
     preset.type === 'deepseek_search'
@@ -98,11 +120,25 @@ async function save(): Promise<void> {
           baseUrl: form.value.baseUrl.trim() || null,
           count: form.value.count ?? 5,
         }
-      : { maxComments: form.value.maxComments ?? 8 }
+      : preset.type === 'bilibili'
+        ? { maxComments: form.value.maxComments ?? 8 }
+        : {
+            baseUrl: form.value.baseUrl.trim() || null,
+            location: form.value.location.trim() || null,
+            latitude: form.value.latitude,
+            longitude: form.value.longitude,
+            weatherAlways: form.value.weatherAlways,
+            weatherOnUserMessage: form.value.weatherOnUserMessage,
+            weatherOnMention: form.value.weatherOnMention,
+            weatherTool: form.value.weatherTool,
+          }
 
   // 编辑时留空表示保持原凭据不变，避免误清空
   const secret: { apiKey?: string; cookie?: string } = {}
   if (preset.type === 'deepseek_search' && form.value.apiKey.trim()) {
+    secret.apiKey = form.value.apiKey.trim()
+  }
+  if (preset.type === 'heweather' && form.value.apiKey.trim()) {
     secret.apiKey = form.value.apiKey.trim()
   }
   if (preset.type === 'bilibili' && form.value.cookie.trim()) {
@@ -350,6 +386,32 @@ onMounted(() => {
           </div>
         </template>
 
+        <template v-if="activePreset && String(activePreset.type) === 'heweather'">
+          <Field label="和风天气 API Key" for-id="connector-key" :hint="editingConnector?.secretMasked.apiKey ? `已保存：${editingConnector.secretMasked.apiKey}，留空表示不修改` : '服务端加密保存，只返回掩码'">
+            <TextInput id="connector-key" v-model="form.apiKey" type="password" placeholder="请输入 API Key" autocomplete="off" />
+          </Field>
+          <Field label="API 地址" for-id="connector-base" optional hint="留空使用 QWeather 官方 API；也可填自建代理的 /v7 基础地址">
+            <TextInput id="connector-base" v-model="form.baseUrl" placeholder="https://api.qweather.com/v7" spellcheck="false" />
+          </Field>
+          <Field label="默认城市" for-id="connector-location" optional hint="城市名或和风天气 Location ID；填写经纬度时优先使用经纬度">
+            <TextInput id="connector-location" v-model="form.location" placeholder="北京 或 101010100" />
+          </Field>
+          <div class="grid grid-cols-2 gap-3">
+            <Field label="纬度" for-id="connector-latitude" optional><NumberInput id="connector-latitude" v-model="form.latitude" :min="-90" :max="90" /></Field>
+            <Field label="经度" for-id="connector-longitude" optional><NumberInput id="connector-longitude" v-model="form.longitude" :min="-180" :max="180" /></Field>
+          </div>
+          <div class="space-y-2">
+            <label v-for="setting in [
+              { key: 'weatherAlways', label: '每次对话都注入天气' },
+              { key: 'weatherOnUserMessage', label: 'AI 主动消息时注入天气' },
+              { key: 'weatherOnMention', label: '用户提到天气时注入' },
+              { key: 'weatherTool', label: 'AI 提到天气时自动查询（工具模式）' },
+            ]" :key="setting.key" class="flex items-center justify-between gap-3 text-[12px] text-text">
+              {{ setting.label }}
+              <Switch v-model="form[setting.key]" size="sm" />
+            </label>
+          </div>
+        </template>
         <template v-else>
           <Field
             label="B 站 Cookie"

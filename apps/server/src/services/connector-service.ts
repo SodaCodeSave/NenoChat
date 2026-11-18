@@ -15,6 +15,7 @@ import { err } from '../util/errors'
 const DEFAULTS = {
   deepseek_search: { baseUrl: 'https://api.deepseek.com', count: 5, maxComments: 8 },
   bilibili: { baseUrl: '', count: 0, maxComments: 8 },
+  heweather: { baseUrl: 'https://api.qweather.com/v7', count: 0, maxComments: 0 },
 } satisfies Record<ConnectorType, { baseUrl: string; count: number; maxComments: number }>
 
 export interface ConnectorSecret {
@@ -94,12 +95,21 @@ function normalizeConfig(type: ConnectorType, config: ConnectorConfig | undefine
         ? base.maxComments
         : Math.min(20, Math.max(0, Math.round(config.maxComments))),
   }
+  if (type === 'heweather') {
+    merged.location = config?.location?.trim() || null
+    merged.latitude = config?.latitude ?? null
+    merged.longitude = config?.longitude ?? null
+    merged.weatherAlways = config?.weatherAlways ?? false
+    merged.weatherOnUserMessage = config?.weatherOnUserMessage ?? false
+    merged.weatherOnMention = config?.weatherOnMention ?? true
+    merged.weatherTool = config?.weatherTool ?? false
+  }
   return merged
 }
 
 function assertSecret(type: ConnectorType, secret: ConnectorSecret): void {
-  if (type === 'deepseek_search' && !secret.apiKey?.trim()) {
-    throw err.validation('DeepSeek 搜索连接器需要填写 API Key')
+  if ((type === 'deepseek_search' || type === 'heweather') && !secret.apiKey?.trim()) {
+    throw err.validation(type === 'heweather' ? '和风天气连接器需要填写 API Key' : 'DeepSeek 搜索连接器需要填写 API Key')
   }
 }
 
@@ -447,6 +457,41 @@ export async function probeBilibili(secret: ConnectorSecret): Promise<{
   return { ok: true, message: `连接正常，已登录：${nav.data.uname ?? 'B 站账号'}` }
 }
 
+interface WeatherPayload {
+  code?: string
+  updateTime?: string
+  fxLink?: string
+  now?: { temp?: string; feelsLike?: string; text?: string; windDir?: string; windScale?: string; humidity?: string; precip?: string; vis?: string }
+  daily?: Array<{ fxDate?: string; tempMax?: string; tempMin?: string; textDay?: string; windDirDay?: string; windScaleDay?: string }>
+}
+
+function weatherUrl(config: ConnectorConfig, endpoint: string, location: string): string {
+  const base = (config.baseUrl || DEFAULTS.heweather.baseUrl).replace(/\/$/, '')
+  const url = new URL(`${base}/${endpoint}`)
+  url.searchParams.set('location', location)
+  return url.toString()
+}
+
+export async function fetchHeweather(row: repo.ConnectorRow): Promise<string> {
+  const config = parseConfig(row)
+  const secret = readConnectorSecret(row)
+  if (!secret.apiKey) throw err.validation('该连接器没有保存和风天气 API Key')
+  const location = config.latitude != null && config.longitude != null
+    ? `${config.longitude},${config.latitude}`
+    : config.location?.trim()
+  if (!location) throw err.validation('请先配置默认城市或经纬度')
+  const [now, forecast] = await Promise.all([
+    fetchConnectorJson<WeatherPayload>(weatherUrl(config, 'weather/now', location) + `&key=${encodeURIComponent(secret.apiKey)}`),
+    fetchConnectorJson<WeatherPayload>(weatherUrl(config, 'weather/3d', location) + `&key=${encodeURIComponent(secret.apiKey)}`),
+  ])
+  if (now.code !== '200') throw new ConnectorRequestError(`和风天气返回错误：${now.code ?? '未知'}`)
+  const current = now.now
+  const lines = [`【天气信息】${config.location ?? location}`, `当前：${current?.text ?? '未知'}，${current?.temp ?? '--'}°C（体感 ${current?.feelsLike ?? '--'}°C）`]
+  if (current?.windDir || current?.windScale) lines.push(`风：${current.windDir ?? ''} ${current.windScale ?? ''}级，湿度 ${current.humidity ?? '--'}%`)
+  for (const day of (forecast.daily ?? []).slice(0, 3)) lines.push(`${day.fxDate ?? ''}：${day.textDay ?? ''}，${day.tempMin ?? '--'}-${day.tempMax ?? '--'}°C，${day.windDirDay ?? ''}${day.windScaleDay ?? ''}级`)
+  return lines.join('\n')
+}
+
 export async function testConnector(
   db: DB,
   ownerId: string,
@@ -463,6 +508,9 @@ export async function testConnector(
       result = { ok: true, message: `连接成功，返回 ${results.length} 条结果` }
     } else if (type === 'bilibili') {
       result = await probeBilibili(readConnectorSecret(row))
+    } else if (type === 'heweather') {
+      await fetchHeweather(row)
+      result = { ok: true, message: '连接成功，天气数据获取正常' }
     } else {
       throw err.validation('不支持的连接器类型')
     }

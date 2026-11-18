@@ -93,7 +93,7 @@ export interface AttachmentRef {
 
 /** 一次回复里连接器做过的动作，供聊天界面展示资料来源 */
 export interface ConnectorActionMeta {
-  kind: 'web_search' | 'fetch' | 'bilibili'
+  kind: 'web_search' | 'fetch' | 'bilibili' | 'weather'
   /** 简要细节：抓取的网页数、视频标题等 */
   detail?: string
 }
@@ -590,7 +590,7 @@ export interface ServerInstance {
 /* ------------------------------ 连接器 ------------------------------ */
 
 /** 连接器类型：网页搜索 / B 站视频 */
-export type ConnectorType = 'deepseek_search' | 'bilibili'
+export type ConnectorType = 'deepseek_search' | 'bilibili' | 'heweather'
 
 /** 非敏感配置，随连接器一起下发给客户端 */
 export interface ConnectorConfig {
@@ -600,6 +600,13 @@ export interface ConnectorConfig {
   count?: number | null
   /** B 站降级时取多少条热评 */
   maxComments?: number | null
+  location?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  weatherAlways?: boolean
+  weatherOnUserMessage?: boolean
+  weatherOnMention?: boolean
+  weatherTool?: boolean
 }
 
 /** 敏感配置只回掩码，明文永远不上客户端 */

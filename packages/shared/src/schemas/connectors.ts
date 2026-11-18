@@ -1,12 +1,19 @@
 import { z } from 'zod'
 
-export const ConnectorTypeSchema = z.enum(['deepseek_search', 'bilibili'])
+export const ConnectorTypeSchema = z.enum(['deepseek_search', 'bilibili', 'heweather'])
 
 /** 非敏感配置：具体字段按连接器类型在服务端做二次校验 */
 export const ConnectorConfigSchema = z.object({
   baseUrl: z.string().trim().max(512).nullable().optional(),
   count: z.number().int().min(1).max(20).nullable().optional(),
   maxComments: z.number().int().min(0).max(20).nullable().optional(),
+  location: z.string().trim().max(128).nullable().optional(),
+  latitude: z.number().min(-90).max(90).nullable().optional(),
+  longitude: z.number().min(-180).max(180).nullable().optional(),
+  weatherAlways: z.boolean().optional(),
+  weatherOnUserMessage: z.boolean().optional(),
+  weatherOnMention: z.boolean().optional(),
+  weatherTool: z.boolean().optional(),
 })
 
 /** 敏感配置：创建/更新时随请求传入，服务端加密后只回掩码 */

@@ -2,6 +2,8 @@ import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg'
 import deepseekTextIcon from '@lobehub/icons-static-svg/icons/deepseek-text.svg'
 import bilibiliIcon from '@lobehub/icons-static-svg/icons/bilibili-color.svg'
 import bilibiliTextIcon from '@lobehub/icons-static-svg/icons/bilibili-text.svg'
+import heweatherIcon from '@/assets/heweather-icon.svg'
+import heweatherTextIcon from '@/assets/heweather-text.svg'
 import type { ConnectorType } from '@nenochat/shared'
 
 export interface ConnectorPreset {
@@ -29,6 +31,16 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     capability: '用户明确要查资料时自动联网，结果只作为回复参考',
     icon: deepseekIcon,
     textIcon: deepseekTextIcon,
+  },
+  {
+    id: 'heweather',
+    type: 'heweather',
+    label: '和风天气',
+    name: '和风天气',
+    description: '接入和风天气实时天气与预报',
+    capability: '按配置注入天气上下文，或开放给 AI 按需查询',
+    icon: heweatherIcon,
+    textIcon: heweatherTextIcon,
   },
   {
     id: 'bilibili',

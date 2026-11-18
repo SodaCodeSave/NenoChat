@@ -46,6 +46,15 @@ export async function buildConnectorContext(
   const actions: ConnectorActionMeta[] = []
   let fetchContext: string | null = null
 
+  const weather = connectorService.enabledConnectorOfType(db, ownerId, 'heweather')
+  if (weather) {
+    const config = JSON.parse(weather.config || '{}') as Record<string, unknown>
+    const mentioned = /天气|气温|温度|下雨|降雨|晴天|阴天|预报|几度|穿什么/.test(text)
+    if (config.weatherAlways || (config.weatherOnMention && mentioned) || (config.weatherTool && mentioned)) {
+      try { blocks.push(await connectorService.fetchHeweather(weather)) } catch { /* 天气失败不阻断回复 */ }
+    }
+  }
+
   const videoInput = findBilibiliInput(text)
   if (videoInput) {
     try {
