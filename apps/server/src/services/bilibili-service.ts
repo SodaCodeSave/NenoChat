@@ -16,6 +16,7 @@ import {
   type ConnectorSecret,
 } from './connector-service'
 import { err } from '../util/errors'
+import { assertPublicUrl } from '../util/ssrf'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
@@ -56,15 +57,32 @@ export function restoreShortLinkParams(originalUrl: string, finalUrl: string): s
 async function resolveShortUrl(url: string): Promise<string | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
+  let current: URL
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: BASE_HEADERS,
-      signal: controller.signal,
-    })
-    const finalUrl = response.url
-    return finalUrl ? restoreShortLinkParams(url, finalUrl) : null
+    current = await assertPublicUrl(url)
+  } catch {
+    return null
+  }
+  const maxHops = 5
+  try {
+    for (let hop = 0; hop < maxHops; hop++) {
+      const response = await fetch(current.toString(), {
+        method: 'GET',
+        redirect: 'manual',
+        headers: BASE_HEADERS,
+        signal: controller.signal,
+      })
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location')
+        if (!location) return null
+        // 每一跳都重新做 SSRF 校验，防止被跳转到内网地址
+        current = await assertPublicUrl(new URL(location, current).toString())
+        continue
+      }
+      const finalUrl = response.url || current.toString()
+      return restoreShortLinkParams(url, finalUrl)
+    }
+    return null
   } catch {
     return null
   } finally {

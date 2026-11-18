@@ -61,11 +61,15 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /** 测试连接：由服务端代发一次最小请求，避免浏览器跨域 */
-  app.post('/ai/providers/test', async (request) => {
-    await requireUserId(request)
-    const input = parse(TestProviderSchema, request.body)
-    return aiService.testProvider(input)
-  })
+  app.post(
+    '/ai/providers/test',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      await requireUserId(request)
+      const input = parse(TestProviderSchema, request.body)
+      return aiService.testProvider(input)
+    },
+  )
 
   /** 余额探测：由服务端代查各家余额接口并缓存结果，本机密钥需随请求带上明文 */
   app.post<{ Params: { id: string } }>('/ai/providers/:id/balance', async (request) => {

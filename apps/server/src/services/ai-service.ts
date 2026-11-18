@@ -33,6 +33,8 @@ import path from 'node:path'
 import type { DB } from '../db'
 import { dataDir } from '../db'
 import { withTx } from '../db/tx'
+import { allowPrivateAiEndpoint } from '../env'
+import { assertPublicUrl } from '../util/ssrf'
 import * as aiRepo from '../db/repo/ai'
 import * as attachmentsRepo from '../db/repo/attachments'
 import * as contactsRepo from '../db/repo/contacts'
@@ -1555,6 +1557,18 @@ export interface UpstreamUsage {
   cachedTokens: number | null
 }
 
+/**
+ * 校验用户配置的 AI 上游地址，防止通过 baseUrl 打内网/云元数据。
+ * 本地模型（ollama 等）需设置 ALLOW_PRIVATE_AI_ENDPOINT=true 才放行私网。
+ */
+async function assertAiUpstreamUrl(raw: string): Promise<void> {
+  try {
+    await assertPublicUrl(raw, { allowPrivate: allowPrivateAiEndpoint })
+  } catch (e) {
+    throw err.validation(e instanceof Error ? e.message : 'AI 上游地址不合法')
+  }
+}
+
 export interface UpstreamResult {
   content: string
   usage: UpstreamUsage | null
@@ -1629,6 +1643,7 @@ export async function callUpstream(input: {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 120000)
   try {
+    await assertAiUpstreamUrl(url)
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -1693,6 +1708,7 @@ export async function callUpstreamStream(input: {
   }
 
   try {
+    await assertAiUpstreamUrl(url)
     armIdleTimeout()
     const response = await fetch(url, {
       method: 'POST',
@@ -1796,6 +1812,7 @@ export async function testProvider(input: {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 20000)
   try {
+    await assertAiUpstreamUrl(url)
     const response = await fetch(url, {
       method: 'POST',
       headers: {
