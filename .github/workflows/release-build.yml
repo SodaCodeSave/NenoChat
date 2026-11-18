@@ -1,0 +1,128 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # 先建好 Release，避免下面两个并行 job 同时创建同 tag 时撞车（API 返回 422）
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows x64 bundles
+        run: pnpm --filter @nenochat/desktop tauri build --target x86_64-pc-windows-msvc
+        env:
+          CI: 'true'
+
+      - name: Upload Windows bundles to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          fail_on_unmatched_files: true
+
+  android-arm64:
+    name: Android arm64
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 仓库只跟踪定制过的 app/build.gradle.kts（含 release 放行明文 http），
+      # 其余 Android 工程由 CLI 生成，最后用跟踪版本覆盖回去。
+      - name: Initialize Android project
+        shell: bash
+        run: |
+          rm -rf apps/desktop/src-tauri/gen/android
+          pnpm --filter @nenochat/desktop tauri android init --ci
+          git show HEAD:apps/desktop/src-tauri/gen/android/app/build.gradle.kts \
+            > apps/desktop/src-tauri/gen/android/app/build.gradle.kts
+
+      - name: Build Android arm64 APK
+        run: pnpm --filter @nenochat/desktop tauri android build --target aarch64 --apk --ci
+        env:
+          CI: 'true'
+
+      # Tauri release 构建默认产出 unsigned APK，这里用 Android 标准 debug key
+      # 签名，保证产物可直接安装（不能上架应用商店）。
+      - name: Sign APK with debug key
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk \
+            -name '*-unsigned.apk' -type f | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::未找到 unsigned APK，构建可能未产出 arm64 包"
+            exit 1
+          fi
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/debug.keystore" \
+            -alias androiddebugkey -storepass android -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          mkdir -p release
+          OUTPUT="release/NenoChat-${GITHUB_REF_NAME}-android-arm64.apk"
+          apksigner sign \
+            --ks "$RUNNER_TEMP/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --out "$OUTPUT" "$APK"
+          apksigner verify --verbose "$OUTPUT"
+
+      - name: Upload Android APK to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.apk
+          fail_on_unmatched_files: true
