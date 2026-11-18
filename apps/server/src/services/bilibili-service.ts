@@ -37,7 +37,22 @@ function absolute(url: string): string {
   return url
 }
 
-/** b23.tv 短链需要跟随跳转拿到真实地址（保留 p/cid 参数） */
+/** 把原始短链里的 p / cid 补回跳转后的地址（302 会丢弃查询参数，导致分 P 信息丢失） */
+export function restoreShortLinkParams(originalUrl: string, finalUrl: string): string {
+  try {
+    const source = new URL(originalUrl)
+    const resolved = new URL(finalUrl)
+    for (const key of ['p', 'cid'] as const) {
+      const value = source.searchParams.get(key)
+      if (value && !resolved.searchParams.has(key)) resolved.searchParams.set(key, value)
+    }
+    return resolved.toString()
+  } catch {
+    return finalUrl
+  }
+}
+
+/** b23.tv 短链需要跟随跳转拿到真实地址，并补回被跳转丢弃的分 P 参数 */
 async function resolveShortUrl(url: string): Promise<string | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
@@ -48,7 +63,8 @@ async function resolveShortUrl(url: string): Promise<string | null> {
       headers: BASE_HEADERS,
       signal: controller.signal,
     })
-    return response.url || null
+    const finalUrl = response.url
+    return finalUrl ? restoreShortLinkParams(url, finalUrl) : null
   } catch {
     return null
   } finally {
@@ -172,6 +188,16 @@ interface ViewPayload {
   }
 }
 
+/** 多 P 视频里找到当前选中分 P 的标题，单 P 或缺失时为 null */
+function pickPartTitle(
+  pages: Array<{ cid?: number; part?: string }> | undefined,
+  cid: number,
+  multiPage: boolean,
+): string | null {
+  if (!multiPage || !pages) return null
+  return pages.find((item) => item.cid === cid)?.part?.trim() || null
+}
+
 async function fetchVideoInfo(request: BilibiliVideoRequest): Promise<BilibiliVideoTarget> {
   const param = request.videoId.startsWith('av')
     ? `aid=${request.videoId.slice(2)}`
@@ -199,6 +225,7 @@ async function fetchVideoInfo(request: BilibiliVideoRequest): Promise<BilibiliVi
     cid: request.cid,
   })
 
+  const multiPage = (data.videos ?? 1) > 1
   const info: BilibiliVideoInfo = {
     bvid: data.bvid,
     aid: data.aid ?? 0,
@@ -212,6 +239,7 @@ async function fetchVideoInfo(request: BilibiliVideoRequest): Promise<BilibiliVi
     url: `https://www.bilibili.com/video/${data.bvid}${picked.page > 1 ? `?p=${picked.page}` : ''}`,
     page: picked.page,
     cid: picked.cid,
+    partTitle: pickPartTitle(data.pages, picked.cid, multiPage),
   }
   return { info, ...picked }
 }

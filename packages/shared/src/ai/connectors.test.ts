@@ -166,6 +166,14 @@ describe('B 站上下文与总结提示词', () => {
     expect(text).not.toContain('没有可用字幕')
   })
 
+  it('多 P 视频标注当前分 P 标题', () => {
+    const text = renderBilibiliContext({
+      ...material,
+      video: { ...material.video, page: 2, partTitle: '第二集 多选' },
+    })
+    expect(text).toContain('当前分P：P2 第二集 多选')
+  })
+
   it('总结提示词区分有无字幕', () => {
     expect(buildBilibiliSummaryPrompt(material)).toContain('没有可用字幕')
     expect(buildBilibiliSummaryPrompt({ ...material, transcript: '字幕内容' })).toContain('字幕转写')

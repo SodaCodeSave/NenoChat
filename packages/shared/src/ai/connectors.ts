@@ -152,6 +152,9 @@ export function renderBilibiliContext(material: BilibiliVideoMaterial): string {
     `作者：${video.author}`,
     `链接：${video.url}`,
   ]
+  if (video.page > 1 && video.partTitle?.trim()) {
+    lines.push(`当前分P：P${video.page} ${video.partTitle}`)
+  }
   if (video.description.trim()) lines.push(`简介：${clip(video.description, 800)}`)
 
   if (transcript.trim()) {
@@ -177,7 +180,9 @@ export function renderBilibiliContext(material: BilibiliVideoMaterial): string {
 /** 总结 B 站视频时给模型的任务说明 */
 export function buildBilibiliSummaryPrompt(material: BilibiliVideoMaterial): string {
   const { video, transcript, comments } = material
-  const header = `视频标题：${video.title}\n作者：${video.author}\n简介：${clip(video.description, 1200)}`
+  const part =
+    video.page > 1 && video.partTitle?.trim() ? `\n当前分P：P${video.page} ${video.partTitle}` : ''
+  const header = `视频标题：${video.title}${part}\n作者：${video.author}\n简介：${clip(video.description, 1200)}`
   if (transcript.trim()) {
     return [
       header,

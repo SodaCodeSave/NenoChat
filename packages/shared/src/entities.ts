@@ -650,6 +650,8 @@ export interface BilibiliVideoInfo {
   page: number
   /** 当前 P 的 cid，字幕必须按它取 */
   cid: number
+  /** 当前分 P 的标题，单 P 视频为 null */
+  partTitle?: string | null
 }
 
 export interface BilibiliComment {

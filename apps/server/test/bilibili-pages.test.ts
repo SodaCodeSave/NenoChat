@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { parseBilibiliVideoRequest, selectBilibiliPage } from '../src/services/bilibili-service'
+import {
+  parseBilibiliVideoRequest,
+  restoreShortLinkParams,
+  selectBilibiliPage,
+} from '../src/services/bilibili-service'
+
+describe('restoreShortLinkParams', () => {
+  it('短链跳转丢失查询参数时补回分 P', () => {
+    expect(
+      restoreShortLinkParams(
+        'https://b23.tv/BV1GJ411x7h7?p=2',
+        'https://www.bilibili.com/video/BV1GJ411x7h7/',
+      ),
+    ).toBe('https://www.bilibili.com/video/BV1GJ411x7h7/?p=2')
+  })
+
+  it('最终地址已有 p 时不覆盖', () => {
+    expect(
+      restoreShortLinkParams(
+        'https://b23.tv/BV1GJ411x7h7?p=2',
+        'https://www.bilibili.com/video/BV1GJ411x7h7?p=3',
+      ),
+    ).toBe('https://www.bilibili.com/video/BV1GJ411x7h7?p=3')
+  })
+
+  it('cid 一并补回且原始链接无参数时原样返回', () => {
+    expect(
+      restoreShortLinkParams(
+        'https://b23.tv/abc?cid=555',
+        'https://www.bilibili.com/video/BV1GJ411x7h7',
+      ),
+    ).toBe('https://www.bilibili.com/video/BV1GJ411x7h7?cid=555')
+    expect(
+      restoreShortLinkParams('https://b23.tv/abc', 'https://www.bilibili.com/video/BV1GJ411x7h7'),
+    ).toBe('https://www.bilibili.com/video/BV1GJ411x7h7')
+  })
+
+  it('最终地址非法时退回原样', () => {
+    expect(restoreShortLinkParams('https://b23.tv/abc?p=2', '::not a url::')).toBe('::not a url::')
+  })
+})
 
 describe('parseBilibiliVideoRequest', () => {
   it('保留 URL 里的分 P 与 cid', () => {
