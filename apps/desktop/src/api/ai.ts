@@ -7,6 +7,7 @@ import {
   type AiMemorySummary,
   type AiPersona,
   type AiProvider,
+  type AiProviderModel,
   type AiSchedule,
   type AiScheduleItem,
   type AiUsageEntry,
@@ -28,6 +29,8 @@ export interface ProviderInput {
   visionModel?: string | null
   /** 模型上下文窗口（token 数），调试模式算水位用 */
   contextWindow?: number | null
+  /** 供应商下的 AI 列表：每个模型的开关与预留价格 */
+  models?: AiProviderModel[] | null
 }
 
 export interface PersonaInput {

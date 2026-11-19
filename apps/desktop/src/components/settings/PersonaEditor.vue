@@ -37,10 +37,15 @@ onMounted(() => {
   void stickers.load().catch(() => undefined)
 })
 
-/** 当前角色所选服务商的模型列表；默认服务商取第一个 */
+/** 当前角色所选服务商的可选模型：配置了 AI 列表时只显示启用的；默认服务商取第一个 */
 const modelsForSelectedProvider = computed(() => {
   const id = form.value.providerId ?? props.providers[0]?.id
-  return id ? ai.modelsByProvider[id] ?? [] : []
+  if (!id) return []
+  const provider = props.providers.find((p) => p.id === id)
+  if (!provider) return []
+  const list = provider.models ?? []
+  if (list.length > 0) return list.filter((m) => m.enabled).map((m) => m.model)
+  return ai.modelsByProvider[id] ?? []
 })
 
 const MAX_INTERESTS = 20

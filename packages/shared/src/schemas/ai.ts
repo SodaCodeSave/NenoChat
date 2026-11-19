@@ -1,6 +1,14 @@
 import { z } from 'zod'
 import { MemoryFactSubject, ReplyStyle } from '../enums'
 
+/** 供应商下的单个 AI：模型名 + 开关 + 预留价格（元 / 百万 token） */
+export const ProviderModelSchema = z.object({
+  model: z.string().trim().min(1).max(128),
+  enabled: z.boolean().default(true),
+  priceInput: z.number().min(0).max(100000).nullable().default(null),
+  priceOutput: z.number().min(0).max(100000).nullable().default(null),
+})
+
 export const ProviderSchema = z.object({
   name: z.string().trim().min(1).max(64),
   baseUrl: z.string().trim().min(8).max(512),
@@ -14,6 +22,8 @@ export const ProviderSchema = z.object({
   visionModel: z.string().trim().max(128).nullable().optional(),
   /** 模型上下文窗口（token 数），调试模式算水位用 */
   contextWindow: z.number().int().min(256).max(10_000_000).nullable().optional(),
+  /** 供应商下的 AI 列表；不传表示不改动 */
+  models: z.array(ProviderModelSchema).max(200).optional(),
 })
 
 /** 服务商局部更新：字段全部可选 */

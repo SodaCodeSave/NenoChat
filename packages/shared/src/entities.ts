@@ -264,6 +264,17 @@ export interface Sticker {
   updatedAt: number
 }
 
+/** 供应商下的单个 AI（模型）配置：开关与价格，价格预留给后续成本统计类功能 */
+export interface AiProviderModel {
+  model: string
+  /** 关闭后该模型不可被角色或会话选用 */
+  enabled: boolean
+  /** 输入价格（元 / 百万 token）；null 表示未配置 */
+  priceInput: number | null
+  /** 输出价格（元 / 百万 token）；null 表示未配置 */
+  priceOutput: number | null
+}
+
 export interface AiProvider {
   id: string
   ownerId: string
@@ -276,6 +287,8 @@ export interface AiProvider {
   visionModel?: string | null
   /** 模型上下文窗口大小（token 数），调试模式用它算上下文水位；空表示未配置 */
   contextWindow?: number | null
+  /** 供应商下的 AI 列表：每个模型的开关与价格 */
+  models?: AiProviderModel[]
   temperature: number
   maxTokens: number
   isDefault: boolean

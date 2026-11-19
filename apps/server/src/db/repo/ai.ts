@@ -3,6 +3,7 @@ import type {
   AiMemoryFact,
   AiPersona,
   AiProvider,
+  AiProviderModel,
   AiSession,
   MemoryFactSubject,
   ProactiveConfig,
@@ -25,6 +26,7 @@ export interface ProviderRow {
   model: string
   vision_model: string | null
   context_window: number | null
+  models_json: string | null
   temperature: number
   max_tokens: number
   extra_headers: string | null
@@ -37,6 +39,24 @@ export interface ProviderRow {
   deleted_at: number | null
 }
 
+/** models_json 解析失败或不是数组时按空列表处理，坏数据不影响服务商正常使用 */
+export function parseProviderModels(raw: string | null): AiProviderModel[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is AiProviderModel =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as AiProviderModel).model === 'string' &&
+        (item as AiProviderModel).model.length > 0,
+    )
+  } catch {
+    return []
+  }
+}
+
 export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null): AiProvider {
   return {
     id: row.id,
@@ -47,6 +67,7 @@ export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null
     model: row.model,
     visionModel: row.vision_model,
     contextWindow: row.context_window,
+    models: parseProviderModels(row.models_json),
     temperature: row.temperature,
     maxTokens: row.max_tokens,
     isDefault: row.is_default === 1,
@@ -78,6 +99,7 @@ export interface CreateProviderInput {
   model: string
   visionModel?: string | null
   contextWindow?: number | null
+  models?: AiProviderModel[] | null
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
@@ -89,8 +111,8 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
   db.prepare(
     `INSERT INTO ai_providers
        (id, owner_id, name, base_url, api_key_enc, key_location, model, vision_model, context_window,
-        temperature, max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
+        models_json, temperature, max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
   ).run(
     id,
     input.ownerId,
@@ -101,6 +123,7 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
     input.model,
     input.visionModel ?? null,
     input.contextWindow ?? null,
+    input.models?.length ? JSON.stringify(input.models) : null,
     input.temperature ?? 0.8,
     input.maxTokens ?? 2048,
     input.isDefault ? 1 : 0,
@@ -119,7 +142,7 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
   db.prepare(
     `UPDATE ai_providers
      SET name = ?, base_url = ?, api_key_enc = ?, key_location = ?, model = ?, vision_model = ?,
-         context_window = ?, temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
+         context_window = ?, models_json = ?, temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     patch.name ?? current.name,
@@ -129,6 +152,8 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
     patch.model ?? current.model,
     patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
     patch.contextWindow === undefined ? current.context_window : patch.contextWindow,
+    // undefined = 不改动；数组（含空数组）= 整体替换，空数组即清空列表
+    patch.models === undefined ? current.models_json : patch.models?.length ? JSON.stringify(patch.models) : null,
     patch.temperature ?? current.temperature,
     patch.maxTokens ?? current.max_tokens,
     patch.isDefault === undefined ? current.is_default : patch.isDefault ? 1 : 0,

@@ -9,7 +9,7 @@ import type { DB } from '../db'
 import * as aiRepo from '../db/repo/ai'
 import * as scheduleRepo from '../db/repo/schedule'
 import { err } from '../util/errors'
-import { callUpstream, resolveServerApiKey } from './ai-service'
+import { callUpstream, resolveServerApiKey, isModelEnabled } from './ai-service'
 import {
   formatLocalTime,
   localDayKey,
@@ -79,10 +79,16 @@ export async function generateScheduleOnServer(
   const provider = resolveProvider(db, persona)
   if (!provider) throw err.validation('请先配置 AI 服务商')
 
+  // 关闭的模型不可被选用：日程生成同样走主模型，停用就拒绝
+  const model = persona.model_override ?? provider.model
+  if (!isModelEnabled(provider, model)) {
+    throw err.validation(`模型 ${model} 已在 AI 设置里停用，请改用其它模型`)
+  }
+
   const result = await callUpstream({
     baseUrl: provider.base_url,
     apiKey: resolveServerApiKey(provider),
-    model: persona.model_override ?? provider.model,
+    model,
     temperature: persona.temperature ?? provider.temperature,
     maxTokens: Math.min(provider.max_tokens, 800),
     messages: buildSchedulePrompt({

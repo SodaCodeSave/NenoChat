@@ -44,4 +44,25 @@ describe('AiSettings', () => {
     expect(source).toContain('aiApi.testProviderStored')
     expect(source).toContain('空 Bearer 打上游必然失败')
   })
+
+  it('供应商表单提供 AI 列表：开关、价格与增删', () => {
+    expect(source).toContain('AI 列表')
+    expect(source).toContain('function importFormModels')
+    expect(source).toContain('function addManualModel')
+    expect(source).toContain('function removeFormModel')
+    expect(source).toContain('function selectableModels')
+    // 关闭的 AI 不可被选用：表单里的模型选择器只给启用的模型
+    expect(source).toContain('function formSelectableModels')
+    // 保存时把 AI 列表一起提交
+    expect(source).toContain('models: form.models ?? []')
+    // 列表行有启用开关与输入/输出价格
+    expect(source).toContain('entry.enabled = $event')
+    expect(source).toContain('entry.priceInput = $event')
+    expect(source).toContain('entry.priceOutput = $event')
+  })
+
+  it('供应商列表行展示已启用 AI 数徽标', () => {
+    expect(source).toContain('function enabledCountOf')
+    expect(source).toContain('AI {{ enabledCountOf(provider)!.enabled }}/{{ enabledCountOf(provider)!.total }}')
+  })
 })

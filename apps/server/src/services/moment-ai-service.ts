@@ -14,7 +14,7 @@ import * as conversationsRepo from '../db/repo/conversations'
 import * as momentRepo from '../db/repo/moment-ai'
 import * as postsRepo from '../db/repo/posts'
 import { buildMemoryDigest } from './ai-shared'
-import { callUpstream, resolveServerApiKey } from './ai-service'
+import { callUpstream, resolveServerApiKey, isModelEnabled } from './ai-service'
 import { createComment, createPost } from './post-service'
 import {
   formatLocalTime,
@@ -123,6 +123,9 @@ async function commentOnPost(
 ): Promise<void> {
   const { userId, persona, provider, dayKey, now } = ctx
 
+  // 关闭的模型不可被选用：不动用量额度，直接跳过
+  if (provider && !isModelEnabled(provider, persona.model_override ?? provider.model)) return
+
   const reserved = momentRepo.recordAction(db, {
     personaId: persona.id,
     userId,
@@ -204,6 +207,9 @@ async function publishMoment(
   ctx: PersonaContext,
 ): Promise<void> {
   const { userId, persona, provider, dayKey, now } = ctx
+
+  // 关闭的模型不可被选用：不动用量额度，直接跳过
+  if (provider && !isModelEnabled(provider, persona.model_override ?? provider.model)) return
 
   const reserved = momentRepo.recordAction(db, {
     personaId: persona.id,

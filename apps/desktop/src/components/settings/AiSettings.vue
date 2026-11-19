@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AiProvider } from '@nenochat/shared'
+import type { AiProvider, AiProviderModel } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SvgIcon from '@/components/ui/SvgIcon.vue'
@@ -42,6 +42,9 @@ const editingProvider = computed(
 const pendingRemoveProvider = ref<AiProvider | null>(null)
 const removingProvider = ref(false)
 
+/** 手动往 AI 列表里添加模型的输入草稿 */
+const manualModelDraft = ref('')
+
 const providerForm = ref<ProviderInput>({
   name: '',
   baseUrl: 'https://api.openai.com/v1',
@@ -49,6 +52,7 @@ const providerForm = ref<ProviderInput>({
   apiKey: '',
   visionModel: '',
   contextWindow: null,
+  models: [],
 })
 
 /** 分段规则跟随全局设置；读不到时按默认值展示 */
@@ -207,6 +211,7 @@ async function saveProvider(): Promise<void> {
     model: form.model,
     visionModel: form.visionModel?.trim() || null,
     contextWindow: form.contextWindow && form.contextWindow >= 256 ? form.contextWindow : null,
+    models: form.models ?? [],
     ...(form.apiKey ? { apiKey: form.apiKey } : {}),
   }
 
@@ -239,6 +244,59 @@ function modelsOf(providerId?: string | null): string[] {
   return providerId ? ai.modelsByProvider[providerId] ?? [] : []
 }
 
+/** 可选模型：配置了 AI 列表时只显示启用的；没配置时回退到拉取到的完整列表 */
+function selectableModels(provider: AiProvider | null | undefined): string[] {
+  if (!provider) return []
+  const list = provider.models ?? []
+  if (list.length > 0) return list.filter((m) => m.enabled).map((m) => m.model)
+  return modelsOf(provider.id)
+}
+
+/** 表单里主模型 / 识图模型的可选项，跟随表单里的 AI 列表实时变化 */
+function formSelectableModels(): string[] {
+  const list = providerForm.value.models ?? []
+  if (list.length > 0) return list.filter((m) => m.enabled).map((m) => m.model)
+  return modelsOf(editingProvider.value?.id)
+}
+
+/** 表单 AI 列表里追加一个模型；重复添加直接忽略 */
+function addFormModel(model: string): void {
+  const name = model.trim()
+  if (!name) return
+  if ((providerForm.value.models ?? []).some((m) => m.model === name)) return
+  providerForm.value.models = [
+    ...(providerForm.value.models ?? []),
+    { model: name, enabled: true, priceInput: null, priceOutput: null },
+  ]
+}
+
+/** 手动添加输入框的回车 / 按钮入口 */
+function addManualModel(): void {
+  addFormModel(manualModelDraft.value)
+  manualModelDraft.value = ''
+}
+
+/** 把拉取到的模型列表合并进表单：已有条目保留开关与价格，只补新增的 */
+function importFormModels(): void {
+  const fetched = modelsOf(editingProvider.value?.id)
+  if (fetched.length === 0) return
+  const existing = new Map((providerForm.value.models ?? []).map((m) => [m.model, m]))
+  providerForm.value.models = fetched.map(
+    (model) => existing.get(model) ?? { model, enabled: true, priceInput: null, priceOutput: null },
+  )
+}
+
+function removeFormModel(index: number): void {
+  providerForm.value.models = (providerForm.value.models ?? []).filter((_, i) => i !== index)
+}
+
+/** 某服务商已启用几个 AI，列表行的徽标用 */
+function enabledCountOf(provider: AiProvider): { enabled: number; total: number } | null {
+  const list = provider.models ?? []
+  if (list.length === 0) return null
+  return { enabled: list.filter((m) => m.enabled).length, total: list.length }
+}
+
 /** 保存服务商后自动拉取模型列表；失败只提示，不影响保存结果 */
 async function fetchModelsFor(providerId: string): Promise<void> {
   fetchingModels.value = true
@@ -267,6 +325,7 @@ function startEditProvider(provider: AiProvider): void {
     apiKey: '',
     visionModel: provider.visionModel ?? '',
     contextWindow: provider.contextWindow ?? null,
+    models: (provider.models ?? []).map((m) => ({ ...m })),
   }
 }
 
@@ -294,7 +353,9 @@ function resetProviderForm(): void {
     apiKey: '',
       visionModel: '',
     contextWindow: null,
+    models: [],
   }
+  manualModelDraft.value = ''
 }
 
 /** 把预设的端点与推荐模型填进表单，名字留空时也一并带上 */
@@ -486,7 +547,7 @@ onBeforeUnmount(() => {
             <ModelPicker
               id="provider-model"
               v-model="providerForm.model"
-              :models="modelsOf(editingProvider?.id)"
+              :models="formSelectableModels()"
               placeholder="选择或输入模型名"
             />
           </Field>
@@ -526,7 +587,7 @@ onBeforeUnmount(() => {
             <ModelPicker
               id="provider-vision"
               :model-value="providerForm.visionModel ?? ''"
-              :models="modelsOf(editingProvider?.id)"
+              :models="formSelectableModels()"
               placeholder="选择或输入识图模型名"
               @update:model-value="providerForm.visionModel = $event"
             />
@@ -542,6 +603,85 @@ onBeforeUnmount(() => {
               suffix="token"
             />
           </Field>
+        </div>
+
+        <div>
+          <div class="mb-1.5 flex items-center justify-between">
+            <p class="text-[11.5px] font-medium text-muted">AI 列表</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              :disabled="modelsOf(editingProvider?.id).length === 0"
+              @click="importFormModels"
+            >
+              导入模型列表
+            </Button>
+          </div>
+          <p class="mb-2 text-[11px] text-muted">
+            关闭的 AI 不可被角色或会话选用；价格（元 / 百万 token）仅作记录，预留给后续功能。
+          </p>
+          <div v-if="(providerForm.models ?? []).length > 0" class="space-y-1.5">
+            <div
+              v-for="(entry, index) in providerForm.models"
+              :key="entry.model"
+              class="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5"
+            >
+              <span
+                class="min-w-[120px] flex-1 truncate text-[12px]"
+                :class="entry.enabled ? 'text-text' : 'text-muted line-through'"
+                :title="entry.model"
+              >
+                {{ entry.model }}
+              </span>
+              <NumberInput
+                class="w-28"
+                size="sm"
+                :integer="false"
+                :min="0"
+                :step="0.1"
+                allow-empty
+                :model-value="entry.priceInput"
+                placeholder="输入价"
+                title="输入价格（元 / 百万 token），预留给后续功能"
+                @update:model-value="entry.priceInput = $event"
+              />
+              <NumberInput
+                class="w-28"
+                size="sm"
+                :integer="false"
+                :min="0"
+                :step="0.1"
+                allow-empty
+                :model-value="entry.priceOutput"
+                placeholder="输出价"
+                title="输出价格（元 / 百万 token），预留给后续功能"
+                @update:model-value="entry.priceOutput = $event"
+              />
+              <Switch
+                :model-value="entry.enabled"
+                :aria-label="`启用 ${entry.model}`"
+                @update:model-value="entry.enabled = $event"
+              />
+              <IconButton
+                icon="trash"
+                :size="14"
+                label="从 AI 列表移除"
+                @click="removeFormModel(index)"
+              />
+            </div>
+          </div>
+          <p v-else class="mb-2 rounded-lg border border-dashed border-line px-2.5 py-2 text-[11px] text-muted">
+            列表为空：点「导入模型列表」拉取这个端点支持的 AI，或手动添加。
+          </p>
+          <div class="mt-2 flex items-center gap-1.5">
+            <TextInput
+              v-model="manualModelDraft"
+              placeholder="手动添加模型名，如 gpt-4o"
+              spellcheck="false"
+              @keydown.enter.prevent="addManualModel"
+            />
+            <Button size="sm" variant="secondary" icon="plus" @click="addManualModel">添加</Button>
+          </div>
         </div>
 
         <div class="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
@@ -595,6 +735,13 @@ onBeforeUnmount(() => {
               >
                 余额 {{ balanceText(provider) }}
               </span>
+              <span
+                v-if="enabledCountOf(provider)"
+                class="rounded bg-accent/10 px-1.5 text-[10px] font-normal text-accent"
+                title="AI 列表里启用的模型数"
+              >
+                AI {{ enabledCountOf(provider)!.enabled }}/{{ enabledCountOf(provider)!.total }}
+              </span>
             </p>
             <p class="flex items-center gap-1 truncate text-[11px] text-muted">
               {{ provider.model }} · {{ provider.baseUrl }}
@@ -610,7 +757,7 @@ onBeforeUnmount(() => {
           <ModelPicker
             class="w-36"
             :model-value="provider.visionModel ?? ''"
-            :models="modelsOf(provider.id)"
+            :models="selectableModels(provider)"
             placeholder="识图模型（可选）"
             size="sm"
             @update:model-value="saveVisionModel(provider, $event)"

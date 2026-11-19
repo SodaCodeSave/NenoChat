@@ -15,6 +15,7 @@ import {
   type AiGroupDecision,
   type AiPersona,
   type AiProvider,
+  type AiProviderModel,
   type AiUsageEntry,
   type AiUsageKind,
   type ChatMessage,
@@ -95,6 +96,13 @@ export interface ProviderPayload {
   isDefault?: boolean
   visionModel?: string | null
   contextWindow?: number | null
+  models?: AiProviderModel[] | null
+}
+
+/** 模型不在供应商 AI 列表里视为可用（兼容自由输入）；在列表里且停用则不可被任何 AI 功能选用 */
+export function isModelEnabled(provider: aiRepo.ProviderRow, model: string): boolean {
+  const entry = aiRepo.parseProviderModels(provider.models_json).find((m) => m.model === model)
+  return !entry || entry.enabled
 }
 
 export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
@@ -109,6 +117,7 @@ export function createProvider(db: DB, ownerId: string, input: ProviderPayload):
       model: input.model,
       visionModel: input.visionModel,
       contextWindow: input.contextWindow,
+      models: input.models,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
       isDefault: input.isDefault,
@@ -135,6 +144,7 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
       model: input.model,
       visionModel: input.visionModel,
       contextWindow: input.contextWindow,
+      models: input.models,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
       isDefault: input.isDefault,
@@ -903,6 +913,12 @@ async function runGenerationOnServer(
 
   const provider = aiRepo.findProvider(db, providerId)
   if (!provider) throw err.notFound('服务商不存在')
+
+  // 关闭的模型不可被选用：角色指定的模型或供应商主模型被停用时直接拒绝这轮回复
+  const requestedModel = persona.model_override ?? provider.model
+  if (!isModelEnabled(provider, requestedModel)) {
+    throw err.validation(`模型 ${requestedModel} 已在 AI 设置里停用，请改用其它模型`)
+  }
 
   if (!session) {
     withTx(db, () =>

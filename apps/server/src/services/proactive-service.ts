@@ -6,7 +6,7 @@ import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import { buildMemoryDigest } from './ai-shared'
-import { appendAiSegment, callUpstream, resolveServerApiKey } from './ai-service'
+import { appendAiSegment, callUpstream, resolveServerApiKey, isModelEnabled } from './ai-service'
 import { enabledConnectorOfType, fetchHeweather } from './connector-service'
 import * as scheduleService from './schedule-service'
 import {
@@ -260,6 +260,18 @@ async function fireOnServer(
       slot,
       status: 'skipped',
       reason: 'no_provider',
+    })
+    return
+  }
+
+  // 关闭的模型不可被选用：不消耗当天额度，跳过本轮主动消息
+  if (!isModelEnabled(provider, persona.model_override ?? provider.model)) {
+    finishSlot(db, {
+      conversationId: candidate.conversation_id,
+      dayKey,
+      slot,
+      status: 'skipped',
+      reason: 'model_disabled',
     })
     return
   }

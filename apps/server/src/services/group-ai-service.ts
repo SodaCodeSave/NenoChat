@@ -24,7 +24,7 @@ import * as stickersRepo from '../db/repo/stickers'
 import * as usersRepo from '../db/repo/users'
 import { err } from '../util/errors'
 import { now } from '../util/clock'
-import { aiStickerOptionsForPersona, aiEnabledStickerIds, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
+import { aiStickerOptionsForPersona, aiEnabledStickerIds, callUpstream, appendStickerMessage, resolveServerApiKey, isModelEnabled } from './ai-service'
 import { appendSystemMessage } from './message-service'
 import * as scheduleService from './schedule-service'
 import {
@@ -562,6 +562,15 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
 
   const debugDecisions = input.settings.debugMode
   const model = input.member.persona.model_override ?? provider.model
+
+  // 关闭的模型不可被选用：本轮直接跳过，不发起上游调用
+  if (!isModelEnabled(provider, model)) {
+    finishLog(db, input.logId, 'skipped', { reason: 'model_disabled' })
+    if (debugDecisions) {
+      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'model_disabled', false)
+    }
+    return 'skipped'
+  }
 
   // 顺手补齐当天日程
   await scheduleService.ensureScheduleQuietly(db, input.member.persona)
