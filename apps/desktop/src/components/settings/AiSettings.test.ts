@@ -39,4 +39,9 @@ describe('AiSettings', () => {
     expect(source).toContain('旧版本的本机密钥不会自动迁移，点编辑重新填写')
     expect(source).toContain('这个服务商还没有密钥（旧版本机密钥不会自动迁移），请重新填写')
   })
+
+  it('编辑态密钥留空时改用托管密钥测试连接', () => {
+    expect(source).toContain('aiApi.testProviderStored')
+    expect(source).toContain('空 Bearer 打上游必然失败')
+  })
 })

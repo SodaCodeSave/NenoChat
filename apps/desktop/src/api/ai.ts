@@ -66,6 +66,9 @@ export const aiApi = {
   deleteProvider: (id: string) => http.delete<{ ok: boolean }>(p(`/ai/providers/${id}`)),
   testProvider: (body: { baseUrl: string; apiKey: string; model: string }) =>
     http.post<{ ok: boolean; sample: string }>(p('/ai/providers/test'), body),
+  /** 编辑已有服务商时用托管密钥测试，表单密钥留空也能验证真实配置 */
+  testProviderStored: (id: string, body: { baseUrl?: string; model?: string }) =>
+    http.post<{ ok: boolean; sample: string }>(p(`/ai/providers/${id}/test`), body),
   /** 保存前用表单参数预览模型列表 */
   previewModels: (body: { baseUrl: string; apiKey: string }) =>
     http.post<{ models: string[] }>(p('/ai/providers/models'), body),

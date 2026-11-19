@@ -31,6 +31,12 @@ export const TestProviderSchema = z.object({
   model: z.string().trim().min(1).max(128),
 })
 
+/** 用托管密钥测试已保存服务商：地址与模型可从表单覆盖，密钥永远走服务端托管 */
+export const ProviderStoredTestSchema = z.object({
+  baseUrl: z.string().trim().min(8).max(512).optional(),
+  model: z.string().trim().min(1).max(128).optional(),
+})
+
 export const PersonaSchema = z.object({
   name: z.string().trim().min(1).max(64),
   systemPrompt: z.string().trim().min(1).max(8000),

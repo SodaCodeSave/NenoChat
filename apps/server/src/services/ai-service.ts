@@ -49,7 +49,7 @@ import { buildConnectorContext } from './connector-context'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
-import { err } from '../util/errors'
+import { AppError, err } from '../util/errors'
 import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
 import { appendSystemMessage } from './message-service'
 import {
@@ -74,7 +74,8 @@ function toPublicProvider(row: aiRepo.ProviderRow): AiProvider {
     try {
       masked = maskSecret(decryptSecret(row.api_key_enc))
     } catch {
-      masked = '****'
+      // 解密失败说明 SECRET_KEY 与加密时不一致，回显成"未配置"引导用户重填，而不是伪装成已配置
+      masked = null
     }
   }
   return aiRepo.mapProvider(row, masked)
@@ -1601,6 +1602,16 @@ function recordUpstreamUsage(
   })
 }
 
+/**
+ * fetch 的传输层失败（DNS 解析、连接拒绝、TLS 握手等）抛的是普通 TypeError，
+ * 不包装会被统一错误处理器当成 500 INTERNAL；这里统一转成 502 上游错误。
+ */
+function wrapUpstreamTransportError(e: unknown, timeoutMessage: string): unknown {
+  if (e instanceof AppError) return e
+  if (e instanceof Error && e.name === 'AbortError') return err.upstreamAi(timeoutMessage)
+  return err.upstreamAi('无法连接 AI 上游', e instanceof Error ? e.message : String(e))
+}
+
 /** 非流式调用一次 OpenAI 兼容端点。主动消息等场景也复用它。 */
 export async function callUpstream(input: {
   baseUrl: string
@@ -1649,8 +1660,7 @@ export async function callUpstream(input: {
     if (input.record) recordUpstreamUsage(input.record, usage, input.model)
     return { content, usage }
   } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
-    throw e
+    throw wrapUpstreamTransportError(e, '上游请求超时')
   } finally {
     clearTimeout(timer)
   }
@@ -1766,8 +1776,7 @@ export async function callUpstreamStream(input: {
     if (input.record) recordUpstreamUsage(input.record, usage, input.model)
     return { content: full, usage }
   } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('上游请求超时')
-    throw e
+    throw wrapUpstreamTransportError(e, '上游请求超时')
   } finally {
     if (timer !== null) clearTimeout(timer)
   }
@@ -1808,8 +1817,7 @@ export async function listProviderModels(input: {
       .map((id) => id.trim())
     return [...new Set(ids)].sort((a, b) => a.localeCompare(b)).slice(0, 1000)
   } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('连接超时')
-    throw e
+    throw wrapUpstreamTransportError(e, '连接超时')
   } finally {
     clearTimeout(timer)
   }
@@ -1855,11 +1863,35 @@ export async function testProvider(input: {
     const sample = payload.choices?.[0]?.message?.content ?? ''
     return { ok: true, sample }
   } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('连接超时')
-    throw e
+    throw wrapUpstreamTransportError(e, '连接超时')
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** 用服务端托管的密钥测试已保存的服务商；表单里没填密钥时也能验证真实配置 */
+export async function testStoredProvider(
+  db: DB,
+  ownerId: string,
+  id: string,
+  override?: { baseUrl?: string; model?: string },
+): Promise<{ ok: boolean; sample: string }> {
+  const row = aiRepo.findProvider(db, id)
+  if (!row || row.owner_id !== ownerId) throw err.notFound('服务商不存在')
+
+  let apiKey: string
+  try {
+    apiKey = resolveServerApiKey(row)
+  } catch {
+    throw err.validation('托管密钥解密失败（服务端加密密钥可能变动过），请重新保存该密钥')
+  }
+  if (!apiKey) throw err.validation('该服务商没有配置 API Key，请先在表单里填写并保存')
+
+  return testProvider({
+    baseUrl: override?.baseUrl?.trim() || row.base_url,
+    apiKey,
+    model: override?.model?.trim() || row.model,
+  })
 }
 
 /* ----------------------------- 余额探测 ----------------------------- */

@@ -174,11 +174,19 @@ async function testConnection(): Promise<void> {
   notice.value = null
   error.value = null
   try {
-    const result = await aiApi.testProvider({
-      baseUrl: providerForm.value.baseUrl,
-      apiKey: providerForm.value.apiKey ?? '',
-      model: providerForm.value.model,
-    })
+    // 编辑态且密钥留空时改用服务端托管的密钥测试，空 Bearer 打上游必然失败
+    const editingId = editingProviderId.value
+    const result =
+      editingId && !providerForm.value.apiKey
+        ? await aiApi.testProviderStored(editingId, {
+            baseUrl: providerForm.value.baseUrl,
+            model: providerForm.value.model,
+          })
+        : await aiApi.testProvider({
+            baseUrl: providerForm.value.baseUrl,
+            apiKey: providerForm.value.apiKey ?? '',
+            model: providerForm.value.model,
+          })
     notice.value = result.ok ? `连接成功：${result.sample.slice(0, 40)}` : '连接失败'
   } catch (e) {
     error.value = e instanceof Error ? e.message : '连接失败'
@@ -577,7 +585,7 @@ onBeforeUnmount(() => {
               <span
                 v-if="!provider.apiKeyMasked"
                 class="rounded bg-danger/10 px-1.5 text-[10px] font-normal text-danger"
-                title="旧版本的本机密钥不会自动迁移，点编辑重新填写"
+                title="旧版本的本机密钥不会自动迁移，点编辑重新填写；若刚保存过，可能是服务端加密密钥变动导致解密失败"
               >
                 未配置密钥
               </span>

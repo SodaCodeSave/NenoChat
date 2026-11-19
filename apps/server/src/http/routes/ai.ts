@@ -16,6 +16,7 @@ import {
   ProviderModelsSchema,
   ProviderPatchSchema,
   ProviderSchema,
+  ProviderStoredTestSchema,
   StartGenerationSchema,
   TestProviderSchema,
 
@@ -95,6 +96,17 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       await requireUserId(request)
       const input = parse(TestProviderSchema, request.body)
       return aiService.testProvider(input)
+    },
+  )
+
+  /** 测试已保存服务商：密钥用服务端托管的那份，表单密钥不回显时也能验证真实配置 */
+  app.post<{ Params: { id: string } }>(
+    '/ai/providers/:id/test',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const override = parse(ProviderStoredTestSchema, request.body ?? {})
+      return aiService.testStoredProvider(db, userId, request.params.id, override)
     },
   )
 
