@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 import LoginForm from '@/components/auth/LoginForm.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 import { useServersStore, normalizeServerUrl } from '@/stores/servers'
 import { resetWorkspace } from '@/app/bootstrap'
 import {
@@ -23,6 +24,7 @@ type ProbeState = 'checking' | 'online' | 'offline' | 'blocked'
 
 const auth = useAuthStore()
 const servers = useServersStore()
+const ui = useUiStore()
 
 const url = ref('http://localhost:8787')
 const label = ref('')
@@ -33,6 +35,55 @@ const error = ref<string | null>(null)
 const status = ref<Record<string, ProbeState>>({})
 const versions = ref<Record<string, string | null>>({})
 const localNetwork = ref<LocalNetworkState>('unsupported')
+
+/** 手机端卡片当前朝向：servers=选服务器，login=登录表单 */
+const face = ref<'servers' | 'login'>(
+  ui.isMobile && servers.current !== null ? 'login' : 'servers',
+)
+const flipping = ref(false)
+/** 翻转相位：out=转走，in=换面后待转回 */
+const tilt = ref<'out' | 'in' | null>(null)
+
+const flipClass = computed(() => {
+  if (tilt.value === 'out') return 'setup-flip-out'
+  if (tilt.value === 'in') return 'setup-flip-in'
+  return ''
+})
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 两面之间平滑翻转：缩小转走 → 换面 → 放大转回 */
+async function flipTo(next: 'servers' | 'login'): Promise<void> {
+  if (next === face.value || flipping.value) return
+  if (!ui.isMobile || ui.reduceMotion) {
+    face.value = next
+    return
+  }
+  flipping.value = true
+  tilt.value = 'out'
+  await wait(170)
+  face.value = next
+  tilt.value = 'in'
+  await nextTick()
+  // 强制回流，让换面后的起始姿态先落定再过渡回去
+  void document.body.offsetHeight
+  tilt.value = null
+  await wait(200)
+  flipping.value = false
+}
+
+// 窗口尺寸跨过移动端断点时，把朝向对齐到当前状态
+watch(
+  () => ui.isMobile,
+  (mobile) => {
+    tilt.value = null
+    flipping.value = false
+    if (mobile) face.value = servers.current !== null ? 'login' : 'servers'
+    else face.value = 'servers'
+  },
+)
 
 const normalized = computed(() => {
   try {
@@ -152,12 +203,18 @@ onBeforeUnmount(() => {
 })
 
 async function selectServer(id: string): Promise<void> {
-  if (id === servers.currentId || switchingId.value) return
+  if (switchingId.value) return
+  // 已选中的服务器再点一次，手机端直接翻到登录面
+  if (id === servers.currentId) {
+    void flipTo('login')
+    return
+  }
   switchingId.value = id
   try {
     await servers.setCurrent(id)
     resetWorkspace()
     await auth.clearSession()
+    void flipTo('login')
   } finally {
     switchingId.value = null
   }
@@ -176,6 +233,7 @@ async function connect(): Promise<void> {
     await auth.clearSession()
     url.value = ''
     label.value = ''
+    void flipTo('login')
   } catch (e) {
     if (e instanceof LocalNetworkPermissionError) localNetwork.value = e.state
     error.value = e instanceof Error ? e.message : '连接失败，请检查地址'
@@ -187,7 +245,11 @@ async function connect(): Promise<void> {
 
 <template>
   <div class="grid gap-5 lg:grid-cols-2 lg:items-stretch">
-    <section class="h-full rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow-soft)]">
+    <section
+      v-show="!ui.isMobile || face === 'servers'"
+      class="setup-flip h-full rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow-soft)]"
+      :class="flipClass"
+    >
       <div class="mb-5 flex items-start justify-between">
         <div class="flex items-center gap-2">
           <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-accent-text">
@@ -335,6 +397,31 @@ async function connect(): Promise<void> {
       </div>
     </section>
 
-    <LoginForm />
+    <LoginForm
+      v-show="!ui.isMobile || face === 'login'"
+      :show-server-switch="ui.isMobile"
+      class="setup-flip"
+      :class="flipClass"
+      @change-server="flipTo('servers')"
+    />
   </div>
 </template>
+
+<style scoped>
+/* 手机端选服务器 ↔ 登录的卡片翻转，姿态由 JS 相位类驱动 */
+.setup-flip {
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.setup-flip-out {
+  transform: perspective(1200px) rotateY(90deg) scale(0.86);
+  transition-duration: 170ms;
+  transition-timing-function: ease-in;
+}
+
+.setup-flip-in {
+  transform: perspective(1200px) rotateY(-90deg) scale(0.86);
+  transition: none;
+}
+</style>
