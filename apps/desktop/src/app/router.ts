@@ -1,6 +1,5 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useServersStore } from '@/stores/servers'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -74,6 +73,6 @@ router.beforeEach((to) => {
   if (auth.isAuthenticated) return isPublic ? { name: 'home' } : true
   if (isPublic) return true
 
-  const servers = useServersStore()
-  return servers.current ? { name: 'login' } : { name: 'setup' }
+  // 未登录统一进服务器页，左侧选服务器、右侧登录
+  return { name: 'setup' }
 })

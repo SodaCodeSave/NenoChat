@@ -5,7 +5,6 @@ import MainLayout from '@/layouts/MainLayout.vue'
 import BareLayout from '@/layouts/BareLayout.vue'
 import LoadingScreen from '@/components/layout/LoadingScreen.vue'
 import { bootstrap } from '@/app/bootstrap'
-import { useServersStore } from '@/stores/servers'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,8 +22,7 @@ onMounted(async () => {
     return
   }
 
-  const servers = useServersStore()
-  await router.replace(servers.current ? '/login' : '/setup')
+  await router.replace('/setup')
 })
 </script>
 

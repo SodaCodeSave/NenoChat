@@ -20,7 +20,7 @@ import TitleBar from '@/components/layout/TitleBar.vue'
         style="background: radial-gradient(circle, var(--mention) 0%, transparent 70%)"
       />
 
-      <div class="relative z-10 w-full max-w-md">
+      <div class="relative z-10 w-full max-w-5xl">
         <slot />
       </div>
     </div>
