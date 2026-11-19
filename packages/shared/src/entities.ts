@@ -8,6 +8,7 @@ import type {
   NotificationLevel,
   PostVisibility,
   ReceiptState,
+  RelationshipStage,
   ReplyStyle,
   Role,
   SenderType,
@@ -310,6 +311,13 @@ export interface ProactiveConfig {
 /** 主动消息与动态互动的配置来源：跟随全局，或每个角色单独一份 */
 export type ProactiveMode = 'global' | 'custom'
 
+/** 角色与用户的关系：阶段 + 一段描述，AI 总结记忆时更新，用户也可手动改 */
+export interface PersonaRelationship {
+  stage: RelationshipStage
+  /** 描述现在的关系与相处状态，一两句话 */
+  description: string
+}
+
 export interface AiPersona {
   id: string
   ownerId: string
@@ -335,6 +343,8 @@ export interface AiPersona {
   /** 角色自己的主动消息配置，仅在 proactiveMode='custom' 时生效 */
   proactive: ProactiveConfig
   proactiveMode: ProactiveMode
+  /** 与用户的关系；未设置（描述为空）时为 null */
+  relationship?: PersonaRelationship | null
   lastProactiveAt?: number | null
   createdAt: number
   updatedAt: number
@@ -398,6 +408,8 @@ export interface AiGlobalSettings {
   segmentPattern: string
   /** AI 回复逐字流式输出；关掉时只要开了分段，仍然按流式增量出段落 */
   streamEnabled: boolean
+  /** 关系系统总闸：开着时 AI 总结记忆会更新关系，关系也会注入提示词 */
+  relationshipEnabled: boolean
   /** 调试模式：显示 token 消耗、缓存命中率、群聊成员决策过程等信息 */
   debugMode: boolean
   updatedAt: number

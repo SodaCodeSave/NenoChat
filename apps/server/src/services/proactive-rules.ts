@@ -1,4 +1,4 @@
-import { PROACTIVE_DEFAULTS, type ProactiveConfig } from '@nenochat/shared'
+import { PROACTIVE_DEFAULTS, formatLocalTime as formatLocalTimeShared, type ProactiveConfig } from '@nenochat/shared'
 
 /**
  * 主动消息的「要不要发」判定。
@@ -32,9 +32,9 @@ export function minutesOfDay(ts: number, tzOffsetMinutes: number): number {
   return shifted.getUTCHours() * 60 + shifted.getUTCMinutes()
 }
 
+/** 委托 shared 的实现，保证提示词里的时间字节格式与服务端/桌面端完全一致 */
 export function formatLocalTime(ts: number, tzOffsetMinutes: number): string {
-  const shifted = new Date(ts + tzOffsetMinutes * MINUTE_MS)
-  return `${localDayKey(ts, tzOffsetMinutes)} ${pad2(shifted.getUTCHours())}:${pad2(shifted.getUTCMinutes())}`
+  return formatLocalTimeShared(ts, tzOffsetMinutes)
 }
 
 function parseHm(value: string): number | null {

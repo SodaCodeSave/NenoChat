@@ -99,3 +99,28 @@ export function dayKeyOf(date: Date = new Date()): string {
 export function minutesOfLocalDay(date: Date = new Date()): number {
   return date.getHours() * 60 + date.getMinutes()
 }
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * 按固定时区偏移取 YYYY-MM-DD（东八区 = 480）。
+ * 用 UTC 视角平移而不是 toLocaleString，跨零点不会算错；
+ * tzOffsetMinutes 缺省时取当前设备时区。
+ */
+export function formatDayKey(ts: number, tzOffsetMinutes?: number): string {
+  const offset = tzOffsetMinutes ?? -new Date().getTimezoneOffset()
+  const shifted = new Date(ts + offset * 60_000)
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`
+}
+
+/**
+ * 按固定时区偏移取分钟级本地时间 YYYY-MM-DD HH:MM；tzOffsetMinutes 缺省时取当前设备时区。
+ * 服务端（AI_TZ_OFFSET_MIN）与桌面端都必须用它，提示词里的时间字节格式才两边一致。
+ */
+export function formatLocalTime(ts: number, tzOffsetMinutes?: number): string {
+  const offset = tzOffsetMinutes ?? -new Date().getTimezoneOffset()
+  const shifted = new Date(ts + offset * 60_000)
+  return `${formatDayKey(ts, offset)} ${pad2(shifted.getUTCHours())}:${pad2(shifted.getUTCMinutes())}`
+}

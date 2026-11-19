@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AI_SKIP_TOKEN } from '../constants'
-import type { AiMemoryFact, AiMemorySummary, AiPersona, AiSchedule } from '../entities'
+import type { AiMemoryFact, AiMemorySummary, AiPersona, AiSchedule, Message } from '../entities'
 import { ReplyStyle } from '../enums'
 import {
   buildChatMessages,
@@ -237,7 +237,8 @@ describe('buildChatMessages', () => {
       now: 1_700_000_000_000,
     })
 
-    // 第二轮：第一轮的输入已落库进入历史，用户又发了一句，时间已经过去
+    // 第二轮：第一轮的输入已落库进入历史，用户又发了一句，时间已经过去；
+    // 这一轮触发了联网检索，连接器资料是每轮都变的易变内容
     const turn2 = buildChatMessages({
       persona: stablePersona,
       facts,
@@ -259,6 +260,8 @@ describe('buildChatMessages', () => {
       userInput: '想听歌',
       userName: '阿岚',
       now: 1_700_006_000_000,
+      connectorContext:
+        '【联网检索资料】\n1. 一篇关于听歌的网页（example.com）\n   URL：https://example.com/a\n   摘要：这是一段检索到的资料。',
     })
 
     // (a) 首条 system（规则+对方名字）两轮字节级一致
@@ -275,10 +278,91 @@ describe('buildChatMessages', () => {
     expect(turn2[turn2.length - 1]!.content).toMatch(/^当前时间：/)
     expect(turn2[turn2.length - 1]!.content).not.toBe(turn1[turn1.length - 1]!.content)
     // (d) 第二轮去掉时间戳后的完整序列，是第一轮去掉时间戳序列的超集：
-    // 公共前缀一路延伸进历史消息，新消息只追加在尾部
+    // 公共前缀一路延伸进历史消息与上一轮的本次输入，易变内容只追加在尾部
     const head1 = turn1.slice(0, -1)
     expect(turn2.slice(0, head1.length)).toEqual(head1)
     expect(turn2.length).toBeGreaterThan(turn1.length)
+    // (e) 第二轮的连接器资料在本次输入之后、时间戳之前：
+    // 稳定前缀（含全部历史）不因本轮检索结果而失效
+    expect(turn2[turn2.length - 3]!.role).toBe('user')
+    expect(turn2[turn2.length - 2]!.role).toBe('system')
+    expect(turn2[turn2.length - 2]!.content).toContain('联网检索资料')
+  })
+
+  it('同一天日程切换时，日程块字节不变，只有尾部此刻行变化（前缀缓存）', () => {
+    const schedule: AiSchedule = {
+      personaId: 'p1',
+      dayKey: '2026-11-17',
+      items: [
+        { start: '09:00', end: '12:00', activity: '写代码' },
+        { start: '13:00', end: '18:00', activity: '改 bug' },
+      ],
+      source: 'manual',
+      updatedAt: 0,
+    }
+    const base = {
+      persona: persona(),
+      facts: [] as AiMemoryFact[],
+      summary: null,
+      recent: [],
+      userInput: '在吗',
+      userName: '阿岚',
+      schedule,
+      now: 1_700_000_000_000,
+    }
+
+    const morning = buildChatMessages({ ...base, scheduleNowMinutes: 600 })
+    const afternoon = buildChatMessages({ ...base, scheduleNowMinutes: 900 })
+
+    // 日程块（稳定部分）跨日程切换字节级一致
+    const blockOf = (messages: ReturnType<typeof buildChatMessages>) =>
+      messages.find((m) => String(m.content).includes('【今日日程'))
+    expect(blockOf(afternoon)).toEqual(blockOf(morning))
+    // 日程条目里不再内嵌「此刻」标记
+    expect(blockOf(morning)!.content).not.toContain('（你此刻正在做）')
+    // 「此刻在做什么」只在最后一条 system 里，随日程切换变化
+    expect(morning[morning.length - 1]!.content).toContain('你此刻正在：写代码')
+    expect(afternoon[afternoon.length - 1]!.content).toContain('你此刻正在：改 bug')
+    // 除尾部外整条请求字节级一致：日程切换只废掉尾部缓存
+    expect(afternoon.slice(0, morning.length - 1)).toEqual(morning.slice(0, morning.length - 1))
+  })
+
+  it('历史淘汰按块对齐：无淘汰轮头部字节级一致，淘汰轮一次移一块', () => {
+    // 每条约 200 token：预算 3000 只装得下最新十几条
+    const longHistory = (count: number): Message[] =>
+      Array.from({ length: count }, (_, i) => ({
+        ...baseMessage,
+        id: `h${i}`,
+        content: `第${i}句${'聊'.repeat(300)}`,
+        createdAt: baseMessage.createdAt + i * 10_000,
+      }))
+    const base = {
+      persona: persona(),
+      facts: [] as AiMemoryFact[],
+      summary: null,
+      userName: '阿岚',
+      now: 1_700_000_000_000,
+    }
+    const inputOf = (count: number) => `第${count - 1}句${'聊'.repeat(300)}`
+
+    const turnA = buildChatMessages({ ...base, recent: longHistory(40), userInput: inputOf(40) })
+    const turnB = buildChatMessages({ ...base, recent: longHistory(41), userInput: inputOf(41) })
+    const turnC = buildChatMessages({ ...base, recent: longHistory(50), userInput: inputOf(50) })
+
+    const historyOf = (messages: ReturnType<typeof buildChatMessages>) =>
+      messages.filter((m) => m.role !== 'system')
+
+    // 40 条时预算装不下，触发淘汰；对齐后保留的条数是 AI_HISTORY_EVICT_ALIGN 的倍数
+    expect(historyOf(turnA).length % 10).toBe(0)
+    expect(historyOf(turnA).length).toBeGreaterThan(0)
+    const headA = turnA.slice(0, -1)
+    // 41 条时淘汰点没跨过下一块：头部字节级一致
+    expect(turnB.slice(0, headA.length)).toEqual(headA)
+    // 50 条时淘汰点跨过一块：最旧保留条一次性移到下一块边界
+    const firstB = historyOf(turnB)[0]!
+    const firstC = historyOf(turnC)[0]!
+    expect(firstB.content).toContain('第30句')
+    expect(firstC.content).toContain('第40句')
   })
 })
 
@@ -320,6 +404,20 @@ describe('buildProactivePrompt', () => {
     expect(messages[0]!.content).not.toContain('今日日程')
     expect(messages[1]!.content).toContain('你此刻正在：写代码')
     expect(messages[1]!.content).toContain('现在时间：')
+  })
+
+  it('天气属于易变内容，只出现在 user 行，system 保持稳定', () => {
+    const messages = buildProactivePrompt({
+      persona: persona(),
+      memoryDigest: '',
+      idleHours: 3,
+      localTime: '2026-11-17 10:00',
+      weather: '【天气信息】北京 晴 12°C',
+    })
+
+    expect(messages[0]!.content).not.toContain('天气信息')
+    expect(messages[1]!.content).toContain('天气信息')
+    expect(messages[1]!.content).toContain('北京 晴')
   })
 })
 

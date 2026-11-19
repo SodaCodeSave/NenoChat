@@ -44,6 +44,14 @@ export const PersonaSchema = z.object({
   greeting: z.string().max(2000).nullable().optional(),
   /** 主动消息跟随全局还是单独配置；不传时按是否显式启用推断 */
   proactiveMode: z.enum(['global', 'custom']).optional(),
+  /** 与用户的关系；null 表示清掉 */
+  relationship: z
+    .object({
+      stage: z.enum(['stranger', 'acquaintance', 'friend', 'close_friend', 'partner']),
+      description: z.string().trim().max(500),
+    })
+    .nullable()
+    .optional(),
   proactive: z
     .object({
       enabled: z.boolean(),
@@ -106,6 +114,7 @@ export const AiGlobalSettingsSchema = z.object({
   segmentEnabled: z.boolean(),
   segmentPattern: z.string().trim().min(1).max(200),
   streamEnabled: z.boolean(),
+  relationshipEnabled: z.boolean(),
   debugMode: z.boolean(),
 })
 

@@ -1,4 +1,4 @@
-import { AI_CONTEXT_BUDGET, AI_SKIP_TOKEN } from '../constants'
+import { AI_CONTEXT_BUDGET, AI_HISTORY_EVICT_ALIGN, AI_SKIP_TOKEN } from '../constants'
 import type {
   AiMemoryFact,
   AiMemorySummary,
@@ -7,7 +7,7 @@ import type {
   AttachmentRef,
   Message,
 } from '../entities'
-import { currentScheduleItem } from './schedule'
+import { currentScheduleItem, formatDayKey, formatLocalTime } from './schedule'
 import { estimateTokens } from './tokens'
 import { renderStickerBlock, type StickerOption } from './sticker-markers'
 
@@ -45,7 +45,7 @@ export interface BuildContextInput {
   stickers?: StickerOption[]
   /** 角色当天的日程：让回复自然贴合「此刻在做什么」 */
   schedule?: AiSchedule | null
-  /** 角色本地时区下当天已过去的分钟数，用来标记进行中的日程 */
+  /** 角色本地时区下当天已过去的分钟数，用于末尾的「此刻活动」一行 */
   scheduleNowMinutes?: number
   /** 连接器检索到的外部资料（网页搜索、B 站视频内容），只给模型看 */
   connectorContext?: string | null
@@ -73,12 +73,6 @@ function truncateByToken(text: string, budget: number): string {
     else high = mid - 1
   }
   return `${text.slice(0, low)}…`
-}
-
-function formatTime(ts: number): string {
-  const date = new Date(ts)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 /**
@@ -115,11 +109,13 @@ function historyImageNote(message: Message): string | null {
  * 分开渲染而不是简单拼接，是为了让模型明确哪一段是「行为约束」、哪一段是「设定资料」。
  * 注意：{{time}} 占位符会替换成分钟级时间，含 {{time}} 的人设会让这一块
  * 每轮都不同，等于主动放弃这一段的前缀缓存——是否使用由人设作者自己权衡。
+ * 想要日期感知时改用 {{date}}（YYYY-MM-DD，天级），一天只变一次，对缓存友好得多。
  */
 function renderPersonaBlock(persona: AiPersona, userName: string, now: number): string {
   const prompt = persona.systemPrompt
     .replace(/\{\{user\}\}/g, userName)
-    .replace(/\{\{time\}\}/g, formatTime(now))
+    .replace(/\{\{time\}\}/g, formatLocalTime(now))
+    .replace(/\{\{date\}\}/g, formatDayKey(now))
 
   const blocks: string[] = [prompt]
 
@@ -135,34 +131,40 @@ function renderPersonaBlock(persona: AiPersona, userName: string, now: number): 
 }
 
 /**
- * 当天日程块。
+ * 当天日程块（稳定部分）。
  * 只给模型看，UI 那边默认只展示已发生的部分；
  * 提示词里保留全天，是为了让角色知道接下来要做什么、不把未来安排说成正在做。
+ * 刻意不含「此刻在做什么」：日程条目切换时这块字节不变，
+ * 上游前缀缓存才能整天命中；此刻状态由 renderNowActivity 单独给出，放请求尾部。
  */
-function renderScheduleBlock(schedule: AiSchedule, nowMinutes?: number): string {
-  const current = nowMinutes === undefined ? null : currentScheduleItem(schedule.items, nowMinutes)
-  const lines = schedule.items.map((item) => {
-    const doing = current && item === current ? '（你此刻正在做）' : ''
-    return `- ${item.start}-${item.end} ${item.activity}${doing}`
-  })
-
+function renderScheduleBlock(schedule: AiSchedule): string {
   return [
     `【今日日程（${schedule.dayKey}）】`,
-    ...lines,
-    current ? `你此刻正在：${current.activity}。` : '此刻你的日程里没有安排，可能在休息或临时做别的事。',
+    ...schedule.items.map((item) => `- ${item.start}-${item.end} ${item.activity}`),
     '回复时自然带入你当前正在做的事和状态，但不要把日程逐条念出来；' +
       '还没到的安排不要提前说成正在做，也不要说自己在做日程之外的事。',
   ].join('\n')
 }
 
 /**
+ * 「此刻在做什么」一行。日程条目切换时只有这一行变，
+ * 调用方必须把它放在易变区（聊天的请求末尾、群聊/主动消息的 user 行）。
+ */
+function renderNowActivity(schedule: AiSchedule, nowMinutes?: number): string {
+  const current = nowMinutes === undefined ? null : currentScheduleItem(schedule.items, nowMinutes)
+  return current
+    ? `你此刻正在：${current.activity}。`
+    : '此刻你的日程里没有安排，可能在休息或临时做别的事。'
+}
+
+/**
  * 组装一次对话所需的完整消息数组。
- * 顺序固定为 规则+对方名字 → 人设 → 事实 → 摘要 → 表情包 → 日程 → 连接器资料 →
- * 最近原文 → 本次输入 → 当前时间，按「稳定 → 易变」排列，每一段都有独立 token
- * 预算，避免长会话把上下文挤爆。
+ * 顺序固定为 规则+对方名字 → 人设 → 事实 → 摘要 → 表情包 → 日程 → 最近原文 →
+ * 本次输入 → 连接器资料 → 当前时间(+此刻活动)，按「稳定 → 易变」排列，每一段都有
+ * 独立 token 预算，避免长会话把上下文挤爆。
  * 之所以这么排：上游的自动前缀缓存按「最长字节相同前缀」命中，
- * 分钟级时间戳、心情这类每轮都变的内容一旦出现在前部，缓存立刻失效（命中率归零），
- * 所以易变内容一律后置，时间戳固定为最后一条消息。
+ * 分钟级时间戳、检索资料这类每轮都变的内容一旦出现在前部，缓存立刻失效（命中率归零），
+ * 所以易变内容一律后置：连接器资料紧跟本次输入，时间戳固定为最后一条消息。
  * 平台规则单独成一条且不参与截断：人设再长也不能把「别写 Markdown」挤掉。
  */
 export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
@@ -209,34 +211,16 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     messages.push({
       role: 'system',
       content: truncateByToken(
-        renderScheduleBlock(input.schedule, input.scheduleNowMinutes),
+        renderScheduleBlock(input.schedule),
         AI_CONTEXT_BUDGET.schedule,
       ),
     })
   }
 
-  if (input.connectorContext?.trim()) {
-    messages.push({
-      role: 'system',
-      content: truncateByToken(
-        input.connectorContext.trim(),
-        AI_CONTEXT_BUDGET.connector,
-      ),
-    })
-  }
-
-  if (input.connectorFetchContext?.trim()) {
-    messages.push({
-      role: 'system',
-      content: truncateByToken(
-        input.connectorFetchContext.trim(),
-        AI_CONTEXT_BUDGET.connectorFetch,
-      ),
-    })
-  }
-
-  // 从最新往回填，直到预算用完，再反转回时间顺序
-  const recentLines: Message[] = []
+  // 从最新往回填，直到预算用完，再按淘汰对齐截出起点。
+  // 淘汰点向上取整到 AI_HISTORY_EVICT_ALIGN 的倍数：两次淘汰之间历史头部
+  // 字节保持稳定，上游前缀缓存才不会每轮都从头失效；代价是多丢几条最旧消息。
+  let fitFrom = input.recent.length
   let used = 0
   for (let i = input.recent.length - 1; i >= 0; i--) {
     const message = input.recent[i]!
@@ -244,7 +228,20 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     const cost = estimateTokens(message.content) + 4
     if (used + cost > AI_CONTEXT_BUDGET.recent) break
     used += cost
-    recentLines.unshift(message)
+    fitFrom = i
+  }
+  const aligned =
+    fitFrom === 0
+      ? 0
+      : Math.min(
+          input.recent.length,
+          Math.ceil(fitFrom / AI_HISTORY_EVICT_ALIGN) * AI_HISTORY_EVICT_ALIGN,
+        )
+
+  const recentLines: Message[] = []
+  for (let i = aligned; i < input.recent.length; i++) {
+    const message = input.recent[i]!
+    if (!message.deletedAt) recentLines.push(message)
   }
 
   /**
@@ -312,9 +309,36 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
     }
   }
 
-  // 时间戳是每轮都变的内容，固定放在整个请求的最末尾：
+  // 连接器资料是本轮检索结果，几乎每轮都不同，只能放在易变区：
+  // 紧跟本次输入之后，它前面的稳定前缀（规则/人设/记忆/日程/历史）才能被上游
+  // 缓存命中，也让「问题」和「证据」相邻，模型更容易对上号。
+  if (input.connectorContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorContext.trim(),
+        AI_CONTEXT_BUDGET.connector,
+      ),
+    })
+  }
+
+  if (input.connectorFetchContext?.trim()) {
+    messages.push({
+      role: 'system',
+      content: truncateByToken(
+        input.connectorFetchContext.trim(),
+        AI_CONTEXT_BUDGET.connectorFetch,
+      ),
+    })
+  }
+
+  // 时间戳与「此刻活动」是每轮（或日程切换时）才变的内容，固定放在整个请求的最末尾：
   // 它之前的所有字节都保持稳定，上游前缀缓存才能命中。
-  messages.push({ role: 'system', content: `当前时间：${formatTime(now)}` })
+  const tailLines = [`当前时间：${formatLocalTime(now)}`]
+  if (input.schedule && input.schedule.items.length > 0) {
+    tailLines.push(renderNowActivity(input.schedule, input.scheduleNowMinutes))
+  }
+  messages.push({ role: 'system', content: tailLines.join('\n') })
   return messages
 }
 
@@ -332,6 +356,7 @@ export function buildSchedulePrompt(input: {
   const prompt = input.persona.systemPrompt
     .replace(/\{\{user\}\}/g, '对方')
     .replace(/\{\{time\}\}/g, input.localTime)
+    .replace(/\{\{date\}\}/g, input.dayKey)
 
   const profile = [
     `角色名：${input.persona.name}`,
@@ -392,7 +417,8 @@ export function buildCompactionPrompt(input: {
 /**
  * 主动消息的生成提示词：短、自然、基于记忆与兴趣找话题。
  * 和普通回复一样带上角色卡，否则「主动开口」的那个人会突然不像自己。
- * system 只放稳定内容；日程这类分钟级易变的信息放进 user 行（尾部），保住前缀缓存。
+ * system 只放稳定内容；日程此刻状态、天气这类分钟级易变的信息放进 user 行（尾部），
+ * 保住前缀缓存——天气若拼进 system，每次主动调用都会让整个 system 前缀缓存失效。
  */
 export function buildProactivePrompt(input: {
   persona: AiPersona
@@ -401,9 +427,18 @@ export function buildProactivePrompt(input: {
   localTime: string
   schedule?: AiSchedule | null
   scheduleNowMinutes?: number
+  /** 连接器取到的天气资料，属于每轮都变的内容，只进 user 尾行 */
+  weather?: string | null
 }): ChatMessage[] {
   const interests = (input.persona.interests ?? []).filter((item) => item.trim().length > 0)
   const card = input.persona.card?.trim()
+  const scheduleLines: string[] = []
+  if (input.schedule && input.schedule.items.length > 0) {
+    scheduleLines.push(
+      renderScheduleBlock(input.schedule),
+      renderNowActivity(input.schedule, input.scheduleNowMinutes),
+    )
+  }
 
   return [
     {
@@ -423,11 +458,10 @@ export function buildProactivePrompt(input: {
     {
       role: 'user',
       content: [
-        input.schedule && input.schedule.items.length > 0
-          ? renderScheduleBlock(input.schedule, input.scheduleNowMinutes)
-          : '',
+        ...scheduleLines,
         `现在时间：${input.localTime}`,
         `对方已经 ${input.idleHours} 小时没说话了。`,
+        input.weather?.trim() ? input.weather.trim() : '',
         input.memoryDigest ? `你记得的事：\n${input.memoryDigest}` : '你还没有关于对方的记忆。',
         '请直接给出你要发的第一句话。',
       ]
@@ -520,7 +554,10 @@ export function buildGroupPrompt(input: GroupPromptInput): ChatMessage[] {
 
   const lines: string[] = []
   if (input.schedule && input.schedule.items.length > 0) {
-    lines.push(renderScheduleBlock(input.schedule, input.scheduleNowMinutes))
+    lines.push(
+      renderScheduleBlock(input.schedule),
+      renderNowActivity(input.schedule, input.scheduleNowMinutes),
+    )
   }
   lines.push(
     `你现在的状态：心情「${input.mood}」，体力 ${Math.round(input.energy)}/100。体力低时更懒得说话。`,

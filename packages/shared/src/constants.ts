@@ -45,7 +45,7 @@ export const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,24}$/
 export const AI_CONTEXT_BUDGET = {
   /** 人设提示词 + 角色卡 + 兴趣，长角色卡主要吃这一份预算 */
   system: 1600,
-  /** 当天日程：全天安排 + 当前活动提示 */
+  /** 当天日程：全天安排 + 使用说明，是跨轮稳定块；「此刻在做什么」单独放在请求尾部 */
   schedule: 500,
   facts: 400,
   summary: 500,
@@ -55,6 +55,13 @@ export const AI_CONTEXT_BUDGET = {
   /** 用户消息里链接的网页正文摘要，独立预算，不挤占搜索/B 站资料 */
   connectorFetch: 1200,
 } as const
+
+/**
+ * 历史窗口淘汰的对齐块数：淘汰点向上取整到它的倍数，
+ * 两次淘汰之间历史头部字节保持稳定，上游前缀缓存才不会每轮都从头失效。
+ * 代价是每次淘汰多丢最多 N-1 条最旧消息。
+ */
+export const AI_HISTORY_EVICT_ALIGN = 10
 
 /** 触发记忆压缩的阈值 */
 export const MEMORY_COMPACT = {

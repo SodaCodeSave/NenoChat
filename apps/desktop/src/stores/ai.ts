@@ -17,6 +17,7 @@ import {
   estimateTokens,
   extractUrls,
   findBilibiliInput,
+  formatLocalTime,
   isBilibiliUrl,
   isSkipReply,
   minutesOfLocalDay,
@@ -186,7 +187,7 @@ export const useAiStore = defineStore('ai', () => {
       messages: buildSchedulePrompt({
         persona,
         dayKey,
-        localTime: new Date().toLocaleString(),
+        localTime: formatLocalTime(Date.now()),
       }),
       temperature: 0.8,
       maxTokens: 800,
@@ -1192,7 +1193,7 @@ export const useAiStore = defineStore('ai', () => {
       persona,
       memoryDigest: hint ? `${digest}\n提示：${hint}` : digest,
       idleHours: 0,
-      localTime: new Date().toLocaleString(),
+      localTime: formatLocalTime(Date.now()),
       schedule,
       scheduleNowMinutes: minutesOfLocalDay(),
     })
@@ -1355,7 +1356,7 @@ export const useAiStore = defineStore('ai', () => {
               }
             : null,
         idleHours: Math.max(0, Math.floor((Date.now() - lastAt) / 3_600_000)),
-        localTime: new Date().toLocaleString(),
+        localTime: formatLocalTime(Date.now()),
         schedule,
         scheduleNowMinutes: minutesOfLocalDay(),
       })
@@ -1476,7 +1477,7 @@ export const useAiStore = defineStore('ai', () => {
               content: comment.content,
               isMine: comment.personaId === persona.id,
             })),
-            localTime: new Date().toLocaleString(),
+            localTime: formatLocalTime(Date.now()),
           }),
           temperature: 0.95,
           maxTokens: 120,
@@ -1509,7 +1510,7 @@ export const useAiStore = defineStore('ai', () => {
             author: post.author?.displayName ?? '某人',
             content: post.content.slice(0, 120),
           })),
-          localTime: new Date().toLocaleString(),
+          localTime: formatLocalTime(Date.now()),
         }),
         temperature: 1,
         maxTokens: 200,

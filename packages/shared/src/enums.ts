@@ -136,6 +136,25 @@ export const MemoryFactSubject = {
 } as const
 export type MemoryFactSubject = (typeof MemoryFactSubject)[keyof typeof MemoryFactSubject]
 
+/** AI 角色与用户的关系阶段 */
+export const RelationshipStage = {
+  Stranger: 'stranger',
+  Acquaintance: 'acquaintance',
+  Friend: 'friend',
+  CloseFriend: 'close_friend',
+  Partner: 'partner',
+} as const
+export type RelationshipStage = (typeof RelationshipStage)[keyof typeof RelationshipStage]
+
+/** 关系阶段的中文标签，设置界面与提示词共用 */
+export const RELATIONSHIP_STAGE_LABELS: Record<RelationshipStage, string> = {
+  stranger: '陌生',
+  acquaintance: '相识',
+  friend: '朋友',
+  close_friend: '密友',
+  partner: '恋人',
+}
+
 /** 同步变更实体名，与 sync_change_log.entity 一致 */
 export const ChangeEntity = {
   User: 'user',

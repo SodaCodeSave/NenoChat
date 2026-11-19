@@ -271,14 +271,6 @@ async function fireOnServer(
 
   const mapped = aiRepo.mapPersona(persona)
   const schedule = await scheduleService.ensureScheduleQuietly(db, persona)
-  const messages = buildProactivePrompt({
-    persona: mapped,
-    memoryDigest: buildMemoryDigest(db, candidate.conversation_id),
-    idleHours: decision.idleHours,
-    localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
-    schedule,
-    scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
-  })
   let weatherContext: string | null = null
   const weather = enabledConnectorOfType(db, candidate.owner_id, 'heweather')
   if (weather) {
@@ -287,9 +279,16 @@ async function fireOnServer(
       if (config.weatherOnUserMessage) weatherContext = await fetchHeweather(weather)
     } catch { /* weather is optional context */ }
   }
-  if (weatherContext && messages.length > 0) {
-    messages[0] = { ...messages[0]!, content: `${messages[0]!.content}\n\n${weatherContext}` }
-  }
+  const messages = buildProactivePrompt({
+    persona: mapped,
+    memoryDigest: buildMemoryDigest(db, candidate.conversation_id),
+    idleHours: decision.idleHours,
+    localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
+    schedule,
+    scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
+    // 天气是每轮都变的内容，走 user 尾行；拼进 system 会让每次主动调用的前缀缓存失效
+    weather: weatherContext,
+  })
 
   let reply: string
   try {
