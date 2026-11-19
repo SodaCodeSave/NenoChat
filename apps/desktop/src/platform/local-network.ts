@@ -11,6 +11,22 @@ interface NativeLocalNetworkBridge {
   status(): string
   request(): void
   openSettings(): void
+  diagnostics?(): string
+}
+
+/** 原生侧回传的环境信息，用于区分权限问题与安装包缺失桥接 */
+export interface NativeDiagnostics {
+  sdk: number
+  release: string
+  model: string
+  appVersion: string
+  permissionDeclared: boolean
+  permissionGranted: boolean
+  status: LocalNetworkState
+  asked: boolean
+  canAskAgain: boolean
+  webviewPackage: string
+  webviewVersion: string
 }
 
 declare global {
@@ -30,6 +46,42 @@ function nativeBridge(): NativeLocalNetworkBridge | null {
   // 桥只在 Android App 的 WebView 里注入，存在即代表能走原生权限
   const bridge = window.NenoLocalNetwork
   return bridge && typeof bridge.status === 'function' ? bridge : null
+}
+
+/** JS 桥是否存在：Android App 里应当为 true，缺了说明安装包没带上原生定制 */
+export function nativeBridgeAvailable(): boolean {
+  return nativeBridge() !== null
+}
+
+/** 读取原生环境信息，没有桥或解析失败时返回 null */
+export function nativeDiagnostics(): NativeDiagnostics | null {
+  const bridge = nativeBridge()
+  if (!bridge || typeof bridge.diagnostics !== 'function') return null
+  try {
+    const raw = JSON.parse(bridge.diagnostics()) as Partial<NativeDiagnostics>
+    return {
+      sdk: Number(raw.sdk ?? 0),
+      release: String(raw.release ?? ''),
+      model: String(raw.model ?? ''),
+      appVersion: String(raw.appVersion ?? ''),
+      permissionDeclared: Boolean(raw.permissionDeclared),
+      permissionGranted: Boolean(raw.permissionGranted),
+      status: normalizeState(String(raw.status ?? '')),
+      asked: Boolean(raw.asked),
+      canAskAgain: Boolean(raw.canAskAgain),
+      webviewPackage: String(raw.webviewPackage ?? ''),
+      webviewVersion: String(raw.webviewVersion ?? ''),
+    }
+  } catch (e) {
+    console.error('[local-network] 解析原生诊断信息失败', e)
+    return null
+  }
+}
+
+/** 从 UA 里取 Chromium 主版本号，用于判断 WebView 是否启用了本地网络限制 */
+export function webviewChromiumVersion(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  return /Chrome\/(\d+)/.exec(ua)?.[1] ?? ''
 }
 
 function normalizeState(raw: string): LocalNetworkState {

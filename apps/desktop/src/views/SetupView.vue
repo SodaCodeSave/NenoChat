@@ -8,11 +8,16 @@ import { resetWorkspace } from '@/app/bootstrap'
 import {
   LocalNetworkPermissionError,
   localNetworkState,
+  nativeBridgeAvailable,
+  nativeDiagnostics,
   openLocalNetworkSettings,
   requestLocalNetworkAccess,
   requiresLocalNetworkAccess,
+  webviewChromiumVersion,
   type LocalNetworkState,
+  type NativeDiagnostics,
 } from '@/platform/local-network'
+import { isTauri, platformName } from '@/platform/device'
 
 type ProbeState = 'checking' | 'online' | 'offline' | 'blocked'
 
@@ -50,7 +55,30 @@ const permissionBlocked = computed(
     (localNetwork.value === 'prompt' || localNetwork.value === 'denied'),
 )
 
+/** 安装包缺少原生桥时无法申请权限，只能提示更新客户端 */
+const bridgeMissing = computed(
+  () =>
+    touchesLocalNetwork.value &&
+    isTauri() &&
+    platformName() === 'android' &&
+    !nativeBridgeAvailable(),
+)
+
+const diagnostics = ref<NativeDiagnostics | null>(null)
+
+/** 连不上时把环境摊开，省得用户只能报「连不上」 */
+const diagnosticLine = computed(() => {
+  const parts: string[] = []
+  if (diagnostics.value) parts.push(`API ${diagnostics.value.sdk}`)
+  const chromium = webviewChromiumVersion()
+  if (diagnostics.value?.webviewVersion) parts.push(`WebView ${diagnostics.value.webviewVersion}`)
+  else if (chromium) parts.push(`Chromium ${chromium}`)
+  parts.push(`权限 ${localNetwork.value}`)
+  return parts.join(' · ')
+})
+
 async function refreshLocalNetwork(): Promise<void> {
+  diagnostics.value = nativeDiagnostics()
   localNetwork.value = await localNetworkState()
 }
 
@@ -183,7 +211,23 @@ async function connect(): Promise<void> {
       </div>
 
       <div
-        v-if="permissionBlocked"
+        v-if="bridgeMissing"
+        class="mb-4 rounded-xl border border-danger/40 bg-danger/10 p-3"
+      >
+        <div class="flex items-start gap-2">
+          <Icon name="wifiOff" :size="15" class="mt-0.5 text-danger" />
+          <div class="min-w-0">
+            <p class="text-[12.5px] font-medium text-text-strong">当前安装包缺少本地网络支持</p>
+            <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
+              这个安装包没有带原生权限声明，系统会静默拦截对局域网服务器的访问。请更新或重新安装客户端。
+            </p>
+            <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-else-if="permissionBlocked"
         class="mb-4 rounded-xl border border-accent/35 bg-accent-soft/50 p-3"
       >
         <div class="flex items-start gap-2">
@@ -193,6 +237,7 @@ async function connect(): Promise<void> {
             <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
               Android 17 起系统会拦截应用对局域网服务器的访问，允许本地网络权限后才能连接。
             </p>
+            <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
             <div class="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"

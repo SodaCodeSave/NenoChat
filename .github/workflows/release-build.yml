@@ -96,15 +96,21 @@ jobs:
       - name: Sync package version from git
         run: pnpm version:sync
 
-      # 仓库只跟踪定制过的 app/build.gradle.kts（含 release 放行明文 http），
-      # 其余 Android 工程由 CLI 生成，最后用跟踪版本覆盖回去。
+      # Android 工程整体由 CLI 生成，仓库只跟踪几个手工定制过的文件：
+      # build.gradle.kts（release 放行明文 http）、AndroidManifest.xml（局域网权限）、
+      # MainActivity.kt（本地网络权限桥与边到边布局）。init 会覆盖它们，必须还原。
       - name: Initialize Android project
         shell: bash
         run: |
           rm -rf apps/desktop/src-tauri/gen/android
           pnpm --filter @nenochat/desktop tauri android init --ci
-          git show HEAD:apps/desktop/src-tauri/gen/android/app/build.gradle.kts \
-            > apps/desktop/src-tauri/gen/android/app/build.gradle.kts
+          for file in \
+            apps/desktop/src-tauri/gen/android/app/build.gradle.kts \
+            apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml \
+            apps/desktop/src-tauri/gen/android/app/src/main/java/com/nenochat/app/MainActivity.kt
+          do
+            git show "HEAD:$file" > "$file"
+          done
 
       - name: Build Android arm64 APK
         run: pnpm --filter @nenochat/desktop tauri android build --target aarch64 --apk --ci

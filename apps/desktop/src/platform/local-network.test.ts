@@ -3,15 +3,19 @@ import {
   LocalNetworkPermissionError,
   ensureLocalNetworkAccess,
   localNetworkState,
+  nativeBridgeAvailable,
+  nativeDiagnostics,
   openLocalNetworkSettings,
   requestLocalNetworkAccess,
   requiresLocalNetworkAccess,
+  webviewChromiumVersion,
 } from './local-network'
 
 type Bridge = {
   status: () => string
   request: () => void
   openSettings: () => void
+  diagnostics?: () => string
 }
 
 /** 模拟 Android WebView 注入的 JS 桥 */
@@ -165,5 +169,69 @@ describe('openLocalNetworkSettings', () => {
 
   it('没有原生桥时静默忽略', () => {
     expect(() => openLocalNetworkSettings()).not.toThrow()
+  })
+})
+
+describe('nativeBridgeAvailable', () => {
+  it('有桥为 true，无桥为 false', () => {
+    expect(nativeBridgeAvailable()).toBe(false)
+    installBridge({})
+    expect(nativeBridgeAvailable()).toBe(true)
+  })
+})
+
+describe('nativeDiagnostics', () => {
+  it('没有桥或原生侧未提供诊断时返回 null', () => {
+    expect(nativeDiagnostics()).toBeNull()
+    installBridge({})
+    expect(nativeDiagnostics()).toBeNull()
+  })
+
+  it('解析原生侧 JSON，缺字段补默认值', () => {
+    installBridge({
+      diagnostics: () =>
+        JSON.stringify({
+          sdk: 37,
+          release: '17',
+          model: 'Xiaomi 15',
+          permissionDeclared: true,
+          permissionGranted: false,
+          status: 'prompt',
+          webviewVersion: '154.0.1.2',
+        }),
+    })
+
+    expect(nativeDiagnostics()).toMatchObject({
+      sdk: 37,
+      release: '17',
+      model: 'Xiaomi 15',
+      permissionDeclared: true,
+      permissionGranted: false,
+      status: 'prompt',
+      webviewVersion: '154.0.1.2',
+      appVersion: '',
+      webviewPackage: '',
+    })
+  })
+
+  it('原生返回非法 JSON 时返回 null', () => {
+    installBridge({ diagnostics: () => 'not json' })
+    expect(nativeDiagnostics()).toBeNull()
+  })
+})
+
+describe('webviewChromiumVersion', () => {
+  it('从 UA 取 Chromium 主版本', () => {
+    const ua =
+      'Mozilla/5.0 (Linux; Android 17; 23127PN0CC Build/BP2A.250705.008; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/154.0.7339.51 Mobile Safari/537.36'
+    vi.stubGlobal('navigator', { userAgent: ua })
+    expect(webviewChromiumVersion()).toBe('154')
+    vi.unstubAllGlobals()
+  })
+
+  it('UA 里没有 Chrome 时返回空串', () => {
+    vi.stubGlobal('navigator', { userAgent: 'Node.js/22' })
+    expect(webviewChromiumVersion()).toBe('')
+    vi.unstubAllGlobals()
   })
 })

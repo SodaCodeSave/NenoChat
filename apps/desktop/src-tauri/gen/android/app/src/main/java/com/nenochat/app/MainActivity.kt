@@ -15,6 +15,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
@@ -126,6 +127,32 @@ class MainActivity : TauriActivity() {
     startActivity(intent)
   }
 
+  /** 供设置页展示的环境信息，排查局域网连不通时区分系统层与安装包问题 */
+  private fun diagnosticsJson(): String {
+    val webviewPackage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      WebView.getCurrentWebViewPackage()
+    } else {
+      null
+    }
+    return JSONObject().apply {
+      put("sdk", Build.VERSION.SDK_INT)
+      put("release", Build.VERSION.RELEASE)
+      put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
+      put("appVersion", BuildConfig.VERSION_NAME)
+      put("permissionDeclared", PermissionHelper.hasDefinedPermission(this@MainActivity, LOCAL_NETWORK_PERMISSION))
+      put("permissionGranted", localNetworkGranted())
+      put("status", localNetworkStatus())
+      put("asked", getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ASKED, false))
+      put(
+        "canAskAgain",
+        supportsLocalNetwork() &&
+          ActivityCompat.shouldShowRequestPermissionRationale(this@MainActivity, LOCAL_NETWORK_PERMISSION)
+      )
+      put("webviewPackage", webviewPackage?.packageName ?: "")
+      put("webviewVersion", webviewPackage?.versionName ?: "")
+    }.toString()
+  }
+
   /** 暴露给页面的本地网络权限桥，方法在 JavaBridge 线程被调用 */
   private inner class LocalNetworkBridge {
     @JavascriptInterface
@@ -140,5 +167,8 @@ class MainActivity : TauriActivity() {
     fun openSettings() {
       runOnUiThread { openAppSettings() }
     }
+
+    @JavascriptInterface
+    fun diagnostics(): String = diagnosticsJson()
   }
 }

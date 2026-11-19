@@ -53,4 +53,10 @@ describe('服务器双栏页', () => {
     expect(setupSource).toContain("e instanceof LocalNetworkPermissionError ? 'blocked' : 'offline'")
     expect(setupSource).toContain("if (state === 'blocked') return '需要本地网络权限'")
   })
+
+  it('安装包缺少原生桥时提示更新客户端', () => {
+    expect(setupSource).toContain('当前安装包缺少本地网络支持')
+    expect(setupSource).toContain('!nativeBridgeAvailable()')
+    expect(setupSource).toContain('v-else-if="permissionBlocked"')
+  })
 })
