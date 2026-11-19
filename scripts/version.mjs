@@ -32,16 +32,17 @@ export function readGitInfo(run = git) {
 
 /**
  * 根据 git 状态推导各处使用的版本号。
- * 优先级：环境变量 > 当前 tag > 短 hash；最低客户端版本无 tag 时沿用最近 tag。
+ * 有 tag 时用纯 tag；无 tag 时用「最近 tag - 短 hash」；最低客户端版本沿用最近 tag。
  */
 export function resolveVersion({ env = {}, gitInfo = readGitInfo() } = {}) {
   const envApp = String(env.APP_VERSION || '').trim()
   const envMin = String(env.MIN_CLIENT_VERSION || '').trim()
   const { exactTag, latestTag, shortHash } = gitInfo
 
-  const appVersion = envApp || exactTag || shortHash
+  const appVersion = envApp || exactTag || (latestTag ? `v${latestTag}-${shortHash}` : shortHash)
   const minClientVersion = envMin || exactTag || latestTag || appVersion
-  const packageVersion = SEMVER_RE.test(appVersion) ? appVersion : `0.0.0-${appVersion}`
+  const semverCandidate = appVersion.replace(/^v/, '')
+  const packageVersion = SEMVER_RE.test(semverCandidate) ? semverCandidate : `0.0.0-${semverCandidate}`
 
   return {
     appVersion,

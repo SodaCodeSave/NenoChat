@@ -6,18 +6,18 @@ describe('resolveVersion', () => {
   const offTag = { exactTag: '', latestTag: '0.2.0', shortHash: '5907354' }
   const noTag = { exactTag: '', latestTag: '', shortHash: 'abc1234' }
 
-  it('在 tag 上时各处版本均取 tag（去除 v 前缀）', () => {
+  it('在 tag 上时各处版本均取纯 tag（去除 v 前缀）', () => {
     const v = resolveVersion({ gitInfo: onTag })
     expect(v.appVersion).toBe('0.2.0')
     expect(v.minClientVersion).toBe('0.2.0')
     expect(v.packageVersion).toBe('0.2.0')
   })
 
-  it('无 tag 时应用版本用短 hash，最低客户端版本沿用最近 tag', () => {
+  it('无 tag 时应用版本用「v + 最近 tag - 短 hash」，最低客户端版本沿用最近 tag', () => {
     const v = resolveVersion({ gitInfo: offTag })
-    expect(v.appVersion).toBe('5907354')
+    expect(v.appVersion).toBe('v0.2.0-5907354')
     expect(v.minClientVersion).toBe('0.2.0')
-    expect(v.packageVersion).toBe('0.0.0-5907354')
+    expect(v.packageVersion).toBe('0.2.0-5907354')
   })
 
   it('完全没有 tag 时最低客户端版本回退到应用版本', () => {
