@@ -1,13 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import type { Sticker, StickerPackImportResult, StickerPackWithStickers } from '@nenochat/shared'
 import { stickerApi } from '@/api/stickers'
 import { uploadFile } from '@/api/files'
-import { resolveFileUrl } from '@/api/http'
-import { isTauri } from '@/platform/device'
-import { loadProviderKey } from '@/platform/ai-keys'
-import { useAiStore } from './ai'
 
 /** 表情包：服务端为权威源，客户端只做内存缓存与乐观更新 */
 export const useStickersStore = defineStore('stickers', () => {
@@ -114,39 +109,6 @@ export const useStickersStore = defineStore('stickers', () => {
 
   /* --------------------------- AI 情绪分析 --------------------------- */
 
-  const STICKER_TAG_PROMPT =
-    '这是聊天软件里的一张表情包。请给出 3~5 个描述它的情绪或使用场景的中文标签，' +
-    '用逗号分隔（例如：开心,庆祝,可爱）。只输出标签，不要任何解释。'
-
-  function parseTags(raw: string): string[] {
-    const seen = new Set<string>()
-    for (const piece of raw.split(/[，,、;；\s]+/)) {
-      const tag = piece.trim().slice(0, 24)
-      if (!tag) continue
-      seen.add(tag)
-      if (seen.size >= 5) break
-    }
-    return [...seen]
-  }
-
-  async function fetchImageDataUrl(url: string): Promise<string | null> {
-    const absolute = resolveFileUrl(url)
-    if (!absolute) return null
-    try {
-      const response = await fetch(absolute)
-      if (!response.ok) return null
-      const blob = await response.blob()
-      return await new Promise<string | null>((resolve) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
-        reader.onerror = () => resolve(null)
-        reader.readAsDataURL(blob)
-      })
-    } catch {
-      return null
-    }
-  }
-
   function findStickerById(stickerId: string): Sticker | null {
     for (const entry of packs.value) {
       const target = entry.stickers.find((item) => item.id === stickerId)
@@ -159,52 +121,14 @@ export const useStickersStore = defineStore('stickers', () => {
     return [...new Set([...existing, ...tags])].slice(0, 10)
   }
 
-  /**
-   * 用识图模型分析一张表情包的情绪标签并写回服务端。
-   * 本机密钥由客户端直接调识图模型；托管密钥交给服务端分析。
-   * 没有可用识图模型时抛错，由调用方决定怎么提示。
-   */
+  /** 用服务端识图模型分析一张表情包的情绪标签并写回 */
   async function analyzeSticker(stickerId: string): Promise<string[]> {
-    const ai = useAiStore()
-    const provider = ai.providers.find((p) => p.visionModel)
-    if (!provider) throw new Error('没有配置识图模型，请先在 AI 设置里给服务商填识图模型')
-    const sticker = findStickerById(stickerId)
-    if (!sticker?.url) throw new Error('表情不存在')
-
-    let tags: string[]
-    if (provider.keyLocation === 'local') {
-      if (!isTauri()) throw new Error('本机密钥模式需要桌面客户端')
-      const apiKey = await loadProviderKey(provider.id)
-      if (!apiKey) throw new Error('本机没有找到该服务商的密钥')
-      const dataUrl = await fetchImageDataUrl(sticker.url)
-      if (!dataUrl) throw new Error('表情图片读取失败')
-      const result = await invoke<{ content: string }>('ai_complete', {
-        baseUrl: provider.baseUrl,
-        apiKey,
-        model: provider.visionModel,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: STICKER_TAG_PROMPT },
-              { type: 'image_url', image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        temperature: 0.2,
-        maxTokens: 120,
-        jsonMode: false,
-      })
-      tags = parseTags(result.content)
-      if (tags.length === 0) throw new Error('识图模型没有返回有效的情绪标签')
-      const merged = mergeKeywords(sticker.keywords, tags)
-      const updated = await stickerApi.updateKeywords(stickerId, merged)
-      upsertSticker(updated.sticker)
-    } else {
-      const result = await stickerApi.serverAnalyze(stickerId)
-      tags = result.tags
-      const fresh = findStickerById(stickerId)
-      if (fresh) upsertSticker({ ...fresh, keywords: mergeKeywords(fresh.keywords, tags) })
+    const result = await stickerApi.serverAnalyze(stickerId)
+    const fresh = findStickerById(stickerId)
+    const tags = result.tags
+    if (fresh) {
+      const merged = [...new Set([...fresh.keywords, ...tags])].slice(0, 10)
+      upsertSticker({ ...fresh, keywords: merged })
     }
     return tags
   }

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProvider } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import SvgIcon from '@/components/ui/SvgIcon.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
@@ -15,9 +16,9 @@ import Alert from '@/components/ui/form/Alert.vue'
 import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { aiApi, type ProviderInput } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
-import { clearProviderKey, loadProviderKey, saveProviderKey } from '@/platform/ai-keys'
 import { AI_PROVIDER_PRESETS, matchProviderIcon } from '@/config/ai-providers'
 import TokenRouterAdBanner from '@/components/settings/TokenRouterAdBanner.vue'
+import ModelPicker from '@/components/settings/ModelPicker.vue'
 
 const ai = useAiStore()
 
@@ -31,6 +32,7 @@ const editingProviderId = ref<string | null>(null)
 const savingProvider = ref(false)
 const testing = ref(false)
 const refreshingBalance = ref<Record<string, boolean>>({})
+const fetchingModels = ref(false)
 
 /** 当前正在编辑的服务商；为空表示表单处于添加模式 */
 const editingProvider = computed(
@@ -45,15 +47,9 @@ const providerForm = ref<ProviderInput>({
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
   apiKey: '',
-  keyLocation: 'local',
   visionModel: '',
   contextWindow: null,
 })
-
-const keyLocationOptions = [
-  { value: 'local', label: '密钥存本机钥匙串', description: '只有这台设备能用' },
-  { value: 'server', label: '密钥上传服务器', description: '多端共享，服务端可代发' },
-]
 
 /** 分段规则跟随全局设置；读不到时按默认值展示 */
 const SEGMENT_FALLBACK = { enabled: true, pattern: '[。！？!?\\n]' }
@@ -193,59 +189,36 @@ async function testConnection(): Promise<void> {
 
 async function saveProvider(): Promise<void> {
   const editingId = editingProviderId.value
-  const original = editingProvider.value
   const form = providerForm.value
   error.value = null
   notice.value = null
-
-  if (
-    editingId &&
-    original &&
-    original.keyLocation !== form.keyLocation &&
-    !form.apiKey &&
-    original.apiKeyMasked
-  ) {
-    error.value = '切换密钥存放位置时需要重新填写 API Key'
-    return
-  }
 
   const payload: ProviderInput = {
     name: form.name,
     baseUrl: form.baseUrl,
     model: form.model,
-    keyLocation: form.keyLocation,
     visionModel: form.visionModel?.trim() || null,
     contextWindow: form.contextWindow && form.contextWindow >= 256 ? form.contextWindow : null,
-    ...(form.keyLocation === 'server' && !form.apiKey ? {} : { apiKey: form.apiKey ?? '' }),
+    ...(form.apiKey ? { apiKey: form.apiKey } : {}),
   }
 
   savingProvider.value = true
   try {
+    let providerId: string
     if (editingId) {
       const result = await aiApi.updateProvider(editingId, payload)
-      const updated = result.provider
-      // 密钥位置变更后同步本机钥匙串：本机模式写明文，云端模式不留副本
-      if (form.keyLocation === 'local') {
-        if (form.apiKey) await saveProviderKey(editingId, form.apiKey)
-        else await clearProviderKey(editingId)
-      } else {
-        await clearProviderKey(editingId)
-      }
-      providers.value = providers.value.map((p) => (p.id === updated.id ? updated : p))
-      ai.providers = ai.providers.map((p) => (p.id === updated.id ? updated : p))
+      providerId = result.provider.id
       notice.value = '已保存修改'
     } else {
       const result = await aiApi.createProvider(payload)
-      // key 存本地钥匙串，服务端只保存「存哪里」这个标记
-      if (form.keyLocation === 'local' && form.apiKey) {
-        await saveProviderKey(result.provider.id, form.apiKey)
-      }
+      providerId = result.provider.id
       notice.value = '已添加 AI 服务商'
     }
     stopEditProvider()
     showProviderForm.value = false
     await load()
     void probeMissingBalances()
+    await fetchModelsFor(providerId)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '保存服务商失败'
   } finally {
@@ -253,19 +226,37 @@ async function saveProvider(): Promise<void> {
   }
 }
 
-/** 进入编辑态：本机密钥从钥匙串回填，云端密钥留空表示不改动 */
-async function startEditProvider(provider: AiProvider): Promise<void> {
+/** 读取某服务商已缓存的模型列表 */
+function modelsOf(providerId?: string | null): string[] {
+  return providerId ? ai.modelsByProvider[providerId] ?? [] : []
+}
+
+/** 保存服务商后自动拉取模型列表；失败只提示，不影响保存结果 */
+async function fetchModelsFor(providerId: string): Promise<void> {
+  fetchingModels.value = true
+  try {
+    const models = await ai.loadModels(providerId)
+    notice.value = models.length > 0
+      ? `已获取 ${models.length} 个模型`
+      : '已保存，但这个端点没有返回模型列表，可手动输入模型名'
+  } catch {
+    notice.value = '已保存，但模型列表获取失败，可手动输入模型名'
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+/** 进入编辑态：云端密钥不可读取，留空表示不改动 */
+function startEditProvider(provider: AiProvider): void {
   error.value = null
   notice.value = null
   editingProviderId.value = provider.id
   showProviderForm.value = true
-  const localKey = provider.keyLocation === 'local' ? await loadProviderKey(provider.id) : ''
   providerForm.value = {
     name: provider.name,
     baseUrl: provider.baseUrl,
     model: provider.model,
-    apiKey: localKey,
-    keyLocation: provider.keyLocation,
+    apiKey: '',
     visionModel: provider.visionModel ?? '',
     contextWindow: provider.contextWindow ?? null,
   }
@@ -293,8 +284,7 @@ function resetProviderForm(): void {
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
     apiKey: '',
-    keyLocation: 'local',
-    visionModel: '',
+      visionModel: '',
     contextWindow: null,
   }
 }
@@ -330,11 +320,7 @@ async function refreshBalance(provider: AiProvider, quiet = false): Promise<void
   if (refreshingBalance.value[provider.id]) return
   refreshingBalance.value[provider.id] = true
   try {
-    let apiKey: string | undefined
-    if (provider.keyLocation === 'local') {
-      apiKey = (await loadProviderKey(provider.id)) || undefined
-    }
-    const result = await aiApi.providerBalance(provider.id, apiKey)
+    const result = await aiApi.providerBalance(provider.id)
     const updated = result.provider
     providers.value = providers.value.map((p) => (p.id === updated.id ? updated : p))
     ai.providers = ai.providers.map((p) => (p.id === updated.id ? updated : p))
@@ -362,7 +348,6 @@ async function removeProvider(): Promise<void> {
   removingProvider.value = true
   try {
     await aiApi.deleteProvider(provider.id)
-    await clearProviderKey(provider.id)
     await load()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '删除服务商失败'
@@ -407,6 +392,9 @@ async function saveContextWindow(provider: AiProvider, value: number | null): Pr
 onMounted(() => {
   void load().then(() => {
     void probeMissingBalances()
+    for (const provider of providers.value) {
+      if (!ai.modelsByProvider[provider.id]) void ai.loadModels(provider.id).catch(() => undefined)
+    }
   })
 })
 
@@ -426,7 +414,7 @@ onBeforeUnmount(() => {
     <SettingsCard
       id="providers"
       title="AI 服务商"
-      description="支持任意 OpenAI 兼容端点，密钥默认只存本机钥匙串，不会上传服务器"
+      description="支持任意 OpenAI 兼容端点，密钥加密保存在服务端，保存后自动获取模型列表"
       icon="sparkles"
     >
       <template #actions>
@@ -487,11 +475,11 @@ onBeforeUnmount(() => {
             <TextInput id="provider-name" v-model="providerForm.name" placeholder="如 中转站" />
           </Field>
           <Field label="模型" for-id="provider-model">
-            <TextInput
+            <ModelPicker
               id="provider-model"
               v-model="providerForm.model"
-              placeholder="如 gpt-4o-mini"
-              spellcheck="false"
+              :models="modelsOf(editingProvider?.id)"
+              placeholder="选择或输入模型名"
             />
           </Field>
         </div>
@@ -508,12 +496,8 @@ onBeforeUnmount(() => {
         <Field
           label="API Key"
           for-id="provider-key"
-          :hint="
-            editingProvider && providerForm.keyLocation === 'server'
-              ? `云端密钥不可读取：留空保持原密钥${editingProvider.apiKeyMasked ? `（${editingProvider.apiKeyMasked}）` : ''}，填新值才覆盖`
-              : '留空表示这个端点不需要密钥'
-          "
-        >
+          hint="留空表示不改动密钥；服务端密钥加密存储，不会回显"
+>
           <TextInput
             id="provider-key"
             :model-value="providerForm.apiKey ?? ''"
@@ -527,11 +511,11 @@ onBeforeUnmount(() => {
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="识图模型" for-id="provider-vision" optional>
-            <TextInput
+            <ModelPicker
               id="provider-vision"
               :model-value="providerForm.visionModel ?? ''"
-              placeholder="如 qwen-vl-plus"
-              spellcheck="false"
+              :models="modelsOf(editingProvider?.id)"
+              placeholder="选择或输入识图模型名"
               @update:model-value="providerForm.visionModel = $event"
             />
           </Field>
@@ -548,16 +532,6 @@ onBeforeUnmount(() => {
           </Field>
         </div>
 
-        <Field label="密钥存放位置">
-          <Select
-            :model-value="providerForm.keyLocation"
-            :options="keyLocationOptions"
-            @update:model-value="
-              (value) => value && (providerForm.keyLocation = value as 'local' | 'server')
-            "
-          />
-        </Field>
-
         <div class="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
           <Button size="sm" variant="ghost" :loading="testing" @click="testConnection">
             {{ testing ? '测试中…' : '测试连接' }}
@@ -566,7 +540,7 @@ onBeforeUnmount(() => {
             取消
           </Button>
           <Button size="sm" variant="primary" :loading="savingProvider" @click="saveProvider">
-            {{ editingProvider ? '保存修改' : '保存服务商' }}
+            {{ fetchingModels ? '获取模型中…' : editingProvider ? '保存修改' : '保存服务商' }}
           </Button>
         </div>
       </div>
@@ -596,9 +570,6 @@ onBeforeUnmount(() => {
           <div class="min-w-[150px] flex-1">
             <p class="flex flex-wrap items-center gap-1.5 text-[12.5px] font-medium text-text-strong">
               {{ provider.name }}
-              <span class="rounded bg-surface px-1 text-[10px] font-normal text-muted">
-                {{ provider.keyLocation === 'local' ? '本机 key' : '云端 key' }}
-              </span>
               <span
                 v-if="provider.balance"
                 class="rounded bg-success/10 px-1.5 text-[10px] font-normal text-success"
@@ -606,16 +577,24 @@ onBeforeUnmount(() => {
                 余额 {{ balanceText(provider) }}
               </span>
             </p>
-            <p class="truncate text-[11px] text-muted">{{ provider.model }} · {{ provider.baseUrl }}</p>
+            <p class="flex items-center gap-1 truncate text-[11px] text-muted">
+              {{ provider.model }} · {{ provider.baseUrl }}
+              <IconButton
+                icon="refresh"
+                :size="12"
+                label="刷新模型列表"
+                @click="() => void fetchModelsFor(provider.id)"
+              />
+            </p>
           </div>
 
-          <TextInput
+          <ModelPicker
             class="w-36"
-            size="sm"
             :model-value="provider.visionModel ?? ''"
+            :models="modelsOf(provider.id)"
             placeholder="识图模型（可选）"
-            title="填一个多模态模型名，AI 就能看懂图片；留空则直接把图传给主模型"
-            @change="saveVisionModel(provider, ($event.target as HTMLInputElement).value)"
+            size="sm"
+            @update:model-value="saveVisionModel(provider, $event)"
           />
           <NumberInput
             class="w-28"
@@ -742,7 +721,7 @@ onBeforeUnmount(() => {
     <ConfirmDialog
       :open="Boolean(pendingRemoveProvider)"
       title="删除这个服务商？"
-      description="角色如果在用它，需要改到其它服务商后才能继续聊天。本机保存的密钥也会一并清除。"
+      description="角色如果在用它，需要改到其它服务商后才能继续聊天。服务端保存的密钥也会一并清除。"
       confirm-text="删除服务商"
       :loading="removingProvider"
       @update:open="(value) => !value && (pendingRemoveProvider = null)"

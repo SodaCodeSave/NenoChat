@@ -16,6 +16,7 @@ import { aiApi, type PersonaInput } from '@/api/ai'
 import { uploadFile } from '@/api/files'
 import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
 import { useAiStore } from '@/stores/ai'
+import ModelPicker from './ModelPicker.vue'
 
 const props = defineProps<{
   persona?: AiPersona | null
@@ -28,6 +29,12 @@ const emit = defineEmits<{
 }>()
 
 const ai = useAiStore()
+
+/** 当前角色所选服务商的模型列表；默认服务商取第一个 */
+const modelsForSelectedProvider = computed(() => {
+  const id = form.value.providerId ?? props.providers[0]?.id
+  return id ? ai.modelsByProvider[id] ?? [] : []
+})
 
 const MAX_INTERESTS = 20
 const MAX_CARD_BYTES = 1024 * 1024
@@ -393,12 +400,12 @@ async function save(): Promise<void> {
     </div>
 
     <Field label="模型覆盖" for-id="persona-model" optional hint="留空则使用服务商配置的模型">
-      <TextInput
+      <ModelPicker
         id="persona-model"
         :model-value="form.modelOverride ?? ''"
-        placeholder="如 gpt-4o-mini"
-        spellcheck="false"
-        @update:model-value="form.modelOverride = $event"
+        :models="modelsForSelectedProvider"
+        placeholder="选择或输入模型名"
+        @update:model-value="form.modelOverride = $event || null"
       />
     </Field>
 

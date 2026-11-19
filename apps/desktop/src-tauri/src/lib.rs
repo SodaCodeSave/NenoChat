@@ -1,4 +1,3 @@
-mod ai_gateway;
 mod db;
 mod notification;
 mod proxy;
@@ -35,8 +34,6 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             app_info,
-            ai_gateway::ai_generate,
-            ai_gateway::ai_complete,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,

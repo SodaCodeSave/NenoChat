@@ -263,18 +263,6 @@ export const useSyncStore = defineStore('sync', () => {
         moments.onCommentRemoved(payload.postId, payload.commentId)
       }),
 
-      wsClient.on('ai.proactive.due', (payload) => {
-        void ai.handleProactiveDue(payload)
-      }),
-
-      wsClient.on('ai.moment.due', (payload) => {
-        void ai.handleMomentDue(payload)
-      }),
-
-      wsClient.on('ai.group.due', (payload) => {
-        void ai.handleGroupDue(payload)
-      }),
-
       // 服务端流式生成进度：逐字增量 / 切好一段 / 结束 / 失败
       wsClient.on('ai.delta', (payload) => {
         ai.applyServerDelta(payload)

@@ -20,18 +20,18 @@ describe('AiSettings', () => {
     expect(source).toContain('icon="edit"')
     expect(source).toContain('@click="startEditProvider(provider)"')
     expect(source).toContain('@click="cancelProviderForm"')
-    expect(source).toContain("{{ editingProvider ? '保存修改' : '保存服务商' }}")
+    expect(source).toContain("'保存修改' : '保存服务商'")
   })
 
-  it('编辑本机密钥回填明文，保存走 PATCH 并同步钥匙串', () => {
-    expect(source).toContain(
-      "provider.keyLocation === 'local' ? await loadProviderKey(provider.id) : ''",
-    )
-    expect(source).toContain('aiApi.updateProvider(editingId, payload)')
-    expect(source).toContain('await saveProviderKey(editingId, form.apiKey)')
-    expect(source).toContain('await clearProviderKey(editingId)')
-    expect(source).toContain(
-      "form.keyLocation === 'server' && !form.apiKey ? {} : { apiKey: form.apiKey ?? '' }",
-    )
+  it('保存服务商后自动拉取模型列表', () => {
+    expect(source).toContain('await fetchModelsFor(providerId)')
+    expect(source).toContain('ai.loadModels(providerId)')
+    expect(source).toContain('已获取 ${models.length} 个模型')
+  })
+
+  it('主模型与识图模型都用可自定义的模型选择器', () => {
+    expect(source.match(/<ModelPicker/g)).toHaveLength(3)
+    expect(source).not.toContain('keyLocation')
+    expect(source).not.toContain('loadProviderKey')
   })
 })

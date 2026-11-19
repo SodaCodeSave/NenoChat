@@ -31,10 +31,6 @@ export const TestProviderSchema = z.object({
   model: z.string().trim().min(1).max(128),
 })
 
-export const ProviderBalanceSchema = z.object({
-  apiKey: z.string().max(512).optional(),
-})
-
 export const PersonaSchema = z.object({
   name: z.string().trim().min(1).max(64),
   systemPrompt: z.string().trim().min(1).max(8000),
@@ -150,62 +146,12 @@ export const AppendAiSegmentSchema = z.object({
   connector: z.array(ConnectorActionMetaSchema).max(10).optional(),
 })
 
-/** 本机密钥代跑：客户端把群聊回复交回服务端落库 */
-export const AppendGroupSegmentSchema = z.object({
-  logId: z.string().min(1),
-  personaId: z.string().min(1),
-  conversationId: z.string().min(1),
-  generationId: z.string().min(1),
-  index: z.number().int().min(0),
-  content: z.string().min(1).max(4000),
-  clientNonce: z.string().min(1).max(64),
-  model: z.string().max(128).optional(),
-  totalSegments: z.number().int().min(1).max(20).optional(),
-})
-
-export const GroupAiSkipSchema = z.object({
-  logId: z.string().min(1),
-  reason: z.string().max(120).optional(),
-})
-
-/** 本机密钥代跑后把真实 usage 回传服务端落库 */
-export const UsageReportSchema = z.object({
-  conversationId: z.string().min(1).optional(),
-  personaId: z.string().min(1).optional(),
-  providerId: z.string().min(1).optional(),
-  kind: z.enum([
-    'chat',
-    'group_reply',
-    'group_autonomy',
-    'proactive',
-    'moment',
-    'schedule',
-    'summary',
-    'vision',
-    'title',
-    'client_report',
-  ]),
-  refId: z.string().max(128).optional(),
-  model: z.string().max(128).optional(),
-  promptTokens: z.number().int().min(0),
-  completionTokens: z.number().int().min(0),
-  cachedTokens: z.number().int().min(0).optional(),
-})
-
 export const StartGenerationSchema = z.object({
   conversationId: z.string().min(1),
   /** 允许为空：只发图片不带文字时，正文由图片描述补位 */
   content: z.string().max(8000),
   clientNonce: z.string().min(1).max(64),
   providerId: z.string().min(1).optional(),
-})
-
-/** 本机识图后把描述交回服务端缓存并写进消息 meta */
-export const ImageDescriptionSchema = z.object({
-  messageId: z.string().min(1),
-  attachmentId: z.string().min(1),
-  description: z.string().trim().min(1).max(1000),
-  model: z.string().max(128).nullable().optional(),
 })
 
 export const MemoryWriteSchema = z.object({

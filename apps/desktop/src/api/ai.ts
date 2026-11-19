@@ -10,7 +10,6 @@ import {
   type AiSchedule,
   type AiScheduleItem,
   type AiUsageEntry,
-  type ConnectorActionMeta,
   type Conversation,
 } from '@nenochat/shared'
 import { http } from './http'
@@ -22,7 +21,6 @@ export interface ProviderInput {
   baseUrl: string
   model: string
   apiKey?: string
-  keyLocation: 'local' | 'server'
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
@@ -68,12 +66,15 @@ export const aiApi = {
   deleteProvider: (id: string) => http.delete<{ ok: boolean }>(p(`/ai/providers/${id}`)),
   testProvider: (body: { baseUrl: string; apiKey: string; model: string }) =>
     http.post<{ ok: boolean; sample: string }>(p('/ai/providers/test'), body),
-  /** 探测服务商余额；本机密钥模式需把明文 key 带上 */
-  providerBalance: (id: string, apiKey?: string) =>
-    http.post<{ provider: AiProvider }>(
-      p(`/ai/providers/${id}/balance`),
-      apiKey ? { apiKey } : {},
-    ),
+  /** 保存前用表单参数预览模型列表 */
+  previewModels: (body: { baseUrl: string; apiKey: string }) =>
+    http.post<{ models: string[] }>(p('/ai/providers/models'), body),
+  /** 读取已保存服务商的模型列表 */
+  providerModels: (id: string) =>
+    http.get<{ models: string[] }>(p(`/ai/providers/${id}/models`)),
+  /** 探测服务商余额 */
+  providerBalance: (id: string) =>
+    http.post<{ provider: AiProvider }>(p(`/ai/providers/${id}/balance`), {}),
 
   personas: () => http.get<{ personas: AiPersona[] }>(p('/ai/personas')),
   createPersona: (body: PersonaInput) => http.post<{ persona: AiPersona }>(p('/ai/personas'), body),
@@ -86,15 +87,15 @@ export const aiApi = {
     http.get<{ schedule: AiSchedule | null }>(p(`/ai/personas/${personaId}/schedule`), {
       query: date ? { date } : undefined,
     }),
-  /** 确保当天有日程；本机密钥时返回 needsClientGeneration */
+  /** 确保当天有日程 */
   ensureSchedule: (personaId: string, date?: string) =>
-    http.post<{ schedule: AiSchedule | null; needsClientGeneration: boolean }>(
+    http.post<{ schedule: AiSchedule | null }>(
       p(`/ai/personas/${personaId}/schedule/ensure`),
       date ? { date } : {},
     ),
   /** 强制重新生成当天日程 */
   regenerateSchedule: (personaId: string, date?: string) =>
-    http.post<{ schedule: AiSchedule | null; needsClientGeneration: boolean }>(
+    http.post<{ schedule: AiSchedule | null }>(
       p(`/ai/personas/${personaId}/schedule/generate`),
       date ? { date } : {},
     ),
@@ -116,20 +117,6 @@ export const aiApi = {
     ),
   deleteFact: (conversationId: string, factId: string) =>
     http.delete<{ ok: boolean }>(p(`/ai/conversations/${conversationId}/memory/facts/${factId}`)),
-  appendMessage: (
-    conversationId: string,
-    body: {
-      generationId: string
-      index: number
-      content: string
-      clientNonce: string
-      model?: string
-      totalSegments?: number
-      proactive?: boolean
-      connector?: ConnectorActionMeta[]
-    },
-  ) => http.post<{ message: unknown }>(p(`/ai/conversations/${conversationId}/messages`), body),
-
   startGeneration: (body: {
     conversationId: string
     content: string
@@ -138,43 +125,7 @@ export const aiApi = {
   }) => http.post<{ generation: { generationId: string; segments: number } }>(p('/ai/generations'), body),
   cancelGeneration: (id: string) => http.post<{ ok: boolean }>(p(`/ai/generations/${id}/cancel`)),
 
-  /** 本机识图后把图片描述交回服务端缓存并写进消息 meta */
-  saveImageDescription: (body: {
-    messageId: string
-    attachmentId: string
-    description: string
-    model?: string | null
-  }) => http.post<{ ok: boolean }>(p('/ai/image-descriptions'), body),
-
-  /** 群聊：本机密钥生成后把分段交回服务端落库 */
-  appendGroupMessage: (body: {
-    logId: string
-    personaId: string
-    conversationId: string
-    generationId: string
-    index: number
-    content: string
-    clientNonce: string
-    model?: string
-    totalSegments?: number
-  }) => http.post<{ message: unknown }>(p('/ai/group/messages'), body),
-  skipGroup: (logId: string, reason?: string) =>
-    http.post<{ ok: boolean }>(p('/ai/group/skip'), { logId, reason }),
-
   /* ------------------------------ 调试模式 ------------------------------ */
-
-  /** 本机代跑的真实 usage 回传服务端落库 */
-  reportUsage: (body: {
-    conversationId?: string
-    personaId?: string
-    providerId?: string
-    kind: string
-    refId?: string
-    model?: string
-    promptTokens: number
-    completionTokens: number
-    cachedTokens?: number
-  }) => http.post<{ ok: boolean }>(p('/ai/usage'), body),
 
   /** 会话用量汇总：缓存命中率、token 消耗、上下文水位 */
   debugSummary: (conversationId: string) =>

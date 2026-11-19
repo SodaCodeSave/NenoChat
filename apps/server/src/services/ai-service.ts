@@ -1439,25 +1439,6 @@ async function prepareImageInput(
   return { userImages, includeImages: true }
 }
 
-/** 本机识图完成后由客户端回写：落缓存 + 更新消息 meta */
-export function saveImageDescriptionToMessage(
-  db: DB,
-  userId: string,
-  input: { messageId: string; attachmentId: string; description: string; model?: string | null },
-): void {
-  const row = messagesRepo.findById(db, input.messageId)
-  if (!row || row.deleted_at) throw err.notFound('消息不存在')
-  if (row.sender_id !== userId) throw err.forbidden('只能补自己发出去的图片描述')
-
-  const attachment = attachmentsRepo.findById(db, input.attachmentId)
-  if (!attachment) throw err.notFound('附件不存在')
-
-  aiRepo.saveImageDescription(db, attachment.sha256, input.description, input.model ?? null)
-
-  const message = messagesRepo.mapMessage(row)
-  writeAttachmentDescriptions(db, message, { [input.attachmentId]: input.description })
-}
-
 /* ---------------------------- 表情包情绪分析 ---------------------------- */
 
 const STICKER_TAG_PROMPT =
