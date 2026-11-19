@@ -1,12 +1,20 @@
 import type { FastifyInstance } from 'fastify'
-import { LocalLoginSchema, LoginSchema, LogoutSchema, RefreshSchema, RegisterSchema } from '@nenochat/shared'
-import { env, localMode } from '../../env'
+import {
+  LocalLoginSchema,
+  LocalPairSchema,
+  LoginSchema,
+  LogoutSchema,
+  RefreshSchema,
+  RegisterSchema,
+} from '@nenochat/shared'
+import { env, localMode, pairingEnabled } from '../../env'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import { rateLimit } from '../plugins/rate-limit'
 import { safeEqual } from '../../util/crypto'
 import { err } from '../../util/errors'
+import * as pairingService from '../../services/pairing-service'
 import * as authService from '../../services/auth-service'
 import * as usersRepo from '../../db/repo/users'
 import * as devicesRepo from '../../db/repo/devices'
@@ -45,6 +53,25 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       throw err.unauthenticated('本机凭证无效')
     }
     const input = parse(LocalLoginSchema, request.body)
+    return authService.ensureLocalSession(db, app.jwt, input.device)
+  })
+
+  /**
+   * 电脑端生成手机接入用的配对码。只有本机账号能拿，且必须处于局域网开放状态。
+   */
+  app.post('/auth/pair/code', async (request) => {
+    await requireUserId(request)
+    if (!pairingEnabled) throw err.forbidden('未开启局域网接入')
+    return pairingService.issueCode()
+  })
+
+  /** 手机扫码后凭配对码换会话；码一次性，过期即失效 */
+  app.post('/auth/pair', { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) }, async (request) => {
+    if (!pairingEnabled) throw err.forbidden('未开启局域网接入')
+    const input = parse(LocalPairSchema, request.body)
+    if (!pairingService.consumeCode(input.code)) {
+      throw err.unauthenticated('配对码无效或已过期，请在电脑上刷新后重试')
+    }
     return authService.ensureLocalSession(db, app.jwt, input.device)
   })
 

@@ -25,6 +25,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 手机扫码后由系统唤起客户端，链接形如 nenochat://pair?url=...&code=...
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(
             SqlBuilder::default()
                 .add_migrations(db::DB_URL, db::migrations())
@@ -34,6 +36,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             localserver::local_server_info,
+            localserver::local_server_set_lan,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,

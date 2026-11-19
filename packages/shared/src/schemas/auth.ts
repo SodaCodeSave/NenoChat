@@ -47,6 +47,13 @@ export const LocalLoginSchema = z.object({
 })
 export type LocalLoginInput = z.infer<typeof LocalLoginSchema>
 
+/** 手机扫电脑上的二维码接入：地址由链接给出，这里只校验配对码 */
+export const LocalPairSchema = z.object({
+  code: z.string().trim().min(4).max(16),
+  device: DeviceInfoSchema,
+})
+export type LocalPairInput = z.infer<typeof LocalPairSchema>
+
 export const LogoutSchema = z.object({
   refreshToken: z.string().min(10).optional(),
   allDevices: z.boolean().optional(),

@@ -22,6 +22,8 @@ const EnvSchema = z.object({
   LOCAL_MODE: z.enum(['true', 'false']).default('false'),
   /** 一体化版的握手密钥，由客户端进程启动时生成并注入 */
   LOCAL_AUTH_TOKEN: z.string().default(''),
+  /** 一体化版是否对外开放到局域网（手机扫码接入），由客户端开关决定 */
+  LAN_ENABLED: z.enum(['true', 'false']).default('false'),
 })
 
 export type Env = z.infer<typeof EnvSchema>
@@ -60,6 +62,9 @@ export const isDev = env.NODE_ENV !== 'production'
 
 /** 一体化版服务端：只服务同机的客户端进程 */
 export const localMode = env.LOCAL_MODE === 'true'
+
+/** 手机配对：只有一体化版且用户主动开放局域网时才允许 */
+export const pairingEnabled = localMode && env.LAN_ENABLED === 'true'
 
 // 测试环境需要连接本地 mock 上游，默认放行；生产由显式开关控制
 export const allowPrivateAiEndpoint = env.ALLOW_PRIVATE_AI_ENDPOINT === 'true' || env.NODE_ENV === 'test'

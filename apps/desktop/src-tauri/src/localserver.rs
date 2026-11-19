@@ -5,7 +5,7 @@
 
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-const HOST: &str = "127.0.0.1";
+const LOOPBACK: &str = "127.0.0.1";
+/// 开放局域网时监听所有网卡，回环地址依旧可用
+const ANY_HOST: &str = "0.0.0.0";
 /// 服务端启动的最长等待时间，首次运行要跑完全部迁移，给足余量
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -24,6 +26,10 @@ pub struct LocalServerInfo {
     pub base_url: String,
     pub ws_url: String,
     pub token: String,
+    /// 是否已开放到局域网（手机可接入）
+    pub lan_enabled: bool,
+    /// 开放时给手机用的地址，未开放为 None
+    pub lan_url: Option<String>,
 }
 
 /// 落盘的长期密钥：重启后 JWT 与托管密钥必须保持一致，否则登录态和 AI 密钥全部失效
@@ -34,7 +40,19 @@ struct Secrets {
     token: String,
 }
 
+/// 拉起服务端所需的固定信息，开关局域网时复用，不重新跑一遍探测
+struct Runtime {
+    server_dir: PathBuf,
+    node_bin: PathBuf,
+    data_dir: PathBuf,
+    log_dir: PathBuf,
+    secrets: Secrets,
+    port: u16,
+    host: String,
+}
+
 pub struct LocalServerState {
+    runtime: Mutex<Option<Runtime>>,
     info: Mutex<Option<LocalServerInfo>>,
     error: Mutex<Option<String>>,
     /// 包里没有服务端资源：普通联网版，前端拿到 None 就走原有的选服务器流程
@@ -45,6 +63,7 @@ pub struct LocalServerState {
 impl Default for LocalServerState {
     fn default() -> Self {
         Self {
+            runtime: Mutex::new(None),
             info: Mutex::new(None),
             error: Mutex::new(None),
             skipped: Mutex::new(false),
@@ -110,16 +129,52 @@ fn load_secrets(config_dir: &Path) -> std::io::Result<Secrets> {
 
 /// 取一个当前空闲的回环端口；绑完立刻释放，交给 Node 去监听
 fn pick_port() -> std::io::Result<u16> {
-    let listener = TcpListener::bind((HOST, 0))?;
+    let listener = TcpListener::bind((LOOPBACK, 0))?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
 }
 
+/// 本机在局域网里的地址。
+/// 先按 RFC1918 找私有网段的 IPv4：VPN 的 TUN 网卡常拿到 198.18.x 这类地址，
+/// 用它拼出来的二维码手机根本连不上。找不到再退回「出口网卡」的判定。
+fn lan_ip() -> Option<IpAddr> {
+    let mut candidates: Vec<IpAddr> = Vec::new();
+    if let Ok(addrs) = if_addrs::get_if_addrs() {
+        for addr in addrs {
+            if addr.is_loopback() {
+                continue;
+            }
+            let ip = addr.ip();
+            if let IpAddr::V4(v4) = ip {
+                if v4.is_private() {
+                    candidates.push(ip);
+                }
+            }
+        }
+    }
+    // 同时挂着 Wi-Fi 与有线时优先 192.168 段，家用路由基本都是它
+    candidates.sort_by_key(|ip| match ip {
+        IpAddr::V4(v4) if v4.octets()[0] == 192 && v4.octets()[1] == 168 => 0,
+        _ => 1,
+    });
+    if let Some(ip) = candidates.first() {
+        return Some(*ip);
+    }
+
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("223.5.5.5:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    match ip {
+        IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+
 fn wait_listening(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if TcpStream::connect((HOST, port)).is_ok() {
+        if TcpStream::connect((LOOPBACK, port)).is_ok() {
             return true;
         }
         std::thread::sleep(Duration::from_millis(150));
@@ -127,8 +182,83 @@ fn wait_listening(port: u16, timeout: Duration) -> bool {
     false
 }
 
-/// 启动内置服务端；没有随包资源时返回 Ok(None)，表示这是一个普通客户端
-fn spawn(app: &AppHandle) -> Result<Option<LocalServerInfo>, String> {
+fn build_info(rt: &Runtime) -> LocalServerInfo {
+    let lan = rt.host == ANY_HOST;
+    let lan_url = if lan {
+        lan_ip().map(|ip| format!("http://{ip}:{}", rt.port))
+    } else {
+        None
+    };
+    LocalServerInfo {
+        base_url: format!("http://{LOOPBACK}:{}", rt.port),
+        ws_url: format!("ws://{LOOPBACK}:{}/ws", rt.port),
+        token: rt.secrets.token.clone(),
+        lan_enabled: lan && lan_url.is_some(),
+        lan_url,
+    }
+}
+
+fn spawn_child(rt: &Runtime) -> Result<Child, String> {
+    let log_path = rt.log_dir.join("integrated-server.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("无法打开服务端日志：{e}"))?;
+    let stderr = log
+        .try_clone()
+        .map_err(|e| format!("无法复制日志句柄：{e}"))?;
+
+    let lan_enabled = rt.host == ANY_HOST;
+    let public_base = if lan_enabled {
+        lan_ip()
+            .map(|ip| format!("http://{ip}:{}", rt.port))
+            .unwrap_or_else(|| format!("http://{LOOPBACK}:{}", rt.port))
+    } else {
+        format!("http://{LOOPBACK}:{}", rt.port)
+    };
+
+    let mut command = Command::new(&rt.node_bin);
+    command
+        .arg("server.cjs")
+        .current_dir(&rt.server_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr))
+        .env("NODE_ENV", "production")
+        .env("HOST", &rt.host)
+        .env("PORT", rt.port.to_string())
+        .env("PUBLIC_BASE_URL", public_base)
+        .env("DATA_DIR", &rt.data_dir)
+        .env("JWT_SECRET", &rt.secrets.jwt_secret)
+        .env("SECRET_KEY", &rt.secrets.secret_key)
+        // 只服务本机客户端：关闭注册，靠握手令牌换会话
+        .env("LOCAL_MODE", "true")
+        .env("LOCAL_AUTH_TOKEN", &rt.secrets.token)
+        .env("REGISTRATION_MODE", "closed")
+        .env("SERVER_NAME", "NenoChat")
+        .env("LOG_LEVEL", "info")
+        // 本地大模型（ollama 之类）在回环地址上，必须放行内网端点
+        .env("ALLOW_PRIVATE_AI_ENDPOINT", "true")
+        .env("LAN_ENABLED", if lan_enabled { "true" } else { "false" })
+        // 客户端被强杀时子进程靠这个 pid 判断自己该退出
+        .env("PARENT_PID", std::process::id().to_string())
+        .env("APP_VERSION", env!("CARGO_PKG_VERSION"));
+
+    // Windows 上不加这个标志，打包后的 GUI 程序会弹一个控制台窗口
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+        .spawn()
+        .map_err(|e| format!("无法启动内置服务端（{}）：{e}", rt.node_bin.display()))
+}
+
+fn prepare_runtime(app: &AppHandle) -> Result<Option<Runtime>, String> {
     let Some(server_dir) = resolve_server_dir(app) else {
         return Ok(None);
     };
@@ -149,10 +279,6 @@ fn spawn(app: &AppHandle) -> Result<Option<LocalServerInfo>, String> {
     create_dir_all(&data_dir).map_err(|e| format!("无法创建数据目录：{e}"))?;
     create_dir_all(&log_dir).map_err(|e| format!("无法创建日志目录：{e}"))?;
 
-    let secrets = load_secrets(&config_dir).map_err(|e| format!("读写本机密钥失败：{e}"))?;
-    let port = pick_port().map_err(|e| format!("无法分配本地端口：{e}"))?;
-    let base_url = format!("http://{HOST}:{port}");
-
     // 运行时优先用包内的 Node，开发态没有随包资源时用系统 node
     let bundled_node = server_dir.join(if cfg!(windows) { "node.exe" } else { "node" });
     let node_bin = if bundled_node.is_file() {
@@ -161,61 +287,14 @@ fn spawn(app: &AppHandle) -> Result<Option<LocalServerInfo>, String> {
         PathBuf::from("node")
     };
 
-    let log_path = log_dir.join("integrated-server.log");
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("无法打开服务端日志：{e}"))?;
-    let stderr = log
-        .try_clone()
-        .map_err(|e| format!("无法复制日志句柄：{e}"))?;
-
-    let mut command = Command::new(&node_bin);
-    command
-        .arg("server.cjs")
-        .current_dir(&server_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr))
-        .env("NODE_ENV", "production")
-        .env("HOST", HOST)
-        .env("PORT", port.to_string())
-        .env("PUBLIC_BASE_URL", &base_url)
-        .env("DATA_DIR", &data_dir)
-        .env("JWT_SECRET", &secrets.jwt_secret)
-        .env("SECRET_KEY", &secrets.secret_key)
-        // 只服务本机客户端：关闭注册，靠握手令牌换会话
-        .env("LOCAL_MODE", "true")
-        .env("LOCAL_AUTH_TOKEN", &secrets.token)
-        .env("REGISTRATION_MODE", "closed")
-        .env("SERVER_NAME", "NenoChat")
-        .env("LOG_LEVEL", "info")
-        // 本地大模型（ollama 之类）在回环地址上，必须放行内网端点
-        .env("ALLOW_PRIVATE_AI_ENDPOINT", "true")
-        // 客户端被强杀时子进程靠这个 pid 判断自己该退出
-        .env("PARENT_PID", std::process::id().to_string())
-        .env("APP_VERSION", app.package_info().version.to_string());
-
-    // Windows 上不加这个标志，打包后的 GUI 程序会弹一个控制台窗口
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let child = command
-        .spawn()
-        .map_err(|e| format!("无法启动内置服务端（{}）：{e}", node_bin.display()))?;
-
-    let state = app.state::<LocalServerState>();
-    *state.child.lock().unwrap() = Some(child);
-
-    Ok(Some(LocalServerInfo {
-        base_url: base_url.clone(),
-        ws_url: format!("ws://{HOST}:{port}/ws"),
-        token: secrets.token,
+    Ok(Some(Runtime {
+        server_dir,
+        node_bin,
+        data_dir,
+        log_dir,
+        secrets: load_secrets(&config_dir).map_err(|e| format!("读写本机密钥失败：{e}"))?,
+        port: pick_port().map_err(|e| format!("无法分配本地端口：{e}"))?,
+        host: LOOPBACK.to_string(),
     }))
 }
 
@@ -242,12 +321,61 @@ pub async fn local_server_info(
     }
 }
 
+/// 开关「允许手机接入」：切换监听地址并重启服务端，端口保持不变，
+/// 桌面端自己的连接地址不受影响，只有手机的扫码地址会随之出现或消失。
+#[tauri::command]
+pub async fn local_server_set_lan(
+    enabled: bool,
+    state: State<'_, LocalServerState>,
+) -> Result<LocalServerInfo, String> {
+    let target_host = if enabled { ANY_HOST } else { LOOPBACK };
+    if enabled && lan_ip().is_none() {
+        return Err("没有找到局域网地址，请先连上 Wi-Fi 或有线网络".into());
+    }
+
+    {
+        let runtime = state.runtime.lock().unwrap();
+        let Some(rt) = runtime.as_ref() else {
+            return Err("当前不是一体版，没有内置服务端".into());
+        };
+        if rt.host == target_host {
+            let info = build_info(rt);
+            *state.info.lock().unwrap() = Some(info.clone());
+            return Ok(info);
+        }
+    }
+
+    // 换监听地址必须重启子进程：Node 不能给已监听的端口换绑定
+    {
+        let mut child = state.child.lock().unwrap().take();
+        if let Some(child) = child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    let mut runtime = state.runtime.lock().unwrap();
+    let rt = runtime.as_mut().ok_or("内置服务端未初始化")?;
+    rt.host = target_host.to_string();
+
+    let child = spawn_child(rt)?;
+    *state.child.lock().unwrap() = Some(child);
+
+    if !wait_listening(rt.port, READY_TIMEOUT) {
+        return Err("切换局域网监听后服务端没有起来，请查看 integrated-server.log".into());
+    }
+
+    let info = build_info(rt);
+    *state.info.lock().unwrap() = Some(info.clone());
+    Ok(info)
+}
+
 /// setup 阶段只负责把子进程拉起来，就绪检测放到后台线程，
 /// 否则首次运行跑迁移会卡住窗口创建，用户会看到「点了没反应」。
 pub fn boot(app: &AppHandle) {
     let state = app.state::<LocalServerState>();
-    let info = match spawn(app) {
-        Ok(Some(info)) => info,
+    let rt = match prepare_runtime(app) {
+        Ok(Some(rt)) => rt,
         Ok(None) => {
             *state.skipped.lock().unwrap() = true;
             return;
@@ -259,13 +387,19 @@ pub fn boot(app: &AppHandle) {
         }
     };
 
-    let port = match info.base_url.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) {
-        Some(port) => port,
-        None => {
-            *state.error.lock().unwrap() = Some("内置服务端端口解析失败".into());
+    let child = match spawn_child(&rt) {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("[localserver] {e}");
+            *state.error.lock().unwrap() = Some(e);
             return;
         }
     };
+
+    let port = rt.port;
+    let info = build_info(&rt);
+    *state.child.lock().unwrap() = Some(child);
+    *state.runtime.lock().unwrap() = Some(rt);
 
     let handle = app.clone();
     std::thread::spawn(move || {

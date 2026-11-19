@@ -130,6 +130,7 @@ pnpm build:app:integrated   # 一体化安装包（内置服务端，免登录�
 - 服务端以 `LOCAL_MODE=true` 运行：关闭注册，客户端凭进程内注入的握手令牌调用 `/auth/local` 换取会话，首次启动自动创建 `owner` 账号。
 - 内置的服务端标识符是 `com.nenochat.app.integrated`，数据与联网版完全隔离，可与联网版同时安装。
 - 数据落在应用数据目录的 `server/` 下，日志是应用日志目录的 `integrated-server.log`。
+- 设置里的「手机接入」可以把服务端开放到局域网并生成二维码：手机扫码（`nenochat://pair?...`）或用配对码接入，手机和电脑看到同一份数据。配对码 5 分钟有效、一次性，关闭开关后服务端立刻退回只监听本机。
 
 服务端也可用 Docker 部署：
 

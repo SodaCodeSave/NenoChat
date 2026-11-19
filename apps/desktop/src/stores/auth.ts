@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { NotificationSettings, User, UserSettings } from '@nenochat/shared'
-import { authApi, notificationSettingsApi } from '@/api/endpoints'
+import { authApi, notificationSettingsApi, pairingApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
@@ -202,6 +202,20 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** 手机扫码接入：用电脑生成的配对码换一份会话 */
+  async function pairWithCode(code: string): Promise<void> {
+    error.value = null
+    bindServer()
+    try {
+      const result = await pairingApi.pair({ code, device: devicePayload() })
+      await applySession(result)
+      await loadProfile()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : '配对失败'
+      throw e
+    }
+  }
+
   async function loadProfile(): Promise<void> {
     const me = await authApi.me()
     if (me.user) user.value = me.user
@@ -371,6 +385,7 @@ export const useAuthStore = defineStore('auth', () => {
     bindServer,
     login,
     loginLocal,
+    pairWithCode,
     register,
     registerDevice: devicePayload,
     loadProfile,

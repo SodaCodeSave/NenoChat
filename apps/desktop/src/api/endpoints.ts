@@ -52,6 +52,12 @@ export const serverApi = {
   info: () => http.get<ServerInfo>(p('/server/info'), { auth: false }),
 }
 
+/** 手机接入电脑端：配对码由电脑生成，扫码后凭码换会话 */
+export const pairingApi = {
+  code: () => http.post<{ code: string; expiresAt: number }>(p('/auth/pair/code')),
+  pair: (body: unknown) => http.post<AuthSessionResponse>(p('/auth/pair'), body, { auth: false }),
+}
+
 export interface ConversationSummary extends Conversation {
   pinnedAt?: number | null
   notificationLevel?: string | null

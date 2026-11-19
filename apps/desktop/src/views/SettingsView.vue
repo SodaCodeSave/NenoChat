@@ -8,6 +8,7 @@ import TextInput from '@/components/ui/form/TextInput.vue'
 import AccountSettings from '@/components/settings/sections/AccountSettings.vue'
 import AppearanceSettings from '@/components/settings/sections/AppearanceSettings.vue'
 import ServerSettings from '@/components/settings/sections/ServerSettings.vue'
+import MobilePairing from '@/components/settings/sections/MobilePairing.vue'
 import AboutSettings from '@/components/settings/sections/AboutSettings.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
 import PersonaSettings from '@/components/settings/PersonaSettings.vue'
@@ -25,6 +26,7 @@ type SectionKey =
   | 'appearance'
   | 'notification'
   | 'server'
+  | 'mobile'
   | 'ai'
   | 'persona'
   | 'connectors'
@@ -96,6 +98,13 @@ const allSections: SettingsSection[] = [
     ],
   },
   {
+    key: 'mobile',
+    label: '手机接入',
+    icon: 'smartphone',
+    description: '开个二维码，让手机连上这台电脑的数据',
+    anchors: [{ id: 'mobile-access', label: '手机接入', keywords: '二维码 扫码 局域网 手机 配对' }],
+  },
+  {
     key: 'ai',
     label: 'AI 模型',
     icon: 'sparkles',
@@ -159,7 +168,7 @@ const allSections: SettingsSection[] = [
 const groups: { label: string; keys: SectionKey[] }[] = [
   { label: '通用', keys: ['account', 'appearance', 'notification', 'server'] },
   { label: '智能', keys: ['ai', 'persona', 'connectors', 'stickers'] },
-  { label: '系统', keys: ['storage', 'about'] },
+  { label: '系统', keys: ['mobile', 'storage', 'about'] },
 ]
 
 const sectionComponents = {
@@ -167,6 +176,7 @@ const sectionComponents = {
   appearance: AppearanceSettings,
   notification: NotificationSettings,
   server: ServerSettings,
+  mobile: MobilePairing,
   ai: AiSettings,
   persona: PersonaSettings,
   connectors: ConnectorSettings,
@@ -175,9 +185,11 @@ const sectionComponents = {
   about: AboutSettings,
 }
 
-/** 一体版内置了服务端，没有可切换的服务器，整块服务器设置直接隐藏 */
+/** 一体版内置了服务端，没有可切换的服务器；联网版反过来没有手机接入入口 */
 const sections = computed(() =>
-  servers.integrated ? allSections.filter((section) => section.key !== 'server') : allSections,
+  allSections.filter((section) =>
+    section.key === 'mobile' ? servers.integrated : section.key === 'server' ? !servers.integrated : true,
+  ),
 )
 
 const visibleGroups = computed(() =>

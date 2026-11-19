@@ -6,6 +6,10 @@ export interface LocalServerInfo {
   baseUrl: string
   wsUrl: string
   token: string
+  /** 是否已开放到局域网（手机可接入） */
+  lanEnabled: boolean
+  /** 开放时给手机用的地址，未开放为 null */
+  lanUrl: string | null
 }
 
 let pending: Promise<LocalServerInfo | null> | null = null
@@ -24,4 +28,11 @@ export function localServerInfo(): Promise<LocalServerInfo | null> {
     })
   }
   return pending
+}
+
+/** 开关「允许手机接入」：主进程会切换监听地址并重启服务端，返回新的地址信息 */
+export async function setLanAccess(enabled: boolean): Promise<LocalServerInfo> {
+  const info = await invoke<LocalServerInfo>('local_server_set_lan', { enabled })
+  pending = Promise.resolve(info)
+  return info
 }

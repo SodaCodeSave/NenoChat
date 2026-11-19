@@ -20,7 +20,13 @@ vi.mock('@/db/dao/servers', () => ({
   removeServerCascade: vi.fn(),
 }))
 
-const info = { baseUrl: 'http://127.0.0.1:54321', wsUrl: 'ws://127.0.0.1:54321/ws', token: 'tok' }
+const info = {
+  baseUrl: 'http://127.0.0.1:54321',
+  wsUrl: 'ws://127.0.0.1:54321/ws',
+  token: 'tok',
+  lanEnabled: false,
+  lanUrl: null,
+}
 
 /** localStorage 在 node 环境不存在，这里补一个最简实现 */
 function installStorage(): void {

@@ -18,6 +18,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
 process.env.LOCAL_MODE = 'true'
 process.env.LOCAL_AUTH_TOKEN = LOCAL_TOKEN
+process.env.LAN_ENABLED = 'true'
 
 let app: FastifyInstance
 
@@ -116,5 +117,55 @@ describe('本地模式登录', () => {
       payload: JSON.stringify({ username: 'owner', password: 'pass12345', device: device('dev-x') }),
     })
     expect(login.statusCode).toBe(401)
+  })
+})
+
+describe('手机扫码配对', () => {
+  async function issueCode(): Promise<string> {
+    const session = await localLogin(LOCAL_TOKEN)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/pair/code',
+      headers: { authorization: `Bearer ${session.json.tokens.accessToken}` },
+    })
+    expect(res.statusCode).toBe(200)
+    return res.json().code as string
+  }
+
+  async function pair(code: string, deviceId = 'phone'): Promise<{ status: number; json: any }> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/pair',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ code, device: device(deviceId) }),
+    })
+    return { status: res.statusCode, json: res.json() }
+  }
+
+  it('未登录拿不到配对码', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/auth/pair/code' })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('配对码换到的会话属于电脑端同一个账号', async () => {
+    const code = await issueCode()
+    const local = await localLogin(LOCAL_TOKEN)
+    const paired = await pair(code)
+
+    expect(paired.status).toBe(200)
+    expect(paired.json.user.id).toBe(local.json.user.id)
+    expect(paired.json.user.username).toBe('owner')
+  })
+
+  it('配对码一次性，用过即失效', async () => {
+    const code = await issueCode()
+    expect((await pair(code, 'phone-a')).status).toBe(200)
+    expect((await pair(code, 'phone-b')).status).toBe(401)
+  })
+
+  it('不存在的配对码一律拒绝', async () => {
+    expect((await pair('ZZZZZZ')).status).toBe(401)
+    // 长度不合法的码在参数校验阶段就被挡掉
+    expect((await pair('abc')).status).toBe(400)
   })
 })

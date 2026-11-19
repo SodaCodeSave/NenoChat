@@ -19,9 +19,10 @@ const servers = useServersStore()
 const conversations = useConversationsStore()
 const sync = useSyncStore()
 
-const mode = ref<'login' | 'register'>('login')
+const mode = ref<'login' | 'register' | 'pair'>('login')
 const username = ref('')
 const password = ref('')
+const pairCode = ref('')
 const displayName = ref('')
 const inviteCode = ref('')
 const busy = ref(false)
@@ -83,7 +84,10 @@ async function submit(): Promise<void> {
   busy.value = true
   error.value = null
   try {
-    if (mode.value === 'login') {
+    if (mode.value === 'pair') {
+      // 电脑端生成的配对码，扫码打不开时手输也能接入
+      await auth.pairWithCode(pairCode.value.trim().toUpperCase())
+    } else if (mode.value === 'login') {
       await auth.login(username.value.trim(), password.value)
     } else {
       await auth.register({
@@ -104,19 +108,25 @@ async function submit(): Promise<void> {
   }
 }
 
-function switchMode(next: 'login' | 'register'): void {
+function switchMode(next: 'login' | 'register' | 'pair'): void {
   mode.value = next
   error.value = null
 }
+
+const heading = computed(() =>
+  mode.value === 'login' ? '登录 NenoChat' : mode.value === 'register' ? '创建账号' : '用电脑上的配对码接入',
+)
+
+const submitLabel = computed(() =>
+  busy.value ? '请稍候…' : mode.value === 'login' ? '登录' : mode.value === 'register' ? '注册并登录' : '接入',
+)
 </script>
 
 <template>
   <div class="h-full rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow-soft)]">
     <div class="mb-5 flex items-start justify-between">
       <div>
-        <h1 class="text-[17px] font-semibold text-text-strong">
-          {{ mode === 'login' ? '登录 NenoChat' : '创建账号' }}
-        </h1>
+        <h1 class="text-[17px] font-semibold text-text-strong">{{ heading }}</h1>
         <button
           v-if="props.showServerSwitch"
           type="button"
@@ -185,10 +195,18 @@ function switchMode(next: 'login' | 'register'): void {
         >
           注册
         </button>
+        <button
+          type="button"
+          class="flex-1 rounded-lg py-1.5 text-[13px] transition-colors"
+          :class="mode === 'pair' ? 'bg-surface font-medium shadow-sm' : 'text-muted'"
+          @click="switchMode('pair')"
+        >
+          配对码
+        </button>
       </div>
 
       <form class="space-y-3" @submit.prevent="submit">
-        <label class="block">
+        <label v-if="mode !== 'pair'" class="block">
           <span class="mb-1 block text-[12px] font-medium text-muted">用户名</span>
           <input
             v-model="username"
@@ -196,6 +214,17 @@ function switchMode(next: 'login' | 'register'): void {
             autocomplete="username"
             placeholder="3-24 位字母、数字或下划线"
             class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+          />
+        </label>
+
+        <label v-if="mode === 'pair'" class="block">
+          <span class="mb-1 block text-[12px] font-medium text-muted">配对码</span>
+          <input
+            v-model="pairCode"
+            type="text"
+            placeholder="电脑端「手机接入」里显示的 6 位配对码"
+            maxlength="16"
+            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 font-mono text-[13.5px] tracking-[0.18em] uppercase outline-none focus:border-accent"
           />
         </label>
 
@@ -209,7 +238,7 @@ function switchMode(next: 'login' | 'register'): void {
           />
         </label>
 
-        <label class="block">
+        <label v-if="mode !== 'pair'" class="block">
           <span class="mb-1 block text-[12px] font-medium text-muted">密码</span>
           <input
             v-model="password"
@@ -237,7 +266,7 @@ function switchMode(next: 'login' | 'register'): void {
           class="h-10 w-full rounded-lg bg-accent text-[13.5px] font-medium text-accent-text disabled:opacity-60"
           :disabled="busy"
         >
-          {{ busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并登录' }}
+          {{ submitLabel }}
         </button>
       </form>
     </template>
