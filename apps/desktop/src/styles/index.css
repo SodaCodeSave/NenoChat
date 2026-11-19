@@ -361,6 +361,16 @@ textarea {
   }
 }
 
+/* 启动加载页到应用界面的过渡：只淡入淡出，不碰 transform（logo 靠 translate 定位） */
+.boot-fade-enter-active,
+.boot-fade-leave-active {
+  transition: opacity 240ms ease;
+}
+.boot-fade-enter-from,
+.boot-fade-leave-to {
+  opacity: 0;
+}
+
 /* 轻提示：Vue Transition 的 name="fade"，只淡入淡出，不碰 transform（元素本身靠 translate 居中） */
 .fade-enter-active,
 .fade-leave-active {
