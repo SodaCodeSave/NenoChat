@@ -46,22 +46,19 @@ import { hub } from '../ws/hub'
 /**
  * 群聊里的 AI 成员。
  *
- * 和主动私聊的分工一样：规则判定、配额占位都在服务端，保证多端只看到一条；
- * 密钥在本机时服务端只派发 `ai.group.due`，由在线客户端生成后回传落库。
+ * 规则判定、配额占位与生成都在服务端，保证多端只看到一条。
  */
 
 const TZ_OFFSET_MIN = serverTzOffsetMinutes()
 const STALE_PENDING_MS = 5 * 60_000
 const RECENT_LIMIT = 30
 
-/** 一轮发言的结局；dispatched 表示已派发给本机密钥的客户端代跑 */
-type TurnOutcome = 'sent' | 'dispatched' | 'skipped' | 'failed' | 'no_provider'
+/** 一轮发言的结局 */
+type TurnOutcome = 'sent' | 'skipped' | 'failed' | 'no_provider'
 
 /** 排队接话时，轮到下一个角色之前的随机歇口气区间 */
 const CHAIN_GAP_MIN_MS = 1_000
 const CHAIN_GAP_MAX_MS = 3_000
-/** 本机密钥代跑：等这一轮落库（或明确跳过）再派发下一个角色，单轮最长等这么久 */
-const TURN_SETTLE_TIMEOUT_MS = 90_000
 
 interface GroupPersonaMember {
   persona: aiRepo.PersonaRow
@@ -263,7 +260,7 @@ function reserveTurn(
 function finishLog(
   db: DB,
   logId: string,
-  status: 'sent' | 'dispatched' | 'skipped' | 'failed',
+  status: 'sent' | 'skipped' | 'failed',
   extra: { messageId?: string | null; reason?: string | null } = {},
 ): void {
   db.prepare('UPDATE ai_group_log SET status = ?, message_id = ?, reason = ? WHERE id = ?').run(
@@ -272,8 +269,6 @@ function finishLog(
     extra.reason ?? null,
     logId,
   )
-  // 派发出去的轮次在这里收尾；dispatched 只是刚出门，不算收尾
-  if (status !== 'dispatched') notifyTurnSettled(logId)
 }
 
 /** 决策落库后实时推给主人的在线客户端；客户端按 debugMode 决定是否显示 */
@@ -570,31 +565,7 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
   const debugDecisions = input.settings.debugMode
   const model = input.member.persona.model_override ?? provider.model
 
-  // 密钥在本机：服务端只负责派发，在线客户端生成后回传。
-  // 提示词由客户端自己拼，提前返回，省掉 recentMessages / roster 那一串查询
-  if (provider.key_location !== 'server') {
-    if (!hub().isOnline(input.member.persona.owner_id)) {
-      finishLog(db, input.logId, 'skipped', { reason: 'local_key_offline' })
-      if (debugDecisions) {
-        resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'local_key_offline', false)
-      }
-      return 'skipped'
-    }
-    hub().sendToUser(input.member.persona.owner_id, 'ai.group.due', {
-      logId: input.logId,
-      conversationId: input.conversationId,
-      personaId: input.member.persona.id,
-      kind: input.kind,
-      triggerMessageId: input.trigger?.messageId ?? null,
-      mood: input.mood,
-      energy: input.energy,
-      dueAt: now(),
-    })
-    finishLog(db, input.logId, 'dispatched')
-    return 'dispatched'
-  }
-
-  // 服务端托管密钥时顺手补齐当天日程；本机密钥由客户端生成时自己注入
+  // 顺手补齐当天日程
   await scheduleService.ensureScheduleQuietly(db, input.member.persona)
   const prompt = buildTurnPrompt(db, input)
 
@@ -671,45 +642,6 @@ export interface GroupMessageTrigger {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/** 本机密钥代跑的轮次是否已收尾（落库、跳过或失败），记录没了也当收尾 */
-function isSettledStatus(status: string | undefined): boolean {
-  return !status || status === 'sent' || status === 'skipped' || status === 'failed'
-}
-
-/** 等待本机密钥轮次收尾的 waiter：客户端回传（appendClientGroupSegment/skipClientGroupDue）收尾时直接叫醒 */
-const turnSettleWaiters = new Map<string, () => void>()
-
-/** 轮次收尾时叫醒等它的人；没人等就什么都不做 */
-function notifyTurnSettled(logId: string): void {
-  const waiter = turnSettleWaiters.get(logId)
-  if (waiter) {
-    turnSettleWaiters.delete(logId)
-    waiter()
-  }
-}
-
-/** 等一个已派发的轮次收尾；90 秒超时兜底放行，避免卡死整条排队链 */
-function waitForTurnSettled(db: DB, logId: string): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const done = (): void => {
-      clearTimeout(timer)
-      turnSettleWaiters.delete(logId)
-      resolve()
-    }
-    const timer = setTimeout(done, TURN_SETTLE_TIMEOUT_MS)
-
-    // 先查一次库：派发到等待之间客户端可能已经回传完了
-    const row = db
-      .prepare('SELECT status FROM ai_group_log WHERE id = ?')
-      .get(logId) as { status: string } | undefined
-    if (isSettledStatus(row?.status)) {
-      done()
-      return
-    }
-    turnSettleWaiters.set(logId, done)
-  })
 }
 
 /** 用户发了一条群消息：规则预筛后决定谁接话，多个角色按序排队接话 */
@@ -844,11 +776,6 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       })
     }
 
-    // 本机密钥是客户端代跑：等这一轮收尾再轮到下一个角色，
-    // 这样下一个角色的上下文里才能看到这一轮的发言
-    if (outcome === 'dispatched') {
-      await waitForTurnSettled(db, reserved.logId)
-    }
   }
 }
 
@@ -857,86 +784,6 @@ export function scheduleGroupResponse(db: DB, trigger: GroupMessageTrigger): voi
   setTimeout(() => {
     void respondToGroupMessage(db, trigger).catch(() => undefined)
   }, 0)
-}
-
-/** 客户端代跑：把本机生成的群消息交回服务端落库 */
-export function appendClientGroupSegment(
-  db: DB,
-  ownerId: string,
-  input: {
-    logId: string
-    personaId: string
-    conversationId: string
-    generationId: string
-    index: number
-    content: string
-    clientNonce: string
-    model?: string
-    totalSegments?: number
-  },
-): Message {
-  const persona = aiRepo.findPersona(db, input.personaId)
-  if (!persona || persona.owner_id !== ownerId) throw err.forbidden('无权使用该角色')
-  if (!persona.user_id) throw err.validation('该角色还没有绑定账号')
-
-  if (!membersRepo.findActive(db, input.conversationId, persona.user_id)) {
-    throw err.forbidden('该角色不在这个群里')
-  }
-
-  const existing = messagesRepo.findByNonceInConversation(db, input.conversationId, input.clientNonce)
-  if (existing) return messagesRepo.mapMessage(existing)
-
-  const log = db.prepare('SELECT * FROM ai_group_log WHERE id = ?').get(input.logId) as
-    | {
-        conversation_id: string
-        persona_id: string
-        kind: string
-        status: string
-        reply_to_id: string | null
-      }
-    | undefined
-  if (!log || log.conversation_id !== input.conversationId || log.persona_id !== persona.id) {
-    throw err.notFound('这次发言机会不存在')
-  }
-  if (log.status === 'skipped' || log.status === 'failed') {
-    throw err.validation('这次发言机会已经结束')
-  }
-
-  const message = appendGroupSegmentCore(db, {
-    conversationId: input.conversationId,
-    persona,
-    generationId: input.generationId,
-    index: input.index,
-    content: input.content,
-    totalSegments: input.totalSegments ?? 1,
-    model: input.model ?? null,
-    ...(log?.kind === 'autonomy' ? { proactive: true } : {}),
-    // 与本地生成保持一致：只有第一条分条引用触发它的消息
-    replyToId: input.index === 0 ? (log?.reply_to_id ?? null) : null,
-    clientNonce: input.clientNonce,
-  })
-
-  if (input.index === 0 && log && log.status !== 'sent') {
-    finishLog(db, input.logId, 'sent', { messageId: message.id })
-    resolveDecisionOutcome(db, persona.owner_id, input.logId, 'sent', true)
-  }
-  return message
-}
-
-/** 客户端判断「不想说」时回报，服务端把这条配额标记为跳过 */
-export function skipClientGroupDue(db: DB, ownerId: string, logId: string, reason?: string): void {
-  const log = db.prepare('SELECT * FROM ai_group_log WHERE id = ?').get(logId) as
-    | { persona_id: string; status: string }
-    | undefined
-  if (!log) throw err.notFound('记录不存在')
-
-  const persona = aiRepo.findPersona(db, log.persona_id)
-  if (!persona || persona.owner_id !== ownerId) throw err.forbidden('无权操作')
-  if (log.status === 'sent') return
-
-  const skipReason = reason ?? 'client_skip'
-  finishLog(db, logId, 'skipped', { reason: skipReason })
-  resolveDecisionOutcome(db, ownerId, logId, skipReason, false)
 }
 
 /* ------------------------------ 自主开口 ------------------------------ */

@@ -20,7 +20,6 @@ interface ProviderView {
   name: string
   baseUrl: string
   model: string
-  keyLocation: string
   apiKeyMasked: string | null
   visionModel: string | null
   contextWindow: number | null
@@ -47,11 +46,7 @@ async function api<T = any>(
   return { status: res.statusCode, json: res.json() as T }
 }
 
-async function createProvider(
-  name: string,
-  keyLocation: 'local' | 'server',
-  apiKey: string,
-): Promise<ProviderView> {
+async function createProvider(name: string, apiKey: string): Promise<ProviderView> {
   const res = await api<{ provider: ProviderView }>('POST', '/ai/providers', {
     token,
     body: {
@@ -59,7 +54,6 @@ async function createProvider(
       baseUrl: 'https://example.com/v1',
       model: 'gpt-4o-mini',
       apiKey,
-      keyLocation,
     },
   })
   expect(res.status).toBe(200)
@@ -104,22 +98,21 @@ afterAll(async () => {
 })
 
 describe('修改已有 AI 服务商', () => {
-  it('局部修改不会把云端密钥位置改成本机', async () => {
-    const provider = await createProvider('云端中转', 'server', 'sk-server-original-key')
+  it('局部修改不影响已存密钥', async () => {
+    const provider = await createProvider('云端中转', 'sk-server-original-key')
     const res = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
       token,
       body: { visionModel: 'qwen-vl-plus' },
     })
 
     expect(res.status).toBe(200)
-    expect(res.json.provider.keyLocation).toBe('server')
     expect(res.json.provider.visionModel).toBe('qwen-vl-plus')
     expect(res.json.provider.apiKeyMasked).toMatch(/^sk-s\*/)
     expect(JSON.stringify(res.json)).not.toContain('sk-server-original-key')
   })
 
-  it('云端密钥可更新或清空，明文不回显', async () => {
-    const provider = await createProvider('云端可改', 'server', 'sk-server-original-key')
+  it('API Key 可更新或清空，明文不回显', async () => {
+    const provider = await createProvider('云端可改', 'sk-server-original-key')
     const changed = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
       token,
       body: { apiKey: 'sk-server-replaced-key' },
@@ -136,44 +129,8 @@ describe('修改已有 AI 服务商', () => {
     expect(cleared.json.provider.apiKeyMasked).toBeNull()
   })
 
-  it('本机密钥模式不把明文写进服务端', async () => {
-    const provider = await createProvider('本机中转', 'local', 'sk-local-only-key')
-    const res = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
-      token,
-      body: { name: '改名本机中转', apiKey: 'sk-local-updated-key' },
-    })
-    expect(res.status).toBe(200)
-    expect(res.json.provider.name).toBe('改名本机中转')
-    expect(res.json.provider.apiKeyMasked).toBeNull()
-
-    const { getDb } = await import('../src/db')
-    const row = getDb()
-      .prepare('SELECT api_key_enc FROM ai_providers WHERE id = ?')
-      .get(provider.id) as { api_key_enc: string | null }
-    expect(row.api_key_enc).toBeNull()
-  })
-
-  it('切到本机模式会清掉服务端密文，切回云端模式再写入', async () => {
-    const provider = await createProvider('迁移密钥', 'server', 'sk-migration-key')
-    const toLocal = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
-      token,
-      body: { keyLocation: 'local' },
-    })
-    expect(toLocal.status).toBe(200)
-    expect(toLocal.json.provider.keyLocation).toBe('local')
-    expect(toLocal.json.provider.apiKeyMasked).toBeNull()
-
-    const toServer = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
-      token,
-      body: { keyLocation: 'server', apiKey: 'sk-migrated-back' },
-    })
-    expect(toServer.status).toBe(200)
-    expect(toServer.json.provider.keyLocation).toBe('server')
-    expect(toServer.json.provider.apiKeyMasked).toMatch(/^sk-m\*/)
-  })
-
   it('常规字段与上下文窗口都能通过局部修改更新', async () => {
-    const provider = await createProvider('常规字段', 'local', '')
+    const provider = await createProvider('常规字段', '')
     const res = await api<{ provider: ProviderView }>('PATCH', `/ai/providers/${provider.id}`, {
       token,
       body: {
@@ -191,7 +148,7 @@ describe('修改已有 AI 服务商', () => {
   })
 
   it('不能修改其他用户的服务商', async () => {
-    const provider = await createProvider('他人不可改', 'local', '')
+    const provider = await createProvider('他人不可改', '')
     const res = await api('PATCH', `/ai/providers/${provider.id}`, {
       token: otherToken,
       body: { name: '被篡改' },
@@ -200,7 +157,7 @@ describe('修改已有 AI 服务商', () => {
   })
 
   it('非法字段仍然被拒绝', async () => {
-    const provider = await createProvider('校验仍在', 'local', '')
+    const provider = await createProvider('校验仍在', '')
     const res = await api('PATCH', `/ai/providers/${provider.id}`, {
       token,
       body: { baseUrl: 'x' },

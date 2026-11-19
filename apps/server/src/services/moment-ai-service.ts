@@ -133,28 +133,6 @@ async function commentOnPost(
   })
   if (!reserved) return
 
-  // 密钥在本机：服务端只能把「该评论哪条」派发给在线客户端
-  if (provider.key_location !== 'server') {
-    if (!hub().isOnline(userId)) {
-      momentRepo.markStatus(db, {
-        personaId: persona.id,
-        kind: 'comment',
-        postId: target.id,
-        dayKey,
-        status: 'failed',
-      })
-      return
-    }
-    hub().sendToUser(userId, 'ai.moment.due', {
-      taskId: ulid(),
-      kind: 'comment',
-      personaId: persona.id,
-      postId: target.id,
-      dueAt: now,
-    })
-    return
-  }
-
   const mapped = aiRepo.mapPersona(persona)
   const comments = postsRepo.listComments(db, target.id).map((comment) => ({
     author: comment.author?.displayName ?? '某人',
@@ -235,20 +213,6 @@ async function publishMoment(
     status: 'pending',
   })
   if (!reserved) return
-
-  if (provider.key_location !== 'server') {
-    if (!hub().isOnline(userId)) {
-      momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'failed' })
-      return
-    }
-    hub().sendToUser(userId, 'ai.moment.due', {
-      taskId: ulid(),
-      kind: 'post',
-      personaId: persona.id,
-      dueAt: now,
-    })
-    return
-  }
 
   const mapped = aiRepo.mapPersona(persona)
   const recentMoments = postsRepo

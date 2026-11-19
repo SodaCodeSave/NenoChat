@@ -96,12 +96,12 @@ export const ReplyStyle = {
 } as const
 export type ReplyStyle = (typeof ReplyStyle)[keyof typeof ReplyStyle]
 
-/** AI 密钥存放位置 */
-export const KeyLocation = {
+/** AI 调用的运行位置 */
+export const RunLocation = {
   Local: 'local',
   Server: 'server',
 } as const
-export type KeyLocation = (typeof KeyLocation)[keyof typeof KeyLocation]
+export type RunLocation = (typeof RunLocation)[keyof typeof RunLocation]
 
 /** 消息本地状态（仅客户端） */
 export const LocalStatus = {

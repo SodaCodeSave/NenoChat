@@ -58,28 +58,7 @@ afterAll(async () => {
 })
 
 describe('AI 服务商与角色', () => {
-  it('本机密钥模式不把明文密钥回显给客户端', async () => {
-    const created = await api<{ provider: { id: string; apiKeyMasked: string | null; keyLocation: string } }>(
-      'POST',
-      '/ai/providers',
-      {
-        token,
-        body: {
-          name: '本地中转',
-          baseUrl: 'https://example.com/v1',
-          model: 'gpt-4o-mini',
-          apiKey: 'sk-should-not-be-stored',
-          keyLocation: 'local',
-        },
-      },
-    )
-    expect(created.status).toBe(200)
-    expect(created.json.provider.keyLocation).toBe('local')
-    expect(created.json.provider.apiKeyMasked).toBeNull()
-    expect(JSON.stringify(created.json)).not.toContain('sk-should-not-be-stored')
-  })
-
-  it('服务端托管密钥时加密存储，只返回掩码', async () => {
+  it('API Key 一律加密存储，只返回掩码', async () => {
     const created = await api<{ provider: { id: string; apiKeyMasked: string | null } }>('POST', '/ai/providers', {
       token,
       body: {
@@ -87,7 +66,6 @@ describe('AI 服务商与角色', () => {
         baseUrl: 'https://example.com/v1',
         model: 'gpt-4o-mini',
         apiKey: 'sk-server-side-secret-key',
-        keyLocation: 'server',
       },
     })
     expect(created.status).toBe(200)
@@ -156,7 +134,7 @@ describe('AI 会话', () => {
     })
     const provider = await api<{ provider: { id: string } }>('POST', '/ai/providers', {
       token,
-      body: { name: 'p2', baseUrl: 'https://example.com/v1', model: 'm', keyLocation: 'local' },
+      body: { name: 'p2', baseUrl: 'https://example.com/v1', model: 'm' },
     })
     const conv = await api<{ conversation: { id: string } }>('POST', '/ai/conversations', {
       token,
@@ -219,14 +197,14 @@ describe('AI 会话', () => {
     expect(after.json.facts).toHaveLength(1)
   })
 
-  it('本机密钥模式调用服务端生成会被拒绝并给出提示', async () => {
+  it('没有配置 API Key 的服务商调用服务端生成会被拒绝', async () => {
     const persona = await api<{ persona: { id: string } }>('POST', '/ai/personas', {
       token,
       body: { name: '拒绝测试', systemPrompt: '你是朋友。' },
     })
     const provider = await api<{ provider: { id: string } }>('POST', '/ai/providers', {
       token,
-      body: { name: 'p3', baseUrl: 'https://example.com/v1', model: 'm', keyLocation: 'local' },
+      body: { name: 'p3', baseUrl: 'https://example.com/v1', model: 'm' },
     })
     const conv = await api<{ conversation: { id: string } }>('POST', '/ai/conversations', {
       token,
@@ -242,8 +220,7 @@ describe('AI 会话', () => {
         providerId: provider.json.provider.id,
       },
     })
-    expect(res.status).toBe(400)
-    expect(res.json.error.message).toContain('本机')
+    expect(res.status).toBe(502)
   })
 })
 

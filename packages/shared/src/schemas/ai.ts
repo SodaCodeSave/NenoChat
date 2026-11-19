@@ -1,12 +1,12 @@
 import { z } from 'zod'
-import { KeyLocation, MemoryFactSubject, ReplyStyle } from '../enums'
+import { MemoryFactSubject, ReplyStyle } from '../enums'
 
 export const ProviderSchema = z.object({
   name: z.string().trim().min(1).max(64),
   baseUrl: z.string().trim().min(8).max(512),
   model: z.string().trim().min(1).max(128),
+  /** 留空表示不改动密钥；空串表示清空密钥 */
   apiKey: z.string().max(512).optional(),
-  keyLocation: z.enum([KeyLocation.Local, KeyLocation.Server]).default(KeyLocation.Local),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().min(64).max(32000).optional(),
   isDefault: z.boolean().optional(),
@@ -16,12 +16,14 @@ export const ProviderSchema = z.object({
   contextWindow: z.number().int().min(256).max(10_000_000).nullable().optional(),
 })
 
-/** 服务商局部更新：字段全部可选，且不应用创建时的默认值 */
-export const ProviderPatchSchema = ProviderSchema.omit({ keyLocation: true })
-  .partial()
-  .extend({
-    keyLocation: z.enum([KeyLocation.Local, KeyLocation.Server]).optional(),
-  })
+/** 服务商局部更新：字段全部可选 */
+export const ProviderPatchSchema = ProviderSchema.partial()
+
+/** 服务商模型列表：入参允许带临时密钥，用于保存前预览 */
+export const ProviderModelsSchema = z.object({
+  baseUrl: z.string().trim().min(8).max(512),
+  apiKey: z.string().max(512).default(''),
+})
 
 export const TestProviderSchema = z.object({
   baseUrl: z.string().trim().min(8).max(512),

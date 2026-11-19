@@ -2,23 +2,23 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import {
   AiGlobalSettingsPatchSchema,
+  AppendAiSegmentSchema,
   AiScheduleQuerySchema,
   AiScheduleSaveSchema,
   normalizeScheduleItems,
-  AppendAiSegmentSchema,
-  AppendGroupSegmentSchema,
-  GroupAiSkipSchema,
-  ImageDescriptionSchema,
+
+
+
   MemoryWriteSchema,
   OpenAiConversationSchema,
   PersonaPatchSchema,
   PersonaSchema,
-  ProviderBalanceSchema,
+  ProviderModelsSchema,
   ProviderPatchSchema,
   ProviderSchema,
   StartGenerationSchema,
   TestProviderSchema,
-  UsageReportSchema,
+
 } from '@nenochat/shared'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
@@ -60,6 +60,33 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true }
   })
 
+  /** 预览模型列表：保存前用表单里的地址和密钥试拉一次 */
+  app.post(
+    '/ai/providers/models',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      await requireUserId(request)
+      const input = parse(ProviderModelsSchema, request.body)
+      return { models: await aiService.listProviderModels(input) }
+    },
+  )
+
+  /** 已保存服务商的模型列表：密钥从服务端托管读出 */
+  app.get<{ Params: { id: string } }>(
+    '/ai/providers/:id/models',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      const userId = await requireUserId(request)
+      const provider = aiRepo.findProvider(db, request.params.id)
+      if (!provider || provider.owner_id !== userId) throw err.notFound('服务商不存在')
+      const models = await aiService.listProviderModels({
+        baseUrl: provider.base_url,
+        apiKey: provider.api_key_enc ? aiService.resolveServerApiKey(provider) : '',
+      })
+      return { models }
+    },
+  )
+
   /** 测试连接：由服务端代发一次最小请求，避免浏览器跨域 */
   app.post(
     '/ai/providers/test',
@@ -71,11 +98,10 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  /** 余额探测：由服务端代查各家余额接口并缓存结果，本机密钥需随请求带上明文 */
+  /** 余额探测：由服务端代查各家余额接口并缓存结果 */
   app.post<{ Params: { id: string } }>('/ai/providers/:id/balance', async (request) => {
     const userId = await requireUserId(request)
-    const input = parse(ProviderBalanceSchema, request.body ?? {})
-    return { provider: await aiService.refreshProviderBalance(db, userId, request.params.id, input.apiKey) }
+    return { provider: await aiService.refreshProviderBalance(db, userId, request.params.id) }
   })
 
   /* ------------------------------ 角色 ------------------------------ */
@@ -130,11 +156,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const persona = ownedPersona(userId, request.params.id)
     const query = parse(AiScheduleQuerySchema, request.body ?? {})
-    return scheduleService.ensureSchedule(
-      db,
-      persona,
-      query.date ?? scheduleService.todayKey(),
-    )
+    return {
+      schedule: await scheduleService.ensureSchedule(
+        db,
+        persona,
+        query.date ?? scheduleService.todayKey(),
+      ),
+    }
   })
 
   /** 强制重新生成当天的日程 */
@@ -145,11 +173,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       const userId = await requireUserId(request)
       const persona = ownedPersona(userId, request.params.id)
       const query = parse(AiScheduleQuerySchema, request.body ?? {})
-      return scheduleService.regenerateSchedule(
-        db,
-        persona,
-        query.date ?? scheduleService.todayKey(),
-      )
+      return {
+        schedule: await scheduleService.regenerateSchedule(
+          db,
+          persona,
+          query.date ?? scheduleService.todayKey(),
+        ),
+      }
     },
   )
 
@@ -195,7 +225,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { conversation }
   })
 
-  /** 追加一条 AI 分段消息（客户端本地生成模式使用） */
+  /** 追加一条 AI 分段消息（AI 会话内部使用） */
   app.post<{ Params: { id: string } }>('/ai/conversations/:id/messages', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(AppendAiSegmentSchema, request.body)
@@ -236,15 +266,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  /** 本机识图完成后把图片描述交回服务端：落缓存并写进消息 meta */
-  app.post('/ai/image-descriptions', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(ImageDescriptionSchema, request.body)
-    aiService.saveImageDescriptionToMessage(db, userId, input)
-    return { ok: true }
-  })
-
-  /** 服务端识图分析一张表情包的情绪标签（密钥托管模式）；本机密钥由客户端自行分析 */
+  /** 服务端识图分析一张表情包的情绪标签 */
   app.post(
     '/ai/stickers/analyze',
     { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
@@ -256,33 +278,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  /* ------------------------------ 群聊 AI ------------------------------ */
-
-  /** 本机密钥：客户端生成好一条群消息后交回服务端落库 */
-  app.post('/ai/group/messages', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(AppendGroupSegmentSchema, request.body)
-    const message = groupAiService.appendClientGroupSegment(db, userId, input)
-    return { message }
-  })
-
-  /** 客户端判断此刻不想接话，服务端把这次配额标记为跳过 */
-  app.post('/ai/group/skip', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(GroupAiSkipSchema, request.body)
-    groupAiService.skipClientGroupDue(db, userId, input.logId, input.reason)
-    return { ok: true }
-  })
-
   /* ------------------------------ 调试模式 ------------------------------ */
-
-  /** 本机密钥代跑后回传真实 usage */
-  app.post('/ai/usage', async (request) => {
-    const userId = await requireUserId(request)
-    const input = parse(UsageReportSchema, request.body)
-    aiService.reportClientUsage(db, userId, input)
-    return { ok: true }
-  })
 
   /** 会话用量汇总：缓存命中率、token 消耗、上下文水位 */
   app.get('/ai/debug/summary', async (request) => {

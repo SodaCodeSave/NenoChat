@@ -44,7 +44,6 @@ export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null
     name: row.name,
     baseUrl: row.base_url,
     apiKeyMasked,
-    keyLocation: row.key_location as AiProvider['keyLocation'],
     model: row.model,
     visionModel: row.vision_model,
     contextWindow: row.context_window,
@@ -76,7 +75,6 @@ export interface CreateProviderInput {
   name: string
   baseUrl: string
   apiKeyEnc: string | null
-  keyLocation: 'local' | 'server'
   model: string
   visionModel?: string | null
   contextWindow?: number | null
@@ -99,7 +97,7 @@ export function createProvider(db: DB, input: CreateProviderInput): ProviderRow 
     input.name,
     input.baseUrl,
     input.apiKeyEnc,
-    input.keyLocation,
+    'server',
     input.model,
     input.visionModel ?? null,
     input.contextWindow ?? null,
@@ -127,7 +125,7 @@ export function updateProvider(db: DB, id: string, patch: Partial<CreateProvider
     patch.name ?? current.name,
     patch.baseUrl ?? current.base_url,
     patch.apiKeyEnc === undefined ? current.api_key_enc : patch.apiKeyEnc,
-    patch.keyLocation ?? current.key_location,
+    'server',
     patch.model ?? current.model,
     patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
     patch.contextWindow === undefined ? current.context_window : patch.contextWindow,

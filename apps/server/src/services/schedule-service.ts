@@ -57,7 +57,7 @@ export function saveSchedule(
 /**
  * 角色当前实际使用的服务商。
  * 与客户端的 providerOf 保持一致：角色指定的服务商可能已被删除，
- * 这时要回退到默认服务商，再回退到最早创建的那个，否则云端密钥明明存在也会被判成本机密钥。
+ * 这时要回退到默认服务商，再回退到最早创建的那个。
  */
 function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
   if (persona.provider_id) {
@@ -78,9 +78,6 @@ export async function generateScheduleOnServer(
 ): Promise<AiSchedule> {
   const provider = resolveProvider(db, persona)
   if (!provider) throw err.validation('请先配置 AI 服务商')
-  if (provider.key_location !== 'server') {
-    throw err.validation('该服务商的密钥在本机，请使用桌面客户端生成日程')
-  }
 
   const result = await callUpstream({
     baseUrl: provider.base_url,
@@ -114,28 +111,15 @@ export async function generateScheduleOnServer(
   })
 }
 
-export interface EnsureScheduleResult {
-  schedule: AiSchedule | null
-  /** 密钥在本机时，服务端生成不了，需要客户端自己生成后回传 */
-  needsClientGeneration: boolean
-}
-
-/** 有就返回；没有则尝试用服务端密钥生成 */
+/** 有就返回；没有则生成当天日程 */
 export async function ensureSchedule(
   db: DB,
   persona: aiRepo.PersonaRow,
   dayKey = todayKey(),
-): Promise<EnsureScheduleResult> {
+): Promise<AiSchedule | null> {
   const existing = getSchedule(db, persona.id, dayKey)
-  if (existing) return { schedule: existing, needsClientGeneration: false }
-
-  const provider = resolveProvider(db, persona)
-  if (!provider || provider.key_location !== 'server') {
-    return { schedule: null, needsClientGeneration: true }
-  }
-
-  const schedule = await generateScheduleOnServer(db, persona, dayKey)
-  return { schedule, needsClientGeneration: false }
+  if (existing) return existing
+  return generateScheduleOnServer(db, persona, dayKey).catch(() => null)
 }
 
 /** 强制重新生成：保留已有日程直到新结果成功写入 */
@@ -143,13 +127,10 @@ export async function regenerateSchedule(
   db: DB,
   persona: aiRepo.PersonaRow,
   dayKey = todayKey(),
-): Promise<EnsureScheduleResult> {
-  const provider = resolveProvider(db, persona)
-  if (!provider || provider.key_location !== 'server') {
-    return { schedule: getSchedule(db, persona.id, dayKey), needsClientGeneration: true }
-  }
+): Promise<AiSchedule | null> {
+  const existing = getSchedule(db, persona.id, dayKey)
   const schedule = await generateScheduleOnServer(db, persona, dayKey)
-  return { schedule, needsClientGeneration: false }
+  return schedule ?? existing
 }
 
 /** 后台路径使用：生成失败只返回 null，不影响回复主流程 */
@@ -159,8 +140,7 @@ export async function ensureScheduleQuietly(
   dayKey = todayKey(),
 ): Promise<AiSchedule | null> {
   try {
-    const result = await ensureSchedule(db, persona, dayKey)
-    return result.schedule
+    return await ensureSchedule(db, persona, dayKey)
   } catch {
     return getSchedule(db, persona.id, dayKey)
   }

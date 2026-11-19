@@ -24,7 +24,6 @@ import { hub } from '../ws/hub'
  *
  * 判定与生成都在服务端完成，客户端只负责展示 —— 这样多端看到的是同一条，
  * 不会出现「手机发一条、电脑又发一条」。
- * 密钥在本机（keyLocation='local'）的角色服务端发不了，改为通过 WS 派发给在线客户端代跑。
  */
 
 const STALE_PENDING_MS = 10 * 60_000
@@ -50,7 +49,6 @@ interface CandidateRow {
   /** 最近一条日志（含失败/占位）的时间，chance 模式用它控制掷骰间隔 */
   last_log_at: number | null
   sent_today: number
-  key_location: string | null
 }
 
 function parsePersonaConfig(row: CandidateRow): ProactiveConfig {
@@ -133,10 +131,7 @@ function listCandidates(db: DB, dayKey: string): CandidateRow[] {
               (SELECT COUNT(*) FROM ai_proactive_log l2
                 WHERE l2.conversation_id = c.id
                   AND l2.day_key = ?
-                  AND l2.status IN ('pending', 'dispatched', 'sent'))      AS sent_today,
-              (SELECT pr.key_location FROM ai_sessions s
-                JOIN ai_providers pr ON pr.id = s.provider_id AND pr.deleted_at IS NULL
-                WHERE s.conversation_id = c.id LIMIT 1)                   AS key_location
+                  AND l2.status IN ('pending', 'dispatched', 'sent'))      AS sent_today
        FROM ai_personas p
        JOIN conversations c
          ON c.type = 'ai' AND c.ai_persona_id = p.id AND c.deleted_at IS NULL
@@ -367,42 +362,6 @@ async function fireOnServer(
   })
 }
 
-/** 本机密钥：服务端只派发，由在线客户端调用本地上游生成 */
-function dispatchToClient(
-  db: DB,
-  candidate: CandidateRow,
-  persona: aiRepo.PersonaRow,
-  decision: ProactiveDecision,
-  dayKey: string,
-): void {
-  if (!hub().isOnline(candidate.owner_id)) return
-
-  const config = resolveConfig(candidate)
-  const slot = reserveSlot(db, {
-    conversationId: candidate.conversation_id,
-    userId: candidate.owner_id,
-    personaId: persona.id,
-    dayKey,
-    maxPerDay: config.maxPerDay,
-    now: Date.now(),
-  })
-  if (slot === null) return
-
-  hub().sendToUser(candidate.owner_id, 'ai.proactive.due', {
-    conversationId: candidate.conversation_id,
-    personaId: persona.id,
-    hint: decision.idleHours >= 24 ? '很久没聊天了，找个轻松的话题' : undefined,
-    dueAt: Date.now(),
-  })
-
-  finishSlot(db, {
-    conversationId: candidate.conversation_id,
-    dayKey,
-    slot,
-    status: 'dispatched',
-  })
-}
-
 /** 跑一轮扫描。导出以便测试与手动触发。 */
 export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
   const now = Date.now()
@@ -428,7 +387,6 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
     if (!persona) continue
 
     const config = resolveConfig(candidate)
-    const serverCanRun = candidate.key_location === 'server'
     const ownerOnline = hub().isOnline(candidate.owner_id)
 
     const decision = decideProactiveFire({
@@ -440,7 +398,7 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
       sentToday: candidate.sent_today,
       config,
       tzOffsetMinutes: TZ_OFFSET_MIN,
-      serverCanRun,
+      serverCanRun: true,
       ownerOnline,
     })
 
@@ -459,11 +417,7 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
     }
 
     try {
-      if (serverCanRun) {
-        await fireOnServer(db, candidate, persona, decision, dayKey, log)
-      } else {
-        dispatchToClient(db, candidate, persona, decision, dayKey)
-      }
+      await fireOnServer(db, candidate, persona, decision, dayKey, log)
     } catch (e) {
       log.error({ err: e, personaId: persona.id }, '主动消息派发异常')
     }
@@ -520,7 +474,7 @@ export function evaluateCandidate(
     sentToday: row.sent_today,
     config,
     tzOffsetMinutes: TZ_OFFSET_MIN,
-    serverCanRun: row.key_location === 'server',
+    serverCanRun: true,
     ownerOnline: hub().isOnline(row.owner_id),
   })
   return { decision, persona }

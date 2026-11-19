@@ -1,7 +1,7 @@
 import type {
   ContactRelation,
   ConversationType,
-  KeyLocation,
+  RunLocation,
   LocalStatus,
   MemoryFactSubject,
   MessageType,
@@ -269,9 +269,8 @@ export interface AiProvider {
   ownerId: string
   name: string
   baseUrl: string
-  /** 服务端只返回掩码，客户端仅在本地模式下持有明文 */
+  /** 服务端只返回掩码，明文只留服务端 */
   apiKeyMasked?: string | null
-  keyLocation: KeyLocation
   model: string
   /** 识图模型名：把聊天图片转成文字描述，让不支持多模态的主模型也能看懂图片 */
   visionModel?: string | null
@@ -543,7 +542,7 @@ export interface AiGeneration {
   userMessageId?: string | null
   providerId: string
   personaId: string
-  runLocation: KeyLocation
+  runLocation: RunLocation
   model?: string | null
   status: 'pending' | 'streaming' | 'done' | 'error' | 'cancelled'
   error?: string | null

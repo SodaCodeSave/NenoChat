@@ -89,7 +89,6 @@ export interface ProviderPayload {
   baseUrl: string
   model: string
   apiKey?: string
-  keyLocation: 'local' | 'server'
   temperature?: number
   maxTokens?: number
   isDefault?: boolean
@@ -98,8 +97,7 @@ export interface ProviderPayload {
 }
 
 export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
-  const apiKeyEnc =
-    input.keyLocation === 'server' && input.apiKey ? encryptSecret(input.apiKey) : null
+  const apiKeyEnc = input.apiKey ? encryptSecret(input.apiKey) : null
 
   const row = withTx(db, () =>
     aiRepo.createProvider(db, {
@@ -107,7 +105,6 @@ export function createProvider(db: DB, ownerId: string, input: ProviderPayload):
       name: input.name,
       baseUrl: input.baseUrl,
       apiKeyEnc,
-      keyLocation: input.keyLocation,
       model: input.model,
       visionModel: input.visionModel,
       contextWindow: input.contextWindow,
@@ -123,15 +120,12 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
   const current = aiRepo.findProvider(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
-  const keyLocation = input.keyLocation ?? current.key_location
   const apiKeyEnc =
-    keyLocation === 'server'
-      ? input.apiKey === undefined
-        ? undefined
-        : input.apiKey
-          ? encryptSecret(input.apiKey)
-          : null
-      : null
+    input.apiKey === undefined
+      ? undefined
+      : input.apiKey
+        ? encryptSecret(input.apiKey)
+        : null
 
   const row = withTx(db, () =>
     aiRepo.updateProvider(db, id, {
@@ -140,7 +134,6 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
       model: input.model,
       visionModel: input.visionModel,
       contextWindow: input.contextWindow,
-      keyLocation: input.keyLocation,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
       isDefault: input.isDefault,
@@ -156,9 +149,9 @@ export function deleteProvider(db: DB, ownerId: string, id: string): void {
   aiRepo.softDeleteProvider(db, id)
 }
 
-/** 从服务端托管的 key 取明文，仅在 server 模式下可用 */
+/** 取服务端托管密钥的明文；没配密钥时返回空串，兼容不需要密钥的本地端点 */
 export function resolveServerApiKey(row: aiRepo.ProviderRow): string {
-  if (!row.api_key_enc) throw err.validation('该服务商没有托管密钥，请在本机配置')
+  if (!row.api_key_enc) return ''
   return decryptSecret(row.api_key_enc)
 }
 
@@ -914,9 +907,6 @@ async function runGenerationOnServer(
     )
     session = aiRepo.findSession(db, input.conversationId)
   }
-  if (provider.key_location !== 'server') {
-    throw err.validation('该服务商的密钥在本机，请使用桌面客户端生成')
-  }
   const apiKey = resolveServerApiKey(provider)
 
   // 先落用户消息，保证即使上游失败用户输入也不丢
@@ -1493,7 +1483,7 @@ function parseStickerTags(raw: string): string[] {
 
 /**
  * 服务端识图分析一张表情包的情绪标签，结果合并进 keywords。
- * 只有密钥托管在服务端且配了识图模型的服务商可用；本机密钥由客户端自行分析后回传。
+ * 需要服务商配了识图模型。
  */
 export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: string): Promise<string[]> {
   const sticker = stickersRepo.findSticker(db, stickerId)
@@ -1506,9 +1496,9 @@ export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: 
 
   const provider = aiRepo
     .listProviders(db, userId)
-    .find((row) => row.vision_model && row.key_location === 'server' && row.api_key_enc)
+    .find((row) => row.vision_model && row.api_key_enc)
   if (!provider) {
-    throw err.validation('没有可用的识图模型：需要配置识图模型且密钥托管在服务端的服务商，或使用桌面客户端分析')
+    throw err.validation('没有可用的识图模型：请给服务商配置识图模型')
   }
 
   const dataUrl = imageDataUrl(attachment)
@@ -1802,6 +1792,48 @@ export async function callUpstreamStream(input: {
   }
 }
 
+/** 拉取 OpenAI 兼容端点的模型列表，只回传 id，供前端下拉选择 */
+export async function listProviderModels(input: {
+  baseUrl: string
+  apiKey: string
+}): Promise<string[]> {
+  const base = input.baseUrl.trimEnd().replace(/\/$/, '')
+  const url = `${base}/models`
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20000)
+  try {
+    await assertAiUpstreamUrl(url)
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(input.apiKey ? { authorization: `Bearer ${input.apiKey}` } : {}),
+      },
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw err.upstreamAi(`上游返回 ${response.status}`, text.slice(0, 200))
+    }
+
+    const payload = (await response.json()) as {
+      data?: Array<{ id?: unknown } | unknown>
+    }
+    const rows = Array.isArray(payload.data) ? payload.data : []
+    const ids = rows
+      .map((row) => (typeof row === 'string' ? row : row && typeof row === 'object' && 'id' in row ? row.id : null))
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      .map((id) => id.trim())
+    return [...new Set(ids)].sort((a, b) => a.localeCompare(b)).slice(0, 1000)
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw err.upstreamAi('连接超时')
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /* ----------------------------- 连接测试 ----------------------------- */
 /** 用最小代价探一次上游：验证地址、密钥与模型名是否匹配 */
 export async function testProvider(input: {
@@ -2013,15 +2045,12 @@ export async function refreshProviderBalance(
   db: DB,
   ownerId: string,
   providerId: string,
-  clientApiKey?: string,
 ): Promise<AiProvider> {
   const row = aiRepo.findProvider(db, providerId)
   if (!row || row.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
-  const apiKey =
-    clientApiKey?.trim() ||
-    (row.key_location === 'server' && row.api_key_enc ? resolveServerApiKey(row) : '')
-  if (!apiKey) throw err.validation('没有可用密钥，本机密钥模式需要在请求里带上 API Key')
+  const apiKey = resolveServerApiKey(row)
+  if (!apiKey) throw err.validation('该服务商没有配置 API Key')
 
   const hit = await fetchProviderBalance({ baseUrl: row.base_url, apiKey })
   aiRepo.saveProviderBalance(db, providerId, hit)
