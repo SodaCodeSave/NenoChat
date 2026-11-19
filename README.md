@@ -132,6 +132,8 @@ pnpm build:app:integrated   # 一体化安装包（内置服务端，免登录�
 - 数据落在应用数据目录的 `server/` 下，日志是应用日志目录的 `integrated-server.log`。
 - 设置里的「手机接入」可以把服务端开放到局域网并生成二维码：手机扫码（`nenochat://pair?...`）或用配对码接入，手机和电脑看到同一份数据。配对码 5 分钟有效、一次性，关闭开关后服务端立刻退回只监听本机。
 
+发版时 CI 会产出 Windows（NSIS/MSI，联网版与一体版各一套）、Linux x64（AppImage/deb）与 Android arm64 安装包，最后由 `scripts/release-notes.mjs` 按真实资产列表在 Release 说明顶部生成下载表格。
+
 服务端也可用 Docker 部署：
 
 ```bash

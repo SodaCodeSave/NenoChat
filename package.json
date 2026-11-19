@@ -19,6 +19,7 @@
     "build:app:integrated": "pnpm build:integrated:server && pnpm --filter @nenochat/desktop tauri build --config src-tauri/tauri.integrated.conf.json",
     "version:print": "node scripts/version.mjs",
     "version:sync": "node scripts/sync-package-version.mjs",
+    "release:notes": "node scripts/release-notes.mjs",
     "typecheck": "pnpm -r --parallel typecheck",
     "test": "pnpm -r test"
   }
