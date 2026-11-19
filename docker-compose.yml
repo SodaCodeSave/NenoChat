@@ -17,6 +17,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # 版本由宿主机 git 派生后注入；镜像内无 .git，留空则回退到 unknown
+      APP_VERSION: ${APP_VERSION:-}
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-}
     volumes:
       # 数据卷：SQLite 数据库与上传文件
       - nenochat-data:/app/apps/server/data

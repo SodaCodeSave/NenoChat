@@ -23,6 +23,8 @@ describe('AboutSettings', () => {
     expect(source).toContain('title="版本信息"')
     expect(source).toContain('title="数据模式"')
     expect(source).toContain('客户端版本')
+    expect(source).toContain('CLIENT_VERSION')
+    expect(source).not.toContain('>0.1.0<')
     expect(source).toContain('servers.serverInfo?.version')
     expect(source).toContain('normalizeServerUrl')
   })

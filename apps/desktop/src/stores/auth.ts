@@ -5,6 +5,7 @@ import { authApi, notificationSettingsApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
+import { CLIENT_VERSION } from '@/version'
 import { useServersStore } from './servers'
 
 export type AuthStatus = 'idle' | 'restoring' | 'authenticated' | 'anonymous'
@@ -90,7 +91,7 @@ export const useAuthStore = defineStore('auth', () => {
     id: deviceId(),
     name: deviceName(),
     platform: platformName(),
-    appVersion: '0.1.0',
+    appVersion: CLIENT_VERSION,
   })
 
   function bindServer(): void {

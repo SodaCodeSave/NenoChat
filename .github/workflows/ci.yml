@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # git describe 需要完整 tag 历史才能判定当前版本
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 

@@ -1,4 +1,5 @@
 import { ApiErrorCode, type ApiErrorBody } from '@nenochat/shared'
+import { CLIENT_VERSION } from '@/version'
 
 export class ApiError extends Error {
   readonly code: string
@@ -45,7 +46,7 @@ const state: HttpState = {
   refresh: async () => null,
   onAuthLost: () => {},
   deviceId: null,
-  clientVersion: '0.1.0',
+  clientVersion: CLIENT_VERSION,
 }
 
 export function configureHttp(patch: Partial<HttpState>): void {

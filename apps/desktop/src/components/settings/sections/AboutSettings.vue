@@ -4,6 +4,7 @@ import BrandLogo from '@/components/layout/BrandLogo.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import { useServersStore, normalizeServerUrl } from '@/stores/servers'
+import { CLIENT_VERSION } from '@/version'
 
 const servers = useServersStore()
 
@@ -23,7 +24,7 @@ onMounted(() => {
 
     <SettingsCard id="version" title="版本信息" icon="message">
       <SettingRow label="客户端版本">
-        <span class="font-mono text-[12px] text-text">0.1.0</span>
+        <span class="font-mono text-[12px] text-text">{{ CLIENT_VERSION }}</span>
       </SettingRow>
       <SettingRow label="服务端版本">
         <span class="font-mono text-[12px] text-text">{{ servers.serverInfo?.version ?? '-' }}</span>

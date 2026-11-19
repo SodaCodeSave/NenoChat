@@ -2,11 +2,18 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
+import { readGitInfo, resolveVersion } from '../../scripts/version.mjs'
 
 const host = process.env.TAURI_DEV_HOST
+const appVersion = resolveVersion({ env: process.env, gitInfo: readGitInfo() }).appVersion
 
 export default defineConfig(() => ({
   plugins: [vue(), tailwindcss()],
+
+  // 构建时注入客户端版本，避免把版本号写死在源码里
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
 
   resolve: {
     alias: {

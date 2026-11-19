@@ -18,7 +18,8 @@ COPY apps/server/package.json ./apps/server/
 
 RUN pnpm install --filter @nenochat/server... --frozen-lockfile
 
-# 再复制源码
+# 再复制源码与版本解析脚本（服务端启动时据此读取版本）
+COPY scripts ./scripts
 COPY packages/shared ./packages/shared
 COPY apps/server ./apps/server
 

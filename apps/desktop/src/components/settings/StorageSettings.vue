@@ -30,6 +30,7 @@ import {
 import { pickBackupFile, saveBackupFile } from '@/platform/backup'
 import { clearMessageMirror, collectMirrorUsage, exportMirrorTables, importMirrorTables } from '@/db/dao/storage'
 import { useServersStore } from '@/stores/servers'
+import { CLIENT_VERSION } from '@/version'
 
 const servers = useServersStore()
 
@@ -158,7 +159,7 @@ async function exportBackup(): Promise<void> {
       server: { id: server.id, name: server.name, baseUrl: server.baseUrl },
       tables,
       preferences,
-      appVersion: '0.1.0',
+      appVersion: CLIENT_VERSION,
     })
     const result = await saveBackupFile(backupFileName(server.name), JSON.stringify(backup, null, 2))
     if (!result) {

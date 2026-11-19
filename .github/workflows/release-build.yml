@@ -24,6 +24,9 @@ jobs:
     needs: create-release
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 版本由 git tag / commit 动态派生，需要完整历史
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -38,6 +41,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Sync package version from git
+        run: pnpm version:sync
 
       - name: Build Windows x64 bundles
         run: pnpm --filter @nenochat/desktop tauri build --target x86_64-pc-windows-msvc
@@ -58,6 +64,9 @@ jobs:
     needs: create-release
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 版本由 git tag / commit 动态派生，需要完整历史
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -83,6 +92,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Sync package version from git
+        run: pnpm version:sync
 
       # 仓库只跟踪定制过的 app/build.gradle.kts（含 release 放行明文 http），
       # 其余 Android 工程由 CLI 生成，最后用跟踪版本覆盖回去。
