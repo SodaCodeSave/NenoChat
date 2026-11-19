@@ -12,16 +12,24 @@ import BrandLogo from '@/components/layout/BrandLogo.vue'
 .boot-screen {
   position: absolute;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   background: var(--surface);
 }
 
 .boot-screen__logo {
-  position: absolute;
-  top: 62%;
-  left: 50%;
   height: 30px;
   color: var(--text-strong);
-  transform: translate(-50%, -50%);
+}
+
+@media (max-width: 767px) {
+  .boot-screen__logo {
+    position: absolute;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 48px);
+    left: 50%;
+    transform: translateX(-50%);
+  }
 }
 </style>
