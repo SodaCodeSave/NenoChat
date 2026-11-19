@@ -181,18 +181,22 @@ function markImageLoaded(id: string): void {
 }
 
 const bilibiliIcon = connectorPresetOf('bilibili')?.icon ?? null
+const heweatherIcon = connectorPresetOf('heweather')?.icon ?? null
 
 /** 固化提示：本次回复用过的连接器动作，仅在该次生成的第一条消息上显示 */
 const connectorHints = computed(() => {
   if (!props.aiGroupStart) return []
   return (props.message.meta?.ai?.connector ?? []).map((action) => ({
     kind: action.kind,
+    icon: action.kind === 'bilibili' ? bilibiliIcon : action.kind === 'weather' ? heweatherIcon : null,
     label:
       action.kind === 'web_search'
         ? '已联网搜索'
         : action.kind === 'fetch'
           ? `已阅读${action.detail ? ` ${action.detail}` : '网页'}`
-          : `已获取 B 站视频${action.detail ? `《${action.detail}》` : '资料'}`,
+          : action.kind === 'weather'
+            ? '已查询天气'
+            : `已获取 B 站视频${action.detail ? `《${action.detail}》` : '资料'}`,
   }))
 })
 
@@ -203,7 +207,9 @@ const liveConnectorLabel = computed(() => {
     ? '正在联网搜索…'
     : props.liveConnector === 'fetch'
       ? '正在阅读网页…'
-      : '正在获取 B 站视频资料…'
+      : props.liveConnector === 'weather'
+        ? '正在查询天气…'
+        : '正在获取 B 站视频资料…'
 })
 </script>
 
@@ -297,8 +303,8 @@ const liveConnectorLabel = computed(() => {
                 <span v-if="index > 0" :class="qqOwn ? 'text-white/40' : 'text-muted/50'">·</span>
                 <span class="flex items-center gap-1">
                   <img
-                    v-if="hint.kind === 'bilibili' && bilibiliIcon"
-                    :src="bilibiliIcon"
+                    v-if="hint.icon"
+                    :src="hint.icon"
                     class="h-3 w-3 object-contain"
                     alt=""
                   />

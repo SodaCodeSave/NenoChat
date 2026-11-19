@@ -463,11 +463,27 @@ interface WeatherPayload {
   fxLink?: string
   now?: { temp?: string; feelsLike?: string; text?: string; windDir?: string; windScale?: string; humidity?: string; precip?: string; vis?: string }
   daily?: Array<{ fxDate?: string; tempMax?: string; tempMin?: string; textDay?: string; windDirDay?: string; windScaleDay?: string }>
+  condition?: { text?: string }
+  temperature?: { value?: number; unit?: string }
+  feelsLike?: { value?: number; unit?: string }
+  wind?: { direction?: { compass?: string }; scale?: number }
+  humidity?: number
 }
 
 function weatherUrl(config: ConnectorConfig, endpoint: string, location: string): string {
-  const base = (config.baseUrl || DEFAULTS.heweather.baseUrl).replace(/\/$/, '')
-  const url = new URL(`${base}/${endpoint}`)
+  let base = (config.baseUrl || DEFAULTS.heweather.baseUrl).trim().replace(/\/+$/, '')
+  // 和风天气 Web API 的地址通常填写为根域名或 /v7；统一补齐版本路径，避免
+  // 用户填写 https://api.qweather.com 后请求成 /weather/now 导致 404。
+  try {
+    const parsed = new URL(base)
+    if (parsed.hostname === 'api.qweather.com' && !parsed.pathname.endsWith('/v7')) {
+      base = `${base}/v7`
+    }
+  } catch {
+    // URL 校验交给后续请求处理，保持原有错误信息。
+  }
+  const normalizedEndpoint = endpoint.replace(/^\/+/, '')
+  const url = new URL(`${base}/${normalizedEndpoint}`)
   url.searchParams.set('location', location)
   return url.toString()
 }
@@ -476,19 +492,49 @@ export async function fetchHeweather(row: repo.ConnectorRow): Promise<string> {
   const config = parseConfig(row)
   const secret = readConnectorSecret(row)
   if (!secret.apiKey) throw err.validation('该连接器没有保存和风天气 API Key')
-  const location = config.latitude != null && config.longitude != null
-    ? `${config.longitude},${config.latitude}`
-    : config.location?.trim()
+  const coordinates = config.latitude != null && config.longitude != null
+    ? { latitude: config.latitude, longitude: config.longitude }
+    : null
+  const location = coordinates ? `${coordinates.longitude},${coordinates.latitude}` : config.location?.trim()
   if (!location) throw err.validation('请先配置默认城市或经纬度')
-  const [now, forecast] = await Promise.all([
-    fetchConnectorJson<WeatherPayload>(weatherUrl(config, 'weather/now', location) + `&key=${encodeURIComponent(secret.apiKey)}`),
-    fetchConnectorJson<WeatherPayload>(weatherUrl(config, 'weather/3d', location) + `&key=${encodeURIComponent(secret.apiKey)}`),
-  ])
-  if (now.code !== '200') throw new ConnectorRequestError(`和风天气返回错误：${now.code ?? '未知'}`)
-  const current = now.now
-  const lines = [`【天气信息】${config.location ?? location}`, `当前：${current?.text ?? '未知'}，${current?.temp ?? '--'}°C（体感 ${current?.feelsLike ?? '--'}°C）`]
-  if (current?.windDir || current?.windScale) lines.push(`风：${current.windDir ?? ''} ${current.windScale ?? ''}级，湿度 ${current.humidity ?? '--'}%`)
-  for (const day of (forecast.daily ?? []).slice(0, 3)) lines.push(`${day.fxDate ?? ''}：${day.textDay ?? ''}，${day.tempMin ?? '--'}-${day.tempMax ?? '--'}°C，${day.windDirDay ?? ''}${day.windScaleDay ?? ''}级`)
+  const base = (config.baseUrl || DEFAULTS.heweather.baseUrl).replace(/\/+$/, '')
+  const isV1 = /\/weather\/v1(?:\/|$)/.test(base) || /qweatherapi\.com$/i.test(new URL(base).hostname)
+  const apiKeyHeaders = { 'X-QW-Api-Key': secret.apiKey! }
+  let current: WeatherPayload
+  let forecast: WeatherPayload | null = null
+  if (isV1) {
+    if (!coordinates) throw err.validation('和风天气实时天气 v1 需要纬度和经度，请填写坐标')
+    const v1Base = base.replace(/\/weather\/v1\/?$/, '').replace(/\/$/, '')
+    const currentUrl = `${v1Base}/weather/v1/current/${coordinates.latitude}/${coordinates.longitude}`
+    const dailyUrl = `${v1Base}/weather/v1/daily/${coordinates.latitude}/${coordinates.longitude}`
+    ;[current, forecast] = await Promise.all([
+      fetchConnectorJson<WeatherPayload>(currentUrl, { headers: apiKeyHeaders }),
+      fetchConnectorJson<WeatherPayload>(dailyUrl, { headers: apiKeyHeaders }).catch(() => null),
+    ])
+  } else {
+    let v7Base = base
+    if (/^https?:\/\/(?:api|devapi)\.qweather\.com$/i.test(base)) v7Base += '/v7'
+    const withKey = (endpoint: string) => {
+      const url = new URL(`${v7Base}/${endpoint}`)
+      url.searchParams.set('location', location)
+      url.searchParams.set('key', secret.apiKey!)
+      return url.toString()
+    }
+    ;[current, forecast] = await Promise.all([
+      fetchConnectorJson<WeatherPayload>(withKey('weather/now')),
+      fetchConnectorJson<WeatherPayload>(withKey('weather/3d')).catch(() => null),
+    ])
+  }
+  if (current.code && current.code !== '200') throw new ConnectorRequestError(`和风天气返回错误：${current.code}`)
+  const legacy = current.now
+  const description = legacy?.text ?? current.condition?.text ?? '未知'
+  const temperature = legacy?.temp ?? current.temperature?.value ?? '--'
+  const feelsLike = legacy?.feelsLike ?? current.feelsLike?.value ?? '--'
+  const lines = [`【天气信息】${config.location ?? location}`, `当前：${description}，${temperature}°C（体感 ${feelsLike}°C）`]
+  if (legacy?.windDir || current.wind?.direction?.compass || legacy?.windScale || current.wind?.scale) {
+    lines.push(`风：${legacy?.windDir ?? current.wind?.direction?.compass ?? ''} ${legacy?.windScale ?? current.wind?.scale ?? ''}级，湿度 ${legacy?.humidity ?? (current.humidity == null ? '--' : Math.round(current.humidity * 100))}%`)
+  }
+  for (const day of (forecast?.daily ?? []).slice(0, 3)) lines.push(`${day.fxDate ?? ''}：${day.textDay ?? ''}，${day.tempMin ?? '--'}-${day.tempMax ?? '--'}°C，${day.windDirDay ?? ''}${day.windScaleDay ?? ''}级`)
   return lines.join('\n')
 }
 

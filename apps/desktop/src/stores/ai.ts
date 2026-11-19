@@ -128,7 +128,7 @@ export const useAiStore = defineStore('ai', () => {
   const loaded = ref(false)
   const streaming = ref<Record<string, { generationId: string; text: string }>>({})
   const generating = ref<Record<string, boolean>>({})
-  /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索），用于占位气泡的实时提示 */
+  /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索 / 天气），用于占位气泡的实时提示 */
   const connectorLive = ref<Record<string, ConnectorActionMeta['kind'] | null>>({})
   const lastError = ref<string | null>(null)
 
@@ -487,8 +487,16 @@ export const useAiStore = defineStore('ai', () => {
       const mentioned = /天气|气温|温度|下雨|降雨|晴天|阴天|预报|几度|穿什么/.test(userInput)
       const config = weather?.config
       if (weather && config && (config.weatherAlways || (config.weatherOnMention && mentioned) || (config.weatherTool && mentioned))) {
-        contextBlocks.push((await connectorApi.weather()).weather)
-        connectorActions.push({ kind: 'weather' as ConnectorActionMeta['kind'] })
+        setConnectorLive(conversationId, 'weather')
+        try {
+          const { weather: weatherContext } = await connectorApi.weather()
+          if (weatherContext) {
+            contextBlocks.push(weatherContext)
+            connectorActions.push({ kind: 'weather' })
+          }
+        } finally {
+          setConnectorLive(conversationId, null)
+        }
       }
     } catch {
       /* 天气失败不阻断回复 */

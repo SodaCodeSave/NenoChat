@@ -24,7 +24,7 @@ export interface ConnectorContextOptions {
 }
 
 export interface ConnectorContextResult {
-  /** B 站视频与网页搜索结果 */
+  /** 天气、B 站视频与网页搜索结果 */
   context: string | null
   /** 用户消息里链接的网页正文摘要，独立 token 预算 */
   fetchContext: string | null
@@ -51,7 +51,19 @@ export async function buildConnectorContext(
     const config = JSON.parse(weather.config || '{}') as Record<string, unknown>
     const mentioned = /天气|气温|温度|下雨|降雨|晴天|阴天|预报|几度|穿什么/.test(text)
     if (config.weatherAlways || (config.weatherOnMention && mentioned) || (config.weatherTool && mentioned)) {
-      try { blocks.push(await connectorService.fetchHeweather(weather)) } catch { /* 天气失败不阻断回复 */ }
+      const action: ConnectorActionMeta = { kind: 'weather' }
+      options.onActionStart?.('weather')
+      try {
+        const block = await connectorService.fetchHeweather(weather)
+        if (block) {
+          blocks.push(block)
+          actions.push(action)
+        }
+      } catch {
+        /* 天气失败不阻断回复 */
+      } finally {
+        options.onActionDone?.(action)
+      }
     }
   }
 

@@ -110,7 +110,7 @@ export interface AiMessageMeta {
   cancelled?: boolean
   /** 由服务端定时任务（或客户端代跑）主动发起的消息 */
   proactive?: boolean
-  /** 本次回复用到的连接器动作（B 站 / 网页抓取 / 联网搜索） */
+  /** 本次回复用到的连接器动作（B 站 / 网页抓取 / 联网搜索 / 天气） */
   connector?: ConnectorActionMeta[]
 }
 
