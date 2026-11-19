@@ -5,16 +5,19 @@ import type { AiPersona, Contact, PublicUser } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { conversationApi, userApi } from '@/api/endpoints'
 import { aiApi } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 import { useContactsStore } from '@/stores/contacts'
 import { useConversationsStore } from '@/stores/conversations'
+import { useMessagesStore } from '@/stores/messages'
 import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 const contacts = useContactsStore()
 const conversations = useConversationsStore()
+const messages = useMessagesStore()
 const ai = useAiStore()
 const ui = useUiStore()
 
@@ -26,6 +29,14 @@ const starting = ref<string | null>(null)
 const showPersonaPicker = ref(false)
 const editingId = ref<string | null>(null)
 const aliasDraft = ref('')
+const pendingRemove = ref<Contact | null>(null)
+const removing = ref(false)
+const pendingRemoveOpen = computed({
+  get: () => pendingRemove.value !== null,
+  set: (value: boolean) => {
+    if (!value) pendingRemove.value = null
+  },
+})
 
 const friends = computed(() => contacts.friends)
 const friendIds = computed(() => new Set(contacts.friends.map((item) => item.contactUserId)))
@@ -151,12 +162,36 @@ async function commitRename(contact: Contact): Promise<void> {
   }
 }
 
-async function removeContact(contact: Contact): Promise<void> {
+function askRemoveContact(contact: Contact): void {
   error.value = null
+  pendingRemove.value = contact
+}
+
+async function confirmRemoveContact(): Promise<void> {
+  const contact = pendingRemove.value
+  if (!contact || removing.value) return
+
+  removing.value = true
   try {
     await contacts.removeFriend(contact.contactUserId)
+    const persona = personaByUserId.value.get(contact.contactUserId)
+    const conversationIds = conversations.items
+      .filter(
+        (item) =>
+          (item.type === 'direct' && item.partnerId === contact.contactUserId) ||
+          (persona && item.type === 'ai' && item.aiPersonaId === persona.id),
+      )
+      .map((item) => item.id)
+
+    for (const id of conversationIds) {
+      await conversations.removeForever(id)
+      await messages.removeConversation(id)
+    }
+    pendingRemove.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : '移除失败'
+  } finally {
+    removing.value = false
   }
 }
 
@@ -460,7 +495,7 @@ onBeforeUnmount(() => {
                 type="button"
                 class="rounded-md p-1 text-muted hover:bg-surface-3 hover:text-danger"
                 title="从通讯录移除"
-                @click.stop="removeContact(contact)"
+                @click.stop="askRemoveContact(contact)"
               >
                 <Icon name="close" :size="13" />
               </button>
@@ -480,5 +515,14 @@ onBeforeUnmount(() => {
         </section>
       </div>
     </div>
+
+    <ConfirmDialog
+      v-model:open="pendingRemoveOpen"
+      title="移除这个联系人？"
+      description="只会清除你这边的聊天记录，对方的历史不受影响。重新添加后会开启新对话。"
+      confirm-text="移除联系人"
+      :loading="removing"
+      @confirm="confirmRemoveContact"
+    />
   </div>
 </template>

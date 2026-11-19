@@ -5,17 +5,20 @@ import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import ConversationItem from './ConversationItem.vue'
 import NewChatDialog from './NewChatDialog.vue'
 import { useConversationsStore } from '@/stores/conversations'
 import { useMessagesStore } from '@/stores/messages'
 import { useUiStore } from '@/stores/ui'
-import { conversationTitle } from '@/composables/conversation'
+import { useConversationTitle } from '@/composables/conversation'
+import { conversationApi, type ConversationSummary } from '@/api/endpoints'
 
 const router = useRouter()
 const conversations = useConversationsStore()
 const messages = useMessagesStore()
 const ui = useUiStore()
+const titleOf = useConversationTitle()
 
 /** 分组标题上的未读汇总，入口角标之外再给一层细分 */
 function unreadOf(items: Array<{ unreadCount?: number | null }>): number {
@@ -27,13 +30,21 @@ const props = defineProps<{ mobile?: boolean }>()
 const keyword = ref('')
 const dialogOpen = ref(false)
 const menu = ref<{ id: string; x: number; y: number } | null>(null)
+const pendingDelete = ref<ConversationSummary | null>(null)
+const deleting = ref(false)
+const deleteOpen = computed({
+  get: () => pendingDelete.value !== null,
+  set: (value: boolean) => {
+    if (!value) pendingDelete.value = null
+  },
+})
 /** 长按弹出面板后，抬手产生的合成 click 不能立刻把面板关掉 */
 let menuOpenedAt = 0
 
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   if (!q) return conversations.ordered
-  return conversations.ordered.filter((c) => conversationTitle(c).toLowerCase().includes(q))
+  return conversations.ordered.filter((c) => titleOf(c).toLowerCase().includes(q))
 })
 
 const pinnedAi = computed(() => filtered.value.filter((c) => c.type === 'ai' && c.pinnedAt))
@@ -71,6 +82,27 @@ async function handleMarkRead(): Promise<void> {
   const last = messages.lastMessageOf(target.id)
   await conversations.markRead(target.id, last?.seq ?? 0)
   menu.value = null
+}
+
+function askDeleteDirect(): void {
+  const target = menuTarget.value
+  if (!target || target.type !== 'direct') return
+  pendingDelete.value = target
+  menu.value = null
+}
+
+async function confirmDeleteDirect(): Promise<void> {
+  const target = pendingDelete.value
+  if (!target || deleting.value) return
+  deleting.value = true
+  try {
+    await conversationApi.deleteForMe(target.id)
+    await conversations.removeForever(target.id)
+    await messages.removeConversation(target.id)
+    pendingDelete.value = null
+  } finally {
+    deleting.value = false
+  }
 }
 
 function handleCreated(id: string): void {
@@ -254,7 +286,7 @@ onBeforeUnmount(() => {
             @click.stop
           >
             <p class="truncate border-b border-line px-4 py-3 text-center text-[12px] text-muted">
-              {{ menuTarget ? conversationTitle(menuTarget) : '' }}
+              {{ menuTarget ? titleOf(menuTarget) : '' }}
             </p>
             <button
               type="button"
@@ -271,6 +303,15 @@ onBeforeUnmount(() => {
             >
               <Icon name="check" :size="17" />
               标为已读
+            </button>
+            <button
+              v-if="menuTarget?.type === 'direct'"
+              type="button"
+              class="flex w-full items-center gap-3 px-4 py-3.5 text-left text-[15px] text-danger active:bg-surface-2"
+              @click="askDeleteDirect"
+            >
+              <Icon name="trash" :size="17" />
+              删除对话
             </button>
             <button
               type="button"
@@ -304,9 +345,27 @@ onBeforeUnmount(() => {
             <Icon name="check" :size="14" />
             标为已读
           </button>
+          <button
+            v-if="menuTarget?.type === 'direct'"
+            type="button"
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-danger hover:bg-surface-2"
+            @click="askDeleteDirect"
+          >
+            <Icon name="trash" :size="14" />
+            删除对话
+          </button>
         </div>
       </template>
     </Teleport>
+
+    <ConfirmDialog
+      v-model:open="deleteOpen"
+      title="删除这个对话？"
+      description="只会从你的会话列表移除并清除本地聊天记录，对方的历史不受影响。"
+      confirm-text="删除对话"
+      :loading="deleting"
+      @confirm="confirmDeleteDirect"
+    />
 
     <NewChatDialog v-if="dialogOpen" @close="dialogOpen = false" @created="handleCreated" />
   </aside>

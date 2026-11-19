@@ -18,6 +18,7 @@ vi.mock('@/platform/db', () => ({
 vi.mock('@/db/dao/messages', () => ({
   confirmPending: vi.fn(),
   deleteByNonce: vi.fn(),
+  deleteConversationMessages: vi.fn(),
   insertPending: vi.fn(),
   listMessages: vi.fn(),
   markFailed: vi.fn(),

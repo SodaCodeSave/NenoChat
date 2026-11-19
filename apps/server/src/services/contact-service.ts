@@ -8,6 +8,9 @@ import { withTx } from '../db/tx'
 import * as contactsRepo from '../db/repo/contacts'
 import * as usersRepo from '../db/repo/users'
 import * as aiRepo from '../db/repo/ai'
+import * as conversationsRepo from '../db/repo/conversations'
+import * as conversationService from './conversation-service'
+import type { ConversationCleanup } from './conversation-service'
 import { writeChange } from './change-log'
 import { err } from '../util/errors'
 import { emitContactUpdated } from '../ws/emitter'
@@ -210,18 +213,33 @@ export function removeFriend(db: DB, ownerId: string, contactUserId: string): vo
   const mine = contactsRepo.find(db, ownerId, contactUserId)
   if (!mine) throw err.notFound('联系人不存在')
 
+  const cleanups: ConversationCleanup[] = []
+
   withTx(db, () => {
     contactsRepo.removePair(db, ownerId, contactUserId)
     writeContactChange(db, ownerId, null, contactUserId, 'delete', ownerId)
     writeContactChange(db, contactUserId, null, ownerId, 'delete', ownerId)
 
-    // 从通讯录移除自己的 AI 角色：会话保留，主动消息也跟着停
+    const direct = conversationsRepo.findActiveDirectWithUser(db, ownerId, contactUserId)
+    if (direct) {
+      const cleanup = conversationService.cleanupForUser(db, direct.id, ownerId)
+      if (cleanup) cleanups.push(cleanup)
+    }
+
     const persona = aiRepo.findPersonaByUserId(db, contactUserId)
     if (persona && persona.owner_id === ownerId) {
       aiRepo.updatePersona(db, persona.id, { inContacts: false })
+      const aiConversation = conversationsRepo.findAiByOwnerAndPersona(db, ownerId, persona.id)
+      if (aiConversation) {
+        const cleanup = conversationService.cleanupForUser(db, aiConversation.id, ownerId)
+        if (cleanup) cleanups.push(cleanup)
+      }
     }
   })
 
+  for (const cleanup of cleanups) {
+    conversationService.emitConversationCleanup(db, cleanup)
+  }
   emitContactUpdated(ownerId, { ownerId, contactUserId } as Contact)
   emitContactUpdated(contactUserId, { ownerId: contactUserId, contactUserId: ownerId } as Contact)
 }

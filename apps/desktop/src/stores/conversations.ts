@@ -4,6 +4,7 @@ import type { ConversationSummary } from '@/api/endpoints'
 import { conversationApi, messageApi } from '@/api/endpoints'
 import {
   applyConversationSummaries,
+  deleteConversation,
   listConversations,
   patchConversationUnread,
   upsertConversation,
@@ -106,6 +107,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (activeId.value === id) activeId.value = null
   }
 
+  /** 从本地镜像彻底移除会话 */
+  async function removeForever(id: string): Promise<void> {
+    remove(id)
+    if (hasLocalDb() && serverId.value) {
+      await deleteConversation(serverId.value, id)
+    }
+  }
+
   /** 清空未读并同步服务端游标 */
   async function markRead(conversationId: string, seq: number): Promise<void> {
     const target = byId.value.get(conversationId)
@@ -173,6 +182,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     upsertLocal,
     setActive,
     remove,
+    removeForever,
     markRead,
     bumpUnread,
     pin,

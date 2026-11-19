@@ -11,6 +11,7 @@ import { messageApi } from '@/api/endpoints'
 import {
   confirmPending,
   deleteByNonce,
+  deleteConversationMessages,
   insertPending,
   listMessages,
   markFailed,
@@ -369,6 +370,16 @@ export const useMessagesStore = defineStore('messages', () => {
     await applyUpdated(result.message)
   }
 
+  /** 移除会话时清掉内存与本地消息镜像 */
+  async function removeConversation(conversationId: string): Promise<void> {
+    const next = { ...buckets.value }
+    delete next[conversationId]
+    buckets.value = next
+    if (hasLocalDb() && serverId.value) {
+      await deleteConversationMessages(serverId.value, conversationId)
+    }
+  }
+
   function reset(): void {
     buckets.value = {}
   }
@@ -392,6 +403,7 @@ export const useMessagesStore = defineStore('messages', () => {
     edit,
     recall,
     pin,
+    removeConversation,
     reset,
   }
 })

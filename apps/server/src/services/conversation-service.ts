@@ -3,6 +3,7 @@ import {
   Permission,
   Role,
   dmKey,
+  ulid,
   type Conversation,
   type Member,
 } from '@nenochat/shared'
@@ -87,27 +88,18 @@ export function openDirect(db: DB, userId: string, targetUserId: string): Conver
   const target = usersRepo.findById(db, targetUserId)
   if (!target) throw err.notFound('用户不存在')
 
-  const key = dmKey(userId, targetUserId)
-  const existing = conversationsRepo.findByDmKey(db, key)
-  if (existing) {
-    // 曾退出过私聊的成员重新加入
-    withTx(db, () => {
-      if (!membersRepo.findActive(db, existing.id, userId)) {
-        membersRepo.upsert(db, { conversationId: existing.id, userId })
-      }
-      if (!membersRepo.findActive(db, existing.id, targetUserId)) {
-        membersRepo.upsert(db, { conversationId: existing.id, userId: targetUserId })
-      }
-    })
-    return conversationsRepo.mapConversation(existing)
-  }
+  const active = conversationsRepo.findActiveDirectWithUser(db, userId, targetUserId)
+  if (active) return conversationsRepo.mapConversation(active)
+
+  const baseKey = dmKey(userId, targetUserId)
+  const existing = conversationsRepo.findByDmKey(db, baseKey)
 
   const conv = withTx(db, () => {
     const row = conversationsRepo.create(db, {
       type: ConversationType.Direct,
       name: null,
       ownerId: userId,
-      dmKey: key,
+      dmKey: existing ? `${baseKey}:${ulid()}` : baseKey,
     })
     membersRepo.upsert(db, { conversationId: row.id, userId, role: Role.Owner })
     membersRepo.upsert(db, { conversationId: row.id, userId: targetUserId, role: Role.Member })
@@ -287,6 +279,63 @@ export function removeMember(
   })
 
   emitMemberRemoved(db, conversationId, targetUserId, recipients)
+}
+
+export interface ConversationCleanup {
+  conversationId: string
+  type: ConversationType
+  actorId: string
+}
+
+/** 只清当前用户这一侧的私聊：退出真人私聊，彻底删除自己的 AI 会话 */
+export function cleanupForUser(
+  db: DB,
+  conversationId: string,
+  actorId: string,
+): ConversationCleanup | null {
+  const conversation = conversationsRepo.findById(db, conversationId)
+  if (!conversation || conversation.deleted_at !== null) return null
+  if (conversation.type !== ConversationType.Direct && conversation.type !== ConversationType.Ai) {
+    throw err.forbidden('只能删除私聊会话')
+  }
+  if (!membersRepo.findActive(db, conversationId, actorId)) return null
+
+  if (conversation.type === ConversationType.Ai) {
+    conversationsRepo.hardDelete(db, conversationId)
+  } else {
+    writeChange(db, {
+      entity: 'member',
+      entityId: actorId,
+      op: 'delete',
+      conversationId,
+      payload: { conversationId, userId: actorId },
+      actorId,
+    })
+    membersRepo.markLeft(db, conversationId, actorId)
+  }
+
+  writeChange(db, {
+    entity: 'conversation',
+    entityId: conversationId,
+    op: 'delete',
+    payload: { id: conversationId },
+    actorId,
+    userId: actorId,
+  })
+
+  return { conversationId, type: conversation.type, actorId }
+}
+
+/** 清理完成后的广播：真人私聊通知对端成员变化，AI 会话没有第二方 */
+export function emitConversationCleanup(db: DB, cleanup: ConversationCleanup): void {
+  if (cleanup.type === ConversationType.Direct) {
+    emitMemberRemoved(db, cleanup.conversationId, cleanup.actorId)
+  }
+}
+
+export function deleteConversationForUser(db: DB, conversationId: string, actorId: string): void {
+  const cleanup = withTx(db, () => cleanupForUser(db, conversationId, actorId))
+  if (cleanup) emitConversationCleanup(db, cleanup)
 }
 
 export function setPin(db: DB, conversationId: string, userId: string, pinned: boolean): Member {

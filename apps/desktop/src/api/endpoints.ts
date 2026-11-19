@@ -79,6 +79,7 @@ export const conversationApi = {
     http.delete<{ ok: boolean }>(p(`/conversations/${id}/members/${userId}`)),
   transfer: (id: string, userId: string) =>
     http.post<{ previous: Member; next: Member }>(p(`/conversations/${id}/transfer`), { userId }),
+  deleteForMe: (id: string) => http.delete<{ ok: boolean }>(p(`/conversations/${id}/for-me`)),
   dissolve: (id: string) => http.delete<{ ok: boolean }>(p(`/conversations/${id}`)),
 }
 

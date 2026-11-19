@@ -67,6 +67,38 @@ export function findByPersonaId(db: DB, personaId: string): ConversationRow | un
     .get(personaId) as ConversationRow | undefined
 }
 
+/** 当前用户与指定对象仍然有效的私聊，取最新一代 */
+export function findActiveDirectWithUser(
+  db: DB,
+  ownerId: string,
+  otherUserId: string,
+): ConversationRow | undefined {
+  return db
+    .prepare(
+      `SELECT c.* FROM conversations c
+       JOIN conversation_members mine ON mine.conversation_id = c.id AND mine.user_id = ? AND mine.left_at IS NULL
+       JOIN conversation_members theirs ON theirs.conversation_id = c.id AND theirs.user_id = ?
+       WHERE c.type = 'direct' AND c.deleted_at IS NULL
+       ORDER BY c.created_at DESC LIMIT 1`,
+    )
+    .get(ownerId, otherUserId) as ConversationRow | undefined
+}
+
+/** 用户与自己的 AI 角色之间的会话 */
+export function findAiByOwnerAndPersona(
+  db: DB,
+  ownerId: string,
+  personaId: string,
+): ConversationRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM conversations
+       WHERE type = 'ai' AND ai_owner_user_id = ? AND ai_persona_id = ? AND deleted_at IS NULL
+       ORDER BY created_at LIMIT 1`,
+    )
+    .get(ownerId, personaId) as ConversationRow | undefined
+}
+
 export interface CreateConversationInput {
   type: ConversationType
   name?: string | null
@@ -157,6 +189,11 @@ export function softDelete(db: DB, id: string): void {
   db.prepare('UPDATE conversations SET deleted_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, id)
 }
 
+/** 删除会话实体，关联的消息、成员与已读游标由外键级联清理 */
+export function hardDelete(db: DB, id: string): void {
+  db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
+}
+
 export interface ConversationListRow extends ConversationRow {
   pinned_at: number | null
   notification_level: string | null
@@ -196,13 +233,16 @@ export function listForUser(db: DB, userId: string): ConversationListRow[] {
                   AND msg.deleted_at IS NULL
                   AND COALESCE(msg.sender_id, '') <> ?) AS mention_count,
               (SELECT p.id FROM conversation_members m3 JOIN users p ON p.id = m3.user_id
-                WHERE m3.conversation_id = c.id AND m3.left_at IS NULL AND m3.user_id <> ?
+                WHERE m3.conversation_id = c.id AND m3.user_id <> ?
+                ORDER BY (m3.left_at IS NULL) DESC, m3.joined_at ASC
                 LIMIT 1) AS partner_id,
               (SELECT p.display_name FROM conversation_members m3 JOIN users p ON p.id = m3.user_id
-                WHERE m3.conversation_id = c.id AND m3.left_at IS NULL AND m3.user_id <> ?
+                WHERE m3.conversation_id = c.id AND m3.user_id <> ?
+                ORDER BY (m3.left_at IS NULL) DESC, m3.joined_at ASC
                 LIMIT 1) AS partner_name,
               (SELECT p.avatar_url FROM conversation_members m3 JOIN users p ON p.id = m3.user_id
-                WHERE m3.conversation_id = c.id AND m3.left_at IS NULL AND m3.user_id <> ?
+                WHERE m3.conversation_id = c.id AND m3.user_id <> ?
+                ORDER BY (m3.left_at IS NULL) DESC, m3.joined_at ASC
                 LIMIT 1) AS partner_avatar_url
        FROM conversations c
        JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ? AND cm.left_at IS NULL

@@ -7,8 +7,8 @@ import type { ConversationSummary } from '@/api/endpoints'
 import {
   conversationAvatar,
   conversationSeed,
-  conversationTitle,
   formatListTime,
+  useConversationTitle,
   messagePreview,
 } from '@/composables/conversation'
 import { useLongPress } from '@/composables/use-long-press'
@@ -23,7 +23,8 @@ const messages = useMessagesStore()
 const conversations = useConversationsStore()
 const ui = useUiStore()
 
-const title = computed(() => conversationTitle(props.conversation))
+const titleOf = useConversationTitle()
+const title = computed(() => titleOf(props.conversation))
 const preview = computed(() => {
   const last = messages.lastMessageOf(props.conversation.id)
   if (last) return messagePreview(last)

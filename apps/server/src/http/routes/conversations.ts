@@ -94,6 +94,13 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
+  /** 单侧删除私聊会话，对端历史不受影响 */
+  app.delete<{ Params: { id: string } }>('/conversations/:id/for-me', async (request) => {
+    const userId = await requireUserId(request)
+    conversationService.deleteConversationForUser(db, request.params.id, userId)
+    return { ok: true }
+  })
+
   app.delete<{ Params: { id: string } }>('/conversations/:id', async (request) => {
     const userId = await requireUserId(request)
     conversationService.dissolveGroup(db, request.params.id, userId)

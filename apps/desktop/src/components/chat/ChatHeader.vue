@@ -4,7 +4,7 @@ import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import type { ConversationSummary } from '@/api/endpoints'
 
-import { conversationTitle } from '@/composables/conversation'
+import { useConversationTitle } from '@/composables/conversation'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -29,7 +29,8 @@ const ui = useUiStore()
 const isGroup = computed(() => props.conversation.type === 'group')
 const isAi = computed(() => props.conversation.type === 'ai')
 
-const title = computed(() => conversationTitle(props.conversation))
+const titleOf = useConversationTitle()
+const title = computed(() => titleOf(props.conversation))
 
 const subtitle = computed(() => {
   if (props.typingNames && props.typingNames.length > 0) {

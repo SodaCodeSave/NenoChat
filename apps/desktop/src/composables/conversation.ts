@@ -1,18 +1,29 @@
+import { computed } from 'vue'
 import type { ConversationSummary } from '@/api/endpoints'
 import type { Message } from '@nenochat/shared'
+import { useContactsStore } from '@/stores/contacts'
 
 /**
  * 会话展示信息的统一推导：标题、头像、最后一条消息摘要。
  * 私聊用对方资料，群聊与 AI 会话用自身名称。
  */
-export function conversationTitle(conversation: ConversationSummary): string {
+export function conversationTitle(conversation: ConversationSummary, isFriend = true): string {
   if (conversation.type === 'direct') {
-    return conversation.partnerName ?? conversation.name ?? '私聊'
+    const name = conversation.partnerName ?? conversation.name ?? '私聊'
+    return isFriend ? name : `${name} [临时对话]`
   }
   if (conversation.type === 'ai') {
     return conversation.name ?? 'AI 会话'
   }
   return conversation.name ?? '未命名群聊'
+}
+
+/** 依据通讯录关系生成会话标题：非好友私聊追加临时标记 */
+export function useConversationTitle(): (conversation: ConversationSummary) => string {
+  const contacts = useContactsStore()
+  const friendIds = computed(() => new Set(contacts.friends.map((item) => item.contactUserId)))
+  return (conversation: ConversationSummary) =>
+    conversationTitle(conversation, friendIds.value.has(conversation.partnerId ?? ''))
 }
 
 export function conversationAvatar(conversation: ConversationSummary): string | null {

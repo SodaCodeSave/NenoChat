@@ -147,7 +147,10 @@ export const useSyncStore = defineStore('sync', () => {
     /* -------- 第二遍：按实体类型落库。消息/会话/成员是多行语句批量写；用户与角色量级小，保持逐条 -------- */
     if (messageRows.size > 0) await upsertMessagesBatched(sid, [...messageRows.values()])
     if (conversationRows.size > 0) await upsertConversationsBatched(sid, [...conversationRows.values()])
-    if (conversationDeletes.size > 0) await markConversationsDeleted(sid, [...conversationDeletes])
+    if (conversationDeletes.size > 0) {
+      await markConversationsDeleted(sid, [...conversationDeletes])
+      for (const id of conversationDeletes) await messages.removeConversation(id)
+    }
     if (memberRows.size > 0) await upsertMembersBatched(sid, [...memberRows.values()])
     if (memberDeletes.size > 0) await markMembersLeft(sid, [...memberDeletes.values()])
     for (const user of userRows.values()) {

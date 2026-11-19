@@ -25,14 +25,16 @@ interface ChangeRow {
 export function listChanges(db: DB, userId: string, since: number, limit: number): ChangesResult {
   const rows = db
     .prepare(
-      `SELECT seq, entity, entity_id, op, conversation_id, user_id, payload, created_at
-       FROM sync_change_log
-       WHERE seq > ?
-         AND (conversation_id IS NULL OR conversation_id IN (
-               SELECT conversation_id FROM conversation_members
-               WHERE user_id = ? AND left_at IS NULL))
-         AND (user_id IS NULL OR user_id = ?)
-       ORDER BY seq ASC
+      `SELECT c.seq, c.entity, c.entity_id, c.op, c.conversation_id, c.user_id, c.payload, c.created_at
+       FROM sync_change_log c
+       WHERE c.seq > ?
+         AND (c.conversation_id IS NULL OR EXISTS (
+               SELECT 1 FROM conversation_members m
+               WHERE m.conversation_id = c.conversation_id
+                 AND m.user_id = ?
+                 AND (m.left_at IS NULL OR c.created_at <= m.left_at)))
+         AND (c.user_id IS NULL OR c.user_id = ?)
+       ORDER BY c.seq ASC
        LIMIT ?`,
     )
     .all(since, userId, userId, limit + 1) as ChangeRow[]

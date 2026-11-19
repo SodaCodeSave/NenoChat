@@ -53,6 +53,8 @@ export async function bootstrap(
       .then(() => useMessagesStore().preload(conversations.ordered.slice(0, PRELOAD_RECENT).map((c) => c.id)))
     // 角色列表供通讯录与 AI 分区使用，离线时读本地镜像
     void useAiStore().load().catch(() => undefined)
+    // 好友关系决定私聊标题是否带临时标记，启动即拉取
+    void useContactsStore().load().catch(() => undefined)
 
     // 挂好系统通知点击回调并同步当前权限；通知本身由 message.created 直接触发
     void useSystemNotificationsStore().init()

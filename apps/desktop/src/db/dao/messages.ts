@@ -169,6 +169,14 @@ export async function deleteLocal(serverId: string, messageId: string): Promise<
   await dbExecute('DELETE FROM messages WHERE server_id = $1 AND id = $2', [serverId, messageId])
 }
 
+/** 会话从本地彻底移除时，一并清掉该会话的消息镜像 */
+export async function deleteConversationMessages(serverId: string, conversationId: string): Promise<void> {
+  await dbExecute('DELETE FROM messages WHERE server_id = $1 AND conversation_id = $2', [
+    serverId,
+    conversationId,
+  ])
+}
+
 export interface PageOptions {
   conversationId: string
   before?: number | null

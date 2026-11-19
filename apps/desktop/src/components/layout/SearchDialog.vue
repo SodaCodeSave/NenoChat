@@ -6,13 +6,14 @@ import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { searchApi } from '@/api/search'
 import { conversationApi } from '@/api/endpoints'
-import { conversationTitle } from '@/composables/conversation'
+import { useConversationTitle } from '@/composables/conversation'
 import { useConversationsStore } from '@/stores/conversations'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
 const router = useRouter()
 const conversations = useConversationsStore()
+const titleOf = useConversationTitle()
 
 const keyword = ref('')
 const result = ref<SearchResponse | null>(null)
@@ -312,13 +313,13 @@ onBeforeUnmount(() => {
                 "
               >
                 <Avatar
-                  :name="conversationTitle(conversation)"
+                  :name="titleOf(conversation)"
                   :src="conversation.avatarUrl"
                   :seed="conversation.id"
                   :size="28"
                 />
                 <span class="min-w-0 flex-1 truncate text-[12.5px] text-text-strong">
-                  {{ conversationTitle(conversation) }}
+                  {{ titleOf(conversation) }}
                 </span>
                 <span class="text-[11px] text-muted">
                   {{ conversation.type === 'group' ? '群聊' : conversation.type === 'ai' ? 'AI' : '私聊' }}
