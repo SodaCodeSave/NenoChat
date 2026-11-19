@@ -506,6 +506,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
     segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
     streamEnabled: false,
+    relationshipEnabled: false,
     debugMode: false,
     updatedAt: 0,
   }
@@ -541,6 +542,7 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
     segmentEnabled: row.segment_enabled === 1,
     segmentPattern: row.segment_pattern || fallback.segmentPattern,
     streamEnabled: row.stream_enabled === 1,
+    relationshipEnabled: false,
     debugMode: row.debug_mode === 1,
     updatedAt: row.updated_at,
   }

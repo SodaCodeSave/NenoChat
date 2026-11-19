@@ -54,6 +54,7 @@ const DEFAULTS: Editable = {
   segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
   segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
   streamEnabled: false,
+  relationshipEnabled: false,
 }
 
 const form = reactive<Editable>({ ...DEFAULTS })
