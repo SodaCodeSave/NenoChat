@@ -34,4 +34,9 @@ describe('AiSettings', () => {
     expect(source).not.toContain('keyLocation')
     expect(source).not.toContain('loadProviderKey')
   })
+
+  it('存量本机密钥不迁移，界面提示重新填写', () => {
+    expect(source).toContain('旧版本的本机密钥不会自动迁移，点编辑重新填写')
+    expect(source).toContain('这个服务商还没有密钥（旧版本机密钥不会自动迁移），请重新填写')
+  })
 })

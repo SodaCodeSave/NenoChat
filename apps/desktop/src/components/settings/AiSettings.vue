@@ -496,8 +496,12 @@ onBeforeUnmount(() => {
         <Field
           label="API Key"
           for-id="provider-key"
-          hint="留空表示不改动密钥；服务端密钥加密存储，不会回显"
->
+          :hint="
+            editingProvider && !editingProvider.apiKeyMasked && !providerForm.apiKey
+              ? '这个服务商还没有密钥（旧版本机密钥不会自动迁移），请重新填写'
+              : '留空表示不改动密钥；服务端密钥加密存储，不会回显'
+          "
+        >
           <TextInput
             id="provider-key"
             :model-value="providerForm.apiKey ?? ''"
@@ -570,6 +574,13 @@ onBeforeUnmount(() => {
           <div class="min-w-[150px] flex-1">
             <p class="flex flex-wrap items-center gap-1.5 text-[12.5px] font-medium text-text-strong">
               {{ provider.name }}
+              <span
+                v-if="!provider.apiKeyMasked"
+                class="rounded bg-danger/10 px-1.5 text-[10px] font-normal text-danger"
+                title="旧版本的本机密钥不会自动迁移，点编辑重新填写"
+              >
+                未配置密钥
+              </span>
               <span
                 v-if="provider.balance"
                 class="rounded bg-success/10 px-1.5 text-[10px] font-normal text-success"

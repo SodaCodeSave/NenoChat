@@ -457,7 +457,7 @@ export const useAiStore = defineStore('ai', () => {
     const nonce = ulid()
     // clientNonce 必须与下面 generation 用的完全一致：
     // 服务端按 (sender, nonce) 做幂等，两个不同的值会插出第二条同样的用户消息
-    const sent = await messages.send({
+    await messages.send({
       conversationId,
       content,
       clientNonce: nonce,
