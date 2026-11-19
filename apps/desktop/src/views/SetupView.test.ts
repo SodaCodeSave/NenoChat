@@ -24,7 +24,7 @@ describe('服务器双栏页', () => {
   })
 
   it('进页自动探测全部服务器，并可手动刷新重测', () => {
-    expect(setupSource).toContain('void testServers()')
+    expect(setupSource).toContain('await testServers()')
     expect(setupSource).toContain('@click="testServers"')
     expect(setupSource).toContain('await servers.probe(server.baseUrl)')
     expect(setupSource).toContain('Promise.all(')
@@ -34,5 +34,23 @@ describe('服务器双栏页', () => {
     expect(setupSource).toContain('await servers.setCurrent(id)')
     expect(setupSource).toContain('resetWorkspace()')
     expect(setupSource).toContain('await auth.clearSession()')
+  })
+
+  it('缺本地网络权限时给出授权与去设置入口', () => {
+    expect(setupSource).toContain('需要「附近的设备」权限')
+    expect(setupSource).toContain('@click="grantPermission"')
+    expect(setupSource).toContain('@click="goToSettings"')
+    expect(setupSource).toContain('requestLocalNetworkAccess')
+    expect(setupSource).toContain('openLocalNetworkSettings')
+  })
+
+  it('进页探测不弹系统授权框，授权后才重测', () => {
+    expect(setupSource).toContain('await refreshLocalNetwork()')
+    expect(setupSource).toContain('if (localNetwork.value === \'granted\') await testServers()')
+  })
+
+  it('权限不足的服务器标为待授权而不是不可用', () => {
+    expect(setupSource).toContain("e instanceof LocalNetworkPermissionError ? 'blocked' : 'offline'")
+    expect(setupSource).toContain("if (state === 'blocked') return '需要本地网络权限'")
   })
 })

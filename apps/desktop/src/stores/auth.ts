@@ -5,6 +5,7 @@ import { authApi, notificationSettingsApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
+import { ensureLocalNetworkAccess } from '@/platform/local-network'
 import { CLIENT_VERSION } from '@/version'
 import { useServersStore } from './servers'
 
@@ -96,9 +97,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   function bindServer(): void {
     const servers = useServersStore()
-    // Android 下 servers.effective 是环回代理地址；未就绪时退回真实地址
     configureHttp({
-      baseUrl: servers.effective?.baseUrl ?? servers.current?.baseUrl ?? '',
+      baseUrl: servers.current?.baseUrl ?? '',
       deviceId: deviceId(),
       refresh: () => refreshSession(),
       onAuthLost: () => {
@@ -135,8 +135,21 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** 连局域网服务器前确认本地网络权限，缺权限时顺手弹一次系统授权框 */
+  async function ensureServerAccess(): Promise<void> {
+    const server = useServersStore().current
+    if (!server) return
+    await ensureLocalNetworkAccess(server.baseUrl, { interactive: true })
+  }
+
   async function login(username: string, password: string): Promise<void> {
     error.value = null
+    try {
+      await ensureServerAccess()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : '登录失败'
+      throw e
+    }
     bindServer()
     try {
       const result = await authApi.login({ username, password, device: devicePayload() })
@@ -155,6 +168,12 @@ export const useAuthStore = defineStore('auth', () => {
     inviteCode?: string
   }): Promise<void> {
     error.value = null
+    try {
+      await ensureServerAccess()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : '注册失败'
+      throw e
+    }
     bindServer()
     try {
       const result = await authApi.register({ ...input, device: devicePayload() })

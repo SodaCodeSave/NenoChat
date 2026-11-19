@@ -19,6 +19,8 @@ apps/desktop/src-tauri/gen/android/*
 !apps/desktop/src-tauri/gen/android/app
 apps/desktop/src-tauri/gen/android/app/*
 !apps/desktop/src-tauri/gen/android/app/build.gradle.kts
+# AndroidManifest.xml 与 MainActivity.kt 同样需要手工维护（权限声明、原生桥），
+# 位于被忽略的深层目录，用 git add -f 单独跟踪
 
 # 本地环境
 .env

@@ -10,6 +10,7 @@ import Icon from '@/components/ui/Icon.vue'
 import { useServersStore } from '@/stores/servers'
 import { useAuthStore } from '@/stores/auth'
 import { resetWorkspace } from '@/app/bootstrap'
+import { LocalNetworkPermissionError, openLocalNetworkSettings } from '@/platform/local-network'
 
 const router = useRouter()
 const servers = useServersStore()
@@ -18,6 +19,8 @@ const auth = useAuthStore()
 const newServerUrl = ref('')
 const adding = ref(false)
 const error = ref<string | null>(null)
+/** 报错是否由缺失本地网络权限引起：这种要引导去系统设置，而不是改地址 */
+const permissionBlocked = ref(false)
 const pendingSwitch = ref<string | null>(null)
 const pendingRemove = ref<string | null>(null)
 const switching = ref(false)
@@ -35,6 +38,7 @@ async function addServer(): Promise<void> {
   if (!newServerUrl.value.trim() || adding.value) return
   adding.value = true
   error.value = null
+  permissionBlocked.value = false
   try {
     const instance = await servers.add(newServerUrl.value)
     newServerUrl.value = ''
@@ -43,6 +47,7 @@ async function addServer(): Promise<void> {
     await auth.clearSession()
     await router.replace('/login')
   } catch (e) {
+    permissionBlocked.value = e instanceof LocalNetworkPermissionError
     error.value = e instanceof Error ? e.message : '无法连接服务器'
   } finally {
     adding.value = false
@@ -175,7 +180,15 @@ async function removeServer(): Promise<void> {
         </Button>
       </form>
       <p v-if="error" class="mt-2 text-[11.5px] text-danger">{{ error }}</p>
-      <p v-else class="mt-2 text-[11.5px] text-muted">
+      <button
+        v-if="permissionBlocked"
+        type="button"
+        class="mt-1.5 text-[11.5px] text-accent underline underline-offset-2"
+        @click="openLocalNetworkSettings"
+      >
+        去系统设置允许「附近的设备」
+      </button>
+      <p v-else-if="!error" class="mt-2 text-[11.5px] text-muted">
         添加后会切换到这台服务器并需要重新登录。
       </p>
     </SettingsCard>

@@ -318,7 +318,7 @@ export const useSyncStore = defineStore('sync', () => {
     await loadCursor()
 
     wsClient.configure({
-      url: servers.effective?.wsUrl ?? servers.current.wsUrl,
+      url: servers.current.wsUrl,
       deviceId: auth.devicePayload().id,
       getToken: async () => auth.accessToken,
       // 游标必须每次重连实时取：handleBatch 会持续推进它，

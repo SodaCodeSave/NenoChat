@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 import LoginForm from '@/components/auth/LoginForm.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useServersStore, normalizeServerUrl } from '@/stores/servers'
 import { resetWorkspace } from '@/app/bootstrap'
+import {
+  LocalNetworkPermissionError,
+  localNetworkState,
+  openLocalNetworkSettings,
+  requestLocalNetworkAccess,
+  requiresLocalNetworkAccess,
+  type LocalNetworkState,
+} from '@/platform/local-network'
 
-type ProbeState = 'checking' | 'online' | 'offline'
+type ProbeState = 'checking' | 'online' | 'offline' | 'blocked'
 
 const auth = useAuthStore()
 const servers = useServersStore()
@@ -19,6 +27,7 @@ const switchingId = ref<string | null>(null)
 const error = ref<string | null>(null)
 const status = ref<Record<string, ProbeState>>({})
 const versions = ref<Record<string, string | null>>({})
+const localNetwork = ref<LocalNetworkState>('unsupported')
 
 const normalized = computed(() => {
   try {
@@ -27,6 +36,23 @@ const normalized = computed(() => {
     return ''
   }
 })
+
+/** 当前操作是否涉及局域网地址：只有这类地址才需要本地网络权限 */
+const touchesLocalNetwork = computed(
+  () =>
+    requiresLocalNetworkAccess(url.value) ||
+    servers.servers.some((server) => requiresLocalNetworkAccess(server.baseUrl)),
+)
+
+const permissionBlocked = computed(
+  () =>
+    touchesLocalNetwork.value &&
+    (localNetwork.value === 'prompt' || localNetwork.value === 'denied'),
+)
+
+async function refreshLocalNetwork(): Promise<void> {
+  localNetwork.value = await localNetworkState()
+}
 
 /** 对所有已保存服务器并发发起 /server/info 探测，结果按服务器 id 记录 */
 async function testServers(): Promise<void> {
@@ -45,8 +71,9 @@ async function testServers(): Promise<void> {
         const info = await servers.probe(server.baseUrl)
         status.value[server.id] = 'online'
         versions.value[server.id] = info.version
-      } catch {
-        status.value[server.id] = 'offline'
+      } catch (e) {
+        status.value[server.id] = e instanceof LocalNetworkPermissionError ? 'blocked' : 'offline'
+        if (e instanceof LocalNetworkPermissionError) localNetwork.value = e.state
       }
     }),
   )
@@ -56,17 +83,44 @@ async function testServers(): Promise<void> {
 function dotClass(state: ProbeState | undefined): string {
   if (state === 'online') return 'bg-success'
   if (state === 'offline') return 'bg-danger'
+  if (state === 'blocked') return 'bg-accent'
   return 'bg-muted/50'
 }
 
 function dotLabel(state: ProbeState | undefined): string {
   if (state === 'online') return '测试通过'
   if (state === 'offline') return '测试失败'
+  if (state === 'blocked') return '需要本地网络权限'
   return '测试中'
 }
 
+async function grantPermission(): Promise<void> {
+  localNetwork.value = await requestLocalNetworkAccess()
+  if (localNetwork.value === 'granted') await testServers()
+}
+
+function goToSettings(): void {
+  openLocalNetworkSettings()
+}
+
+/** 从系统设置返回时权限可能变了，重查一次并顺带重测 */
+async function onWindowFocus(): Promise<void> {
+  const before = localNetwork.value
+  await refreshLocalNetwork()
+  if (before !== 'granted' && localNetwork.value === 'granted') await testServers()
+}
+
 onMounted(() => {
-  void testServers()
+  // 先拿到权限状态再探测：缺权限时把服务器标成待授权，而不是笼统的不可用
+  void (async () => {
+    await refreshLocalNetwork()
+    await testServers()
+  })()
+  window.addEventListener('focus', onWindowFocus)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', onWindowFocus)
 })
 
 async function selectServer(id: string): Promise<void> {
@@ -95,6 +149,7 @@ async function connect(): Promise<void> {
     url.value = ''
     label.value = ''
   } catch (e) {
+    if (e instanceof LocalNetworkPermissionError) localNetwork.value = e.state
     error.value = e instanceof Error ? e.message : '连接失败，请检查地址'
   } finally {
     adding.value = false
@@ -125,6 +180,37 @@ async function connect(): Promise<void> {
           <Icon name="refresh" :size="14" />
           {{ probing ? '测试中' : '刷新' }}
         </button>
+      </div>
+
+      <div
+        v-if="permissionBlocked"
+        class="mb-4 rounded-xl border border-accent/35 bg-accent-soft/50 p-3"
+      >
+        <div class="flex items-start gap-2">
+          <Icon name="wifiOff" :size="15" class="mt-0.5 text-accent" />
+          <div class="min-w-0">
+            <p class="text-[12.5px] font-medium text-text-strong">需要「附近的设备」权限</p>
+            <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
+              Android 17 起系统会拦截应用对局域网服务器的访问，允许本地网络权限后才能连接。
+            </p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="rounded-lg bg-accent px-3 py-1.5 text-[11.5px] font-medium text-accent-text"
+                @click="grantPermission"
+              >
+                {{ localNetwork === 'denied' ? '重新请求权限' : '允许访问' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-muted hover:text-accent"
+                @click="goToSettings"
+              >
+                去系统设置
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <p v-if="servers.servers.length === 0" class="py-6 text-center text-[12px] text-muted">
