@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import type { AiPersona, AiProvider } from '@nenochat/shared'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { AiProvider } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
-import Avatar from '@/components/ui/Avatar.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Field from '@/components/ui/form/Field.vue'
@@ -14,16 +12,11 @@ import Switch from '@/components/ui/form/Switch.vue'
 import Button from '@/components/ui/form/Button.vue'
 import Alert from '@/components/ui/form/Alert.vue'
 import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
-import PersonaEditor from './PersonaEditor.vue'
-import ProactiveSettings from './ProactiveSettings.vue'
 import { aiApi, type ProviderInput } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
-import { useConversationsStore } from '@/stores/conversations'
 import { clearProviderKey, loadProviderKey, saveProviderKey } from '@/platform/ai-keys'
 import { AI_PROVIDER_PRESETS, matchProviderIcon } from '@/config/ai-providers'
 
-const router = useRouter()
-const conversations = useConversationsStore()
 const ai = useAiStore()
 
 const providers = ref<AiProvider[]>([])
@@ -32,15 +25,11 @@ const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 
 const showProviderForm = ref(false)
-const showPersonaForm = ref(false)
-const editingPersona = ref<AiPersona | null>(null)
 const testing = ref(false)
 const refreshingBalance = ref<Record<string, boolean>>({})
 
 const pendingRemoveProvider = ref<AiProvider | null>(null)
 const removingProvider = ref(false)
-const pendingRemovePersona = ref<AiPersona | null>(null)
-const removingPersona = ref(false)
 
 const providerForm = ref<ProviderInput>({
   name: '',
@@ -51,10 +40,6 @@ const providerForm = ref<ProviderInput>({
   visionModel: '',
   contextWindow: null,
 })
-
-/** 角色列表以 ai store 为准，通讯录与消息分区读的是同一份 */
-const personas = computed(() => ai.personas)
-const hasProvider = computed(() => providers.value.length > 0)
 
 const keyLocationOptions = [
   { value: 'local', label: '密钥存本机钥匙串', description: '只有这台设备能用' },
@@ -163,12 +148,6 @@ async function saveSegment(): Promise<void> {
   } finally {
     segmentSaving.value = false
   }
-}
-
-/** 跟随全局的角色是否真的会主动发消息，要看那条总开关 */
-function proactiveActive(persona: AiPersona): boolean {
-  if (persona.proactiveMode === 'custom') return persona.proactive.enabled
-  return ai.globalSettings?.proactiveEnabled ?? false
 }
 
 async function load(): Promise<void> {
@@ -343,61 +322,6 @@ async function saveContextWindow(provider: AiProvider, value: number | null): Pr
       : '已清除上下文窗口配置'
   } catch (e) {
     error.value = e instanceof Error ? e.message : '保存上下文窗口失败'
-  }
-}
-
-function startCreate(): void {
-  editingPersona.value = null
-  showPersonaForm.value = true
-}
-
-function startEdit(persona: AiPersona): void {
-  editingPersona.value = persona
-  showPersonaForm.value = true
-}
-
-function closeEditor(): void {
-  showPersonaForm.value = false
-  editingPersona.value = null
-}
-
-async function onPersonaSaved(persona: AiPersona): Promise<void> {
-  closeEditor()
-  // 刚做过增改，store 的 loaded 守卫会跳过缓存，必须 force 才会真的回服务端拉
-  await ai.load(true)
-  // 新建角色会自动建会话，列表要立刻能看到
-  await conversations.refresh().catch(() => undefined)
-  notice.value = `已保存角色「${persona.name}」`
-}
-
-async function removePersona(): Promise<void> {
-  const persona = pendingRemovePersona.value
-  if (!persona) return
-  error.value = null
-  removingPersona.value = true
-  try {
-    await aiApi.deletePersona(persona.id)
-    ai.removeLocal(persona.id)
-    await conversations.refresh().catch(() => undefined)
-    notice.value = '已删除角色'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '删除失败'
-  } finally {
-    removingPersona.value = false
-    pendingRemovePersona.value = null
-  }
-}
-
-async function openChat(persona: AiPersona): Promise<void> {
-  error.value = null
-  try {
-    const providerId = persona.providerId ?? providers.value[0]?.id
-    if (!providerId) throw new Error('请先添加 AI 服务商')
-    const result = await aiApi.openConversation({ personaId: persona.id, providerId })
-    await conversations.refresh()
-    await router.push(`/c/${result.conversation.id}`)
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '无法打开 AI 会话'
   }
 }
 
@@ -709,88 +633,6 @@ onBeforeUnmount(() => {
       </div>
     </SettingsCard>
 
-    <ProactiveSettings />
-
-    <SettingsCard
-      id="personas"
-      title="AI 角色"
-      description="角色会出现在消息列表与通讯录里，人设、角色卡与兴趣都在角色编辑器里调整"
-      icon="users"
-    >
-      <template #actions>
-        <Button
-          size="sm"
-          icon="plus"
-          :disabled="!hasProvider"
-          :title="hasProvider ? '新建 AI 角色' : '请先添加服务商'"
-          @click="startCreate"
-        >
-          新建角色
-        </Button>
-      </template>
-
-      <PersonaEditor
-        v-if="showPersonaForm"
-        class="mb-3"
-        :persona="editingPersona"
-        :providers="providers"
-        @saved="onPersonaSaved"
-        @cancel="closeEditor"
-      />
-
-      <p v-if="personas.length === 0" class="py-2 text-[12px] text-muted">
-        还没有 AI 角色，创建一个就会自动出现在消息列表与通讯录里。
-      </p>
-
-      <div v-else class="space-y-2">
-        <div
-          v-for="persona in personas"
-          :key="persona.id"
-          class="flex items-center gap-2.5 rounded-lg border border-line bg-surface-2 px-3 py-2"
-        >
-          <Avatar :name="persona.name" :src="persona.avatarUrl" :seed="persona.id" :size="34" />
-          <div class="min-w-0 flex-1">
-            <p class="flex flex-wrap items-center gap-1.5 truncate text-[12.5px] font-medium text-text-strong">
-              {{ persona.name }}
-              <span
-                v-if="proactiveActive(persona)"
-                class="rounded bg-accent/12 px-1 text-[10px] font-normal text-accent"
-              >
-                主动消息
-              </span>
-              <span
-                v-if="persona.proactiveMode === 'global'"
-                class="rounded bg-surface px-1 text-[10px] font-normal text-muted"
-              >
-                跟随全局
-              </span>
-            </p>
-            <p class="truncate text-[11px] text-muted">
-              {{ persona.interests.length > 0 ? persona.interests.join(' · ') : persona.systemPrompt.slice(0, 36) }}
-            </p>
-          </div>
-          <Button size="sm" variant="primary" @click="openChat(persona)">聊天</Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="edit"
-            title="编辑角色"
-            aria-label="编辑角色"
-            @click="startEdit(persona)"
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="trash"
-            class="hover:!bg-danger/10 hover:!text-danger"
-            title="删除角色"
-            aria-label="删除角色"
-            @click="pendingRemovePersona = persona"
-          />
-        </div>
-      </div>
-    </SettingsCard>
-
     <ConfirmDialog
       :open="Boolean(pendingRemoveProvider)"
       title="删除这个服务商？"
@@ -799,16 +641,6 @@ onBeforeUnmount(() => {
       :loading="removingProvider"
       @update:open="(value) => !value && (pendingRemoveProvider = null)"
       @confirm="removeProvider"
-    />
-
-    <ConfirmDialog
-      :open="Boolean(pendingRemovePersona)"
-      title="删除这个 AI 角色？"
-      :description="`「${pendingRemovePersona?.name ?? ''}」的聊天记录会一起移除，此操作不可撤销。`"
-      confirm-text="删除角色"
-      :loading="removingPersona"
-      @update:open="(value) => !value && (pendingRemovePersona = null)"
-      @confirm="removePersona"
     />
   </div>
 </template>

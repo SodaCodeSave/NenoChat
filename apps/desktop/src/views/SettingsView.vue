@@ -10,6 +10,7 @@ import AppearanceSettings from '@/components/settings/sections/AppearanceSetting
 import ServerSettings from '@/components/settings/sections/ServerSettings.vue'
 import AboutSettings from '@/components/settings/sections/AboutSettings.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
+import PersonaSettings from '@/components/settings/PersonaSettings.vue'
 import ConnectorSettings from '@/components/settings/ConnectorSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
@@ -24,6 +25,7 @@ type SectionKey =
   | 'notification'
   | 'server'
   | 'ai'
+  | 'persona'
   | 'connectors'
   | 'stickers'
   | 'storage'
@@ -93,14 +95,22 @@ const sections: SettingsSection[] = [
   },
   {
     key: 'ai',
-    label: 'AI 与模型',
+    label: 'AI 模型',
     icon: 'sparkles',
-    description: '服务商、回复方式、自动互动与角色',
+    description: '服务商、模型与回复方式',
     anchors: [
-      { id: 'providers', label: '服务商', keywords: '模型 api key 端点 余额 识图' },
+      { id: 'providers', label: '服务商', keywords: '模型 api key 端点 余额 识图 上下文窗口' },
       { id: 'reply', label: '回复与调试', keywords: '流式 分段 调试 token' },
+    ],
+  },
+  {
+    key: 'persona',
+    label: '角色与互动',
+    icon: 'users',
+    description: 'AI 角色与主动消息、动态广场、群聊等自动互动',
+    anchors: [
+      { id: 'personas', label: 'AI 角色', keywords: '人设 角色卡 新建 编辑' },
       { id: 'proactive', label: '自动互动', keywords: '主动消息 动态 群聊 概率 免打扰' },
-      { id: 'personas', label: 'AI 角色', keywords: '人设 角色卡 新建' },
     ],
   },
   {
@@ -146,7 +156,7 @@ const sections: SettingsSection[] = [
 
 const groups: { label: string; keys: SectionKey[] }[] = [
   { label: '通用', keys: ['account', 'appearance', 'notification', 'server'] },
-  { label: '智能', keys: ['ai', 'connectors', 'stickers'] },
+  { label: '智能', keys: ['ai', 'persona', 'connectors', 'stickers'] },
   { label: '系统', keys: ['storage', 'about'] },
 ]
 
@@ -156,6 +166,7 @@ const sectionComponents = {
   notification: NotificationSettings,
   server: ServerSettings,
   ai: AiSettings,
+  persona: PersonaSettings,
   connectors: ConnectorSettings,
   stickers: StickerSettings,
   storage: StorageSettings,
