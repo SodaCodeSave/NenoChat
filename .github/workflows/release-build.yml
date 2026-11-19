@@ -112,6 +112,10 @@ jobs:
             git show "HEAD:$file" > "$file"
           done
 
+      # init 产出的是 Tauri 默认启动图标，需从品牌 icon.png 重新生成 mipmap
+      - name: Generate Android launcher icons
+        run: pnpm --filter @nenochat/desktop tauri icon src-tauri/icons/icon.png
+
       - name: Build Android arm64 APK
         run: pnpm --filter @nenochat/desktop tauri android build --target aarch64 --apk --ci
         env:
