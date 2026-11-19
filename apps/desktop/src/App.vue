@@ -7,6 +7,8 @@ import LoadingScreen from '@/components/layout/LoadingScreen.vue'
 import BrandLogo from '@/components/layout/BrandLogo.vue'
 import { bootstrap } from '@/app/bootstrap'
 import { applyPairLink, listenPairLink, takeStartupPairLink } from '@/app/pairing'
+import { scheduleStartupCheck } from '@/composables/use-updater'
+import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useServersStore } from '@/stores/servers'
 
@@ -64,6 +66,8 @@ async function start(): Promise<void> {
 
 onMounted(async () => {
   await start()
+  // 桌面端启动后延迟检查更新，限频每日一次，发现新版本才弹窗
+  scheduleStartupCheck()
   // 应用在前台时再扫码：接完直接重载，省去逐个 store 手动刷新
   await listenPairLink(async (target) => {
     try {
@@ -107,6 +111,7 @@ onMounted(async () => {
       <RouterView />
     </component>
   </Transition>
+  <UpdateDialog />
 </template>
 
 <style scoped>

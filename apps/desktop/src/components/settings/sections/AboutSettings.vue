@@ -3,8 +3,14 @@ import { computed, onMounted, ref } from 'vue'
 import BrandLogo from '@/components/layout/BrandLogo.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
+import Button from '@/components/ui/form/Button.vue'
 import { useServersStore, normalizeServerUrl } from '@/stores/servers'
 import { isTauri, platformName } from '@/platform/device'
+import { updateSupported } from '@/platform/update-check'
+import {
+  checkForUpdates,
+  updaterState,
+} from '@/composables/use-updater'
 import {
   nativeBridgeAvailable,
   nativeDiagnostics,
@@ -15,6 +21,45 @@ import { CLIENT_VERSION } from '@/version'
 
 const servers = useServersStore()
 const diagnostics = ref<NativeDiagnostics | null>(null)
+const updates = updaterState()
+
+/** 是否支持自动更新，不支持时检查按钮隐藏 */
+const updateAvailable = computed(() =>
+  updateSupported(isTauri(), platformName()),
+)
+
+/** 检查按钮的文案与状态随全局更新状态走 */
+const checkLabel = computed(() => {
+  switch (updates.status) {
+    case 'checking':
+      return '检查中…'
+    case 'up-to-date':
+      return '已是最新'
+    case 'available':
+      return '发现新版本'
+    case 'downloading':
+      return '下载中…'
+    case 'installing':
+      return '安装中…'
+    case 'error':
+      return '检查失败'
+    default:
+      return '检查更新'
+  }
+})
+
+const checkDisabled = computed(
+  () =>
+    updates.status === 'checking' ||
+    updates.status === 'downloading' ||
+    updates.status === 'installing',
+)
+
+/** 手动检查结果无论新旧都弹窗反馈，发现新版本直接打开更新弹窗 */
+function checkNow(): void {
+  void checkForUpdates(false)
+  updates.dialogOpen = true
+}
 
 /** Android App 里理应有原生桥，缺了说明安装包没带上原生定制 */
 const bridgeMissing = computed(
@@ -76,6 +121,15 @@ onMounted(() => {
     <SettingsCard id="version" title="版本信息" icon="message">
       <SettingRow label="客户端版本">
         <span class="font-mono text-[12px] text-text">{{ CLIENT_VERSION }}</span>
+      </SettingRow>
+      <SettingRow
+        v-if="updateAvailable"
+        label="软件更新"
+        :description="updates.status === 'error' ? updates.error : '启动时也会自动检查，每日最多一次'"
+      >
+        <Button size="sm" variant="secondary" :disabled="checkDisabled" @click="checkNow">
+          {{ checkLabel }}
+        </Button>
       </SettingRow>
       <SettingRow
         label="服务端版本"

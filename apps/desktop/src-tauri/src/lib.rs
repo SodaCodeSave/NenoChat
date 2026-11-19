@@ -17,14 +17,29 @@ fn app_info() -> serde_json::Value {
     })
 }
 
+/// 桌面端独有的插件：updater 只支持桌面平台，移动端构建里不存在这些 crate
+#[cfg(desktop)]
+fn with_desktop_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+}
+
+#[cfg(not(desktop))]
+fn with_desktop_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    let builder = with_desktop_plugins(builder);
+    builder
         // 手机扫码后由系统唤起客户端，链接形如 nenochat://pair?url=...&code=...
         .plugin(tauri_plugin_deep_link::init())
         .plugin(

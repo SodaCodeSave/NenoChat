@@ -8,5 +8,13 @@
     },
     "shortDescription": "NenoChat 一体版（内置服务端）",
     "longDescription": "NenoChat 桌面客户端与内置服务端的合并版本，安装即用，无需另行部署服务器。"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://gh-proxy.com/https://github.com/SodaCodeSave/NenoChat/releases/latest/download/latest-integrated.json",
+        "https://github.com/SodaCodeSave/NenoChat/releases/latest/download/latest-integrated.json"
+      ]
+    }
   }
 }

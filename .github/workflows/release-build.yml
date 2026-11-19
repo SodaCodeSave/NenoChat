@@ -49,13 +49,22 @@ jobs:
         run: pnpm --filter @nenochat/desktop tauri build --target x86_64-pc-windows-msvc
         env:
           CI: 'true'
+          # updater 产物签名密钥，密钥缺失会导致构建直接失败
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Generate updater manifest
+        shell: bash
+        run: node scripts/update-manifest.mjs --tag "$GITHUB_REF_NAME" --variant regular --bundle-dir apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle --out update-partial-regular-windows-x86_64.json
 
       - name: Upload Windows bundles to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.zip
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            update-partial-regular-windows-x86_64.json
           fail_on_unmatched_files: true
 
   # 一体版：把服务端与 Node 运行时打进安装包，装完即用、不需要再部署服务器。
@@ -94,13 +103,21 @@ jobs:
         run: pnpm --filter @nenochat/desktop tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.integrated.conf.json
         env:
           CI: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Generate updater manifest
+        shell: bash
+        run: node scripts/update-manifest.mjs --tag "$GITHUB_REF_NAME" --variant integrated --bundle-dir apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle --out update-partial-integrated-windows-x86_64.json
 
       - name: Upload integrated Windows bundles to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NenoChat-Integrated_*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NenoChat-Integrated_*.exe.zip
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/NenoChat-Integrated_*.msi
+            update-partial-integrated-windows-x86_64.json
           fail_on_unmatched_files: true
 
   # Linux x64：固定在 22.04 上构建（glibc 2.35），24.04 产出的 AppImage 会在更老的
@@ -144,13 +161,20 @@ jobs:
         run: pnpm --filter @nenochat/desktop tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb
         env:
           CI: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Generate updater manifest
+        run: node scripts/update-manifest.mjs --tag "$GITHUB_REF_NAME" --variant regular --bundle-dir apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle --out update-partial-regular-linux-x86_64.json
 
       - name: Upload Linux bundles to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz
             apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            update-partial-regular-linux-x86_64.json
           fail_on_unmatched_files: true
 
   android-arm64:
@@ -296,3 +320,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/release-notes.mjs
+
+  # 各构建 job 只产出带签名的 partial 更新清单，这里汇总成 latest.json
+  # （联网版）与 latest-integrated.json（一体版）传回 Release 并清理 partial。
+  # 客户端的 updater endpoint 就指向这两个文件。
+  updater-manifests:
+    name: Merge updater manifests
+    runs-on: ubuntu-latest
+    needs:
+      - windows-x64
+      - windows-x64-integrated
+      - linux-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Merge and upload updater manifests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/merge-update-manifests.mjs

@@ -36,10 +36,18 @@
       "desktop": {
         "schemes": ["nenochat"]
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3NzAwMzdCREZDN0RGRkIKUldUNzM4ZmZld053UjNFa2V6M3VZckZzUDNxYzhNS1hKUHBtVHVHZmZ1eGxwSTJKaC8zYzVUdG0K",
+      "endpoints": [
+        "https://gh-proxy.com/https://github.com/SodaCodeSave/NenoChat/releases/latest/download/latest.json",
+        "https://github.com/SodaCodeSave/NenoChat/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
