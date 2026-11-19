@@ -41,6 +41,10 @@ ENV PORT=8787
 
 COPY --from=builder --chown=node:node /app /app
 
+# 构建时间戳：必须紧跟源码复制之后，源码一变这层就会重跑；
+# 镜像没重建时 stamp 保持旧值，部署脚本据此识别"新版本号 + 旧代码"的假部署
+RUN date -u +%Y-%m-%dT%H:%M:%SZ > /app/apps/server/.build-stamp
+
 # 以非 root 的 node 用户运行（node:22-alpine 自带 uid=1000 的 node 用户）
 USER node
 

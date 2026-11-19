@@ -580,6 +580,8 @@ export interface ServerInfo {
   name: string
   version: string
   minClientVersion: string
+  /** 镜像构建时间戳（ISO 8601）；镜像未重建时保持旧值，用于识别"新版本号 + 旧代码"的假部署 */
+  buildStamp?: string | null
   registration: { open: boolean; inviteRequired: boolean }
   limits: { maxUploadMb: number; maxGroupMembers: number }
   features: { ai: boolean; proactive: boolean; moments: boolean }
