@@ -3,6 +3,7 @@ import {
   REFRESH_TOKEN_TTL_MS,
   ulid,
   type AuthTokens,
+  type DeviceInfo,
   type LoginInput,
   type RegisterInput,
   type User,
@@ -22,6 +23,10 @@ import { now } from '../util/clock'
 export interface JwtSigner {
   sign(payload: AccessTokenPayload, options?: { expiresIn?: string | number }): string
 }
+
+/** 一体化版内置服务端里唯一的本机账号 */
+const LOCAL_USERNAME = 'owner'
+const LOCAL_DISPLAY_NAME = '我'
 
 export interface AccessTokenPayload {
   sub: string
@@ -131,6 +136,49 @@ export async function login(db: DB, signer: JwtSigner, input: LoginInput): Promi
 
     const user = usersRepo.mapUser(row)
     const { tokens } = issueTokens(db, signer, user, input.device.id)
+    return { user, tokens }
+  })
+}
+
+/**
+ * 一体化版免密码登录：本机令牌已在路由层校验过，这里只负责把 owner 账号和会话准备好。
+ * 首次启动自动建号，之后每次启动直接复用同一账号，数据不会随重启丢失。
+ */
+export async function ensureLocalSession(
+  db: DB,
+  signer: JwtSigner,
+  device: DeviceInfo,
+): Promise<AuthSession> {
+  const existing = usersRepo.findByUsername(db, LOCAL_USERNAME)
+  if (existing) {
+    if (existing.status === 'disabled') throw err.forbidden('账号已被禁用')
+    return withTx(db, () => {
+      devicesRepo.upsert(db, existing.id, device)
+      ensureUserSettings(db, existing.id)
+      ensureNotificationSettings(db, existing.id)
+      usersRepo.touchLastSeen(db, existing.id)
+      const { tokens } = issueTokens(db, signer, usersRepo.mapUser(existing), device.id)
+      return { user: usersRepo.mapUser(existing), tokens }
+    })
+  }
+
+  // 密码用随机串占位：本机账号只能凭启动令牌进入，密码登录对它无效
+  const passwordHash = await hashPassword(randomToken(24))
+
+  return withTx(db, () => {
+    const row = usersRepo.create(db, {
+      username: LOCAL_USERNAME,
+      displayName: LOCAL_DISPLAY_NAME,
+      passwordHash,
+      isAdmin: true,
+      deviceId: device.id,
+    })
+    devicesRepo.upsert(db, row.id, device)
+    ensureUserSettings(db, row.id)
+    ensureNotificationSettings(db, row.id)
+
+    const user = usersRepo.mapUser(row)
+    const { tokens } = issueTokens(db, signer, user, device.id)
     return { user, tokens }
   })
 }

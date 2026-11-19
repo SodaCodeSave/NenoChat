@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import argon2 from '@node-rs/argon2'
 import { env } from '../env'
 
@@ -70,4 +70,12 @@ export function decryptSecret(payload: string): string {
 export function maskSecret(plain: string): string {
   if (plain.length <= 8) return '****'
   return `${plain.slice(0, 4)}****${plain.slice(-4)}`
+}
+
+/** 定长比较，避免逐字符提前返回泄露令牌内容 */
+export function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8')
+  const right = Buffer.from(b, 'utf8')
+  if (left.length !== right.length || left.length === 0) return false
+  return timingSafeEqual(left, right)
 }

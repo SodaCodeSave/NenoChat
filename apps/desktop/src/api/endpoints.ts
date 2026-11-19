@@ -24,6 +24,12 @@ export const authApi = {
   register: (body: unknown) =>
     http.post<AuthSessionResponse>(p('/auth/register'), body, { auth: false }),
   login: (body: unknown) => http.post<AuthSessionResponse>(p('/auth/login'), body, { auth: false }),
+  /** 一体化版免密登录：握手令牌由客户端进程注入，不走用户名密码 */
+  local: (body: unknown, localToken: string) =>
+    http.post<AuthSessionResponse>(p('/auth/local'), body, {
+      auth: false,
+      headers: { 'x-local-token': localToken },
+    }),
   // 刷新本身不能再走 401 自动刷新，否则会递归等待自己
   refresh: (refreshToken: string, deviceId: string) =>
     http.post<AuthSessionResponse>(

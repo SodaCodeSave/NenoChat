@@ -12,6 +12,8 @@ apps/server/.env
 # 客户端构建产物
 apps/desktop/dist/
 apps/desktop/src-tauri/target/
+# 一体化版内置的服务端运行时，由 scripts/build-integrated-server.mjs 生成
+apps/desktop/src-tauri/resources/server/
 apps/desktop/src-tauri/gen/*
 # Android 工程由 Tauri 生成后需手工维护（release 放行明文 http 等），单独跟踪
 !apps/desktop/src-tauri/gen/android

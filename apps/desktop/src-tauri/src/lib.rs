@@ -1,4 +1,5 @@
 mod db;
+mod localserver;
 mod notification;
 mod secrets;
 
@@ -29,8 +30,10 @@ pub fn run() {
                 .add_migrations(db::DB_URL, db::migrations())
                 .build(),
         )
+        .manage(localserver::LocalServerState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
+            localserver::local_server_info,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
@@ -50,9 +53,16 @@ pub fn run() {
                     window.open_devtools();
                 }
             }
-            let _ = app;
+            // 一体化版：拉起随包的本地服务端；联网版没有随包资源会直接跳过
+            localserver::boot(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // 退出时回收内置服务端，别留下一个占着端口的孤儿 Node 进程
+            if let tauri::RunEvent::Exit = event {
+                localserver::shutdown(app);
+            }
+        });
 }

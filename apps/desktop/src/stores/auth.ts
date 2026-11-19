@@ -5,6 +5,7 @@ import { authApi, notificationSettingsApi } from '@/api/endpoints'
 import { ApiError, configureHttp, setAccessToken } from '@/api/http'
 import { deleteSecret, getSecret, setSecret } from '@/platform/secure-store'
 import { deviceId, deviceName, platformName } from '@/platform/device'
+import { localServerInfo } from '@/platform/local-server'
 import { ensureLocalNetworkAccess } from '@/platform/local-network'
 import { CLIENT_VERSION } from '@/version'
 import { useServersStore } from './servers'
@@ -185,6 +186,22 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** 一体化版免密登录：拿客户端进程注入的握手令牌直接换会话 */
+  async function loginLocal(): Promise<void> {
+    error.value = null
+    const local = await localServerInfo()
+    if (!local) throw new Error('未找到内置服务端')
+    bindServer()
+    try {
+      const result = await authApi.local({ device: devicePayload() }, local.token)
+      await applySession(result)
+      await loadProfile()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : '登录失败'
+      throw e
+    }
+  }
+
   async function loadProfile(): Promise<void> {
     const me = await authApi.me()
     if (me.user) user.value = me.user
@@ -247,6 +264,38 @@ export const useAuthStore = defineStore('auth', () => {
     return refreshInFlight
   }
 
+  /**
+   * 一体化版启动：优先复用钥匙串里的 refresh token，
+   * 内置服务端重建过数据库或令牌失效时，退回本机握手令牌重新换会话。
+   */
+  async function bootstrapLocal(serverId: string): Promise<boolean> {
+    status.value = 'restoring'
+    restoreError.value = null
+    restoreFailure.value = null
+    lastFailure = null
+
+    refreshToken = await getSecret(refreshKey(serverId))
+    hasStoredCredential.value = Boolean(refreshToken)
+    if (refreshToken && (await refreshSession())) {
+      try {
+        await loadProfile()
+      } catch {
+        // refresh 响应已带用户信息，档案接口抖动不影响进首页
+      }
+      return true
+    }
+
+    try {
+      await loginLocal()
+      return true
+    } catch (e) {
+      status.value = 'anonymous'
+      restoreFailure.value = 'server'
+      restoreError.value = e instanceof Error ? e.message : '内置服务端启动失败'
+      return false
+    }
+  }
+
   /** 启动时恢复登录态：有 refresh token 就静默续期，否则等用户手动登录 */
   async function bootstrap(): Promise<boolean> {
     bindServer()
@@ -255,6 +304,8 @@ export const useAuthStore = defineStore('auth', () => {
       status.value = 'anonymous'
       return false
     }
+
+    if (useServersStore().integrated) return bootstrapLocal(serverId)
 
     status.value = 'restoring'
     restoreError.value = null
@@ -319,6 +370,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     bindServer,
     login,
+    loginLocal,
     register,
     registerDevice: devicePayload,
     loadProfile,

@@ -25,6 +25,8 @@ export interface RequestOptions {
   query?: Record<string, string | number | boolean | null | undefined>
   /** 是否附带 access token，默认 true */
   auth?: boolean
+  /** 额外请求头，内置服务端的本机握手令牌走这里 */
+  headers?: Record<string, string>
   signal?: AbortSignal
   /** 内部使用：已经重试过一次 */
   _retried?: boolean
@@ -97,7 +99,7 @@ async function refreshOnce(): Promise<string | null> {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, auth = true, signal } = options
 
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { ...options.headers }
   // 只有带 body 时才声明 content-type，避免空体的 DELETE 被服务端判为非法 JSON
   if (body !== undefined) headers['content-type'] = 'application/json'
   if (auth && state.accessToken) headers.authorization = `Bearer ${state.accessToken}`

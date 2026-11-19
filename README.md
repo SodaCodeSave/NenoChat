@@ -119,8 +119,17 @@ apps/desktop/src/
 pnpm typecheck     # 三个包全量类型检查
 pnpm test          # shared 单测 + server 集成测试
 pnpm build:web     # 浏览器版产物
-pnpm build:app     # 桌面安装包
+pnpm build:app     # 桌面安装包（联网版：选择服务器 + 登录）
+pnpm build:app:integrated   # 一体化安装包（内置服务端，免登录）
 ```
+
+一体化版与联网版的区别：
+
+- 安装包里带着一份 Node 运行时、服务端代码与迁移脚本（`scripts/build-integrated-server.mjs` 生成）。
+- 客户端启动时把服务端拉起来，只监听 `127.0.0.1` 的随机端口，退出时回收。
+- 服务端以 `LOCAL_MODE=true` 运行：关闭注册，客户端凭进程内注入的握手令牌调用 `/auth/local` 换取会话，首次启动自动创建 `owner` 账号。
+- 内置的服务端标识符是 `com.nenochat.app.integrated`，数据与联网版完全隔离，可与联网版同时安装。
+- 数据落在应用数据目录的 `server/` 下，日志是应用日志目录的 `integrated-server.log`。
 
 服务端也可用 Docker 部署：
 
@@ -146,7 +155,7 @@ docker compose up -d --build
 - 消息身份渲染：AI 气泡用角色名与头像，不再显示模型名
 - 消息去重收敛到 `composables/message-merge.ts`（id + clientNonce 双键）
 - 动态空间：发布（≤9 图）、信息流分页、点赞、评论、删除，WS 实时广播
-- 表情包：分组管理、图片上传、聊天面板直接发送贴纸
+- 表情包：分组管理、图片上传、聊天面板直接发送贴纸；分组级「允许 AI 使用」总开关 + 角色级白名单（`ai_personas.sticker_pack_ids`，空 = 跟随全局授权），提示词清单与落库校验共用同一口径
 - 聊天附件：图片/文件上传（进度）、粘贴截图、图片点击预览
 - 全局搜索：消息（FTS5 trigram，短词回退 LIKE）、联系人、会话，Ctrl/Cmd+K 打开
 - 消息虚拟滚动：可变高度窗口化 + 历史分页 + 滚动锚点

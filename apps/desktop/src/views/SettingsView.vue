@@ -16,6 +16,7 @@ import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
 import StorageSettings from '@/components/settings/StorageSettings.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useServersStore } from '@/stores/servers'
 import { useUiStore } from '@/stores/ui'
 import { smoothScrollBehavior } from '@/composables/motion'
 
@@ -50,9 +51,10 @@ interface SettingsSection {
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const servers = useServersStore()
 const ui = useUiStore()
 
-const sections: SettingsSection[] = [
+const allSections: SettingsSection[] = [
   {
     key: 'account',
     label: '账号与通用',
@@ -173,6 +175,20 @@ const sectionComponents = {
   about: AboutSettings,
 }
 
+/** 一体版内置了服务端，没有可切换的服务器，整块服务器设置直接隐藏 */
+const sections = computed(() =>
+  servers.integrated ? allSections.filter((section) => section.key !== 'server') : allSections,
+)
+
+const visibleGroups = computed(() =>
+  groups
+    .map((group) => ({
+      label: group.label,
+      keys: group.keys.filter((key) => sections.value.some((section) => section.key === key)),
+    }))
+    .filter((group) => group.keys.length > 0),
+)
+
 const activeSection = ref<SectionKey>('account')
 const activeAnchor = ref('')
 const query = ref('')
@@ -181,7 +197,7 @@ const mobileSearchOpen = ref(false)
 const scrollEl = ref<HTMLElement | null>(null)
 
 const currentMeta = computed(
-  () => sections.find((section) => section.key === activeSection.value) ?? sections[0],
+  () => sections.value.find((section) => section.key === activeSection.value) ?? sections.value[0]!,
 )
 const currentComponent = computed(() => sectionComponents[activeSection.value])
 const anchors = computed(() => currentMeta.value.anchors)
@@ -191,7 +207,7 @@ const searchResults = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   if (!keyword) return []
   const results: { section: SettingsSection; anchor: SettingsAnchor | null }[] = []
-  for (const section of sections) {
+  for (const section of sections.value) {
     const sectionHit = `${section.label} ${section.description}`
       .toLowerCase()
       .includes(keyword)
@@ -207,7 +223,7 @@ const searchResults = computed(() => {
 watch(
   () => route.params.section,
   (value) => {
-    if (typeof value === 'string' && sections.some((section) => section.key === value)) {
+    if (typeof value === 'string' && sections.value.some((section) => section.key === value)) {
       activeSection.value = value as SectionKey
     }
   },
@@ -330,7 +346,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else>
-          <div v-for="group in groups" :key="group.label" class="mb-3 last:mb-0">
+          <div v-for="group in visibleGroups" :key="group.label" class="mb-3 last:mb-0">
             <p class="px-2 pb-1 pt-2 text-[10.5px] font-medium uppercase tracking-wide text-muted">
               {{ group.label }}
             </p>

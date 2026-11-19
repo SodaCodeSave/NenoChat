@@ -18,6 +18,10 @@ const EnvSchema = z.object({
   CORS_ORIGINS: z.string().default('*'),
   /** 允许 AI 服务商地址指向内网（本地模型如 ollama 需开启）；默认关闭以防 SSRF */
   ALLOW_PRIVATE_AI_ENDPOINT: z.enum(['true', 'false']).default('false'),
+  /** 一体化版：服务端与客户端同机运行，免密码登录 */
+  LOCAL_MODE: z.enum(['true', 'false']).default('false'),
+  /** 一体化版的握手密钥，由客户端进程启动时生成并注入 */
+  LOCAL_AUTH_TOKEN: z.string().default(''),
 })
 
 export type Env = z.infer<typeof EnvSchema>
@@ -43,12 +47,19 @@ function load(): Env {
       throw new Error('生产环境必须设置 SECRET_KEY（至少 32 字符，且不可使用开发默认值）')
     }
   }
+  // 本地模式凭令牌免密登录，令牌太弱等于把账号交给同机任意进程
+  if (parsed.data.LOCAL_MODE === 'true' && parsed.data.LOCAL_AUTH_TOKEN.length < 32) {
+    throw new Error('本地模式必须注入至少 32 字符的 LOCAL_AUTH_TOKEN')
+  }
   return parsed.data
 }
 
 export const env = load()
 
 export const isDev = env.NODE_ENV !== 'production'
+
+/** 一体化版服务端：只服务同机的客户端进程 */
+export const localMode = env.LOCAL_MODE === 'true'
 
 // 测试环境需要连接本地 mock 上游，默认放行；生产由显式开关控制
 export const allowPrivateAiEndpoint = env.ALLOW_PRIVATE_AI_ENDPOINT === 'true' || env.NODE_ENV === 'test'

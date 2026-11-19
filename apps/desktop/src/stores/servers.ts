@@ -4,14 +4,34 @@ import { API_PREFIX, type ServerInfo, type ServerInstance } from '@nenochat/shar
 import { listServers, removeServerCascade, touchServer, upsertServer } from '@/db/dao/servers'
 import { hasLocalDb } from '@/platform/db'
 import { clearAttachmentCache } from '@/platform/file-cache'
+import { localServerInfo, type LocalServerInfo } from '@/platform/local-server'
 import { ensureLocalNetworkAccess } from '@/platform/local-network'
 
 const CURRENT_KEY = 'nenochat.currentServer'
 const SERVERS_KEY = 'nenochat.servers'
 
+/** 一体化版只有这一个「服务器」，就是进程内拉起来的本地服务端 */
+export const LOCAL_SERVER_ID = 'srv-local'
+
 export interface NormalizedServer {
   baseUrl: string
   wsUrl: string
+}
+
+/** 把内置服务端包装成和远端服务器同构的实例，下游列表/切换逻辑无需分叉 */
+export function localServerInstance(local: LocalServerInfo): ServerInstance {
+  const now = Date.now()
+  return {
+    id: LOCAL_SERVER_ID,
+    name: '本机数据',
+    baseUrl: local.baseUrl,
+    wsUrl: local.wsUrl,
+    serverName: 'NenoChat 一体版',
+    iconUrl: null,
+    lastUserId: null,
+    lastConnectedAt: now,
+    addedAt: now,
+  }
 }
 
 /** 接受 http(s):// 或无协议前缀的地址，输出 REST 与 WS 两个端点 */
@@ -36,11 +56,30 @@ export const useServersStore = defineStore('servers', () => {
   const serverInfo = ref<ServerInfo | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  /** 一体化版标记：为 true 时不展示服务器管理，也不读写多服务器列表 */
+  const integrated = ref(false)
+  const localToken = ref<string | null>(null)
 
   const current = computed(() => servers.value.find((s) => s.id === currentId.value) ?? null)
   const hasServer = computed(() => current.value !== null)
 
   async function hydrate(): Promise<void> {
+    try {
+      const local = await localServerInfo()
+      if (local) {
+        // 内置服务端地址每次启动都会变（随机端口），必须用进程给的新地址覆盖
+        integrated.value = true
+        localToken.value = local.token
+        servers.value = [localServerInstance(local)]
+        currentId.value = LOCAL_SERVER_ID
+        return
+      }
+    } catch (e) {
+      // 一体化包里服务端起不来属于致命错误，标记模式后交给启动流程报错
+      integrated.value = true
+      throw e
+    }
+
     if (hasLocalDb()) {
       servers.value = await listServers()
     } else {
@@ -87,6 +126,7 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function add(rawUrl: string, displayName?: string): Promise<ServerInstance> {
+    if (integrated.value) throw new Error('一体版已内置服务端，无需添加')
     loading.value = true
     error.value = null
     try {
@@ -123,6 +163,8 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function setCurrent(id: string): Promise<void> {
+    // 一体化版只有一个内置服务端，切换请求直接忽略
+    if (integrated.value) return
     currentId.value = id
     localStorage.setItem(CURRENT_KEY, id)
     serverInfo.value = null
@@ -139,6 +181,7 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function rename(id: string, name: string): Promise<void> {
+    if (integrated.value) return
     await touchServer(id, { name })
     const target = servers.value.find((s) => s.id === id)
     if (target) target.name = name
@@ -146,13 +189,15 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function rememberUser(id: string, userId: string): Promise<void> {
-    await touchServer(id, { lastUserId: userId })
+    // 内置服务端的实例只存在于内存，不需要落库
+    if (!integrated.value) await touchServer(id, { lastUserId: userId })
     const target = servers.value.find((s) => s.id === id)
     if (target) target.lastUserId = userId
     await persist()
   }
 
   async function remove(id: string): Promise<void> {
+    if (integrated.value) return
     const target = servers.value.find((s) => s.id === id)
     if (hasLocalDb()) await removeServerCascade(id)
     // 删服务器时一并清掉该地址下的附件缓存，避免留下无法再访问的旧文件
@@ -175,6 +220,8 @@ export const useServersStore = defineStore('servers', () => {
     serverInfo,
     loading,
     error,
+    integrated,
+    localToken,
     hydrate,
     persist,
     probe,

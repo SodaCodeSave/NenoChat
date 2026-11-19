@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useServersStore } from '@/stores/servers'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -67,9 +68,13 @@ const publicRoutes = new Set(['login', 'setup'])
  */
 router.beforeEach((to) => {
   const auth = useAuthStore()
+  const isPublic = publicRoutes.has(String(to.name))
+
+  // 一体化版没有服务器选择与登录页，任何裸页面都直接回首页
+  if (useServersStore().integrated) return isPublic ? { name: 'home' } : true
+
   if (auth.status === 'idle' || auth.status === 'restoring') return true
 
-  const isPublic = publicRoutes.has(String(to.name))
   if (auth.isAuthenticated) return isPublic ? { name: 'home' } : true
   if (isPublic) return true
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NenoChat-Integrated",
+  "identifier": "com.nenochat.app.integrated",
+  "bundle": {
+    "resources": {
+      "resources/server/": "server/"
+    },
+    "shortDescription": "NenoChat 一体版（内置服务端）",
+    "longDescription": "NenoChat 桌面客户端与内置服务端的合并版本，安装即用，无需另行部署服务器。"
+  }
+}

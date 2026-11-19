@@ -2,7 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readGitInfo, resolveVersion } from '../../../scripts/version.mjs'
 
-const info = resolveVersion({ env: process.env, gitInfo: readGitInfo() })
+/** 客户端注入版本号时不再探测 git：安装包里没有仓库，git 只会白跑四次 */
+const injectedVersion = String(process.env.APP_VERSION || '').trim()
+const info = resolveVersion(
+  injectedVersion
+    ? { env: process.env, gitInfo: { exactTag: '', latestTag: '', shortHash: 'unknown' } }
+    : { env: process.env },
+)
 
 /** 服务端版本，随 git tag 或提交变化；容器部署时由 APP_VERSION 注入 */
 export const APP_VERSION = info.appVersion

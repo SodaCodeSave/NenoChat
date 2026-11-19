@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
-import { LoginSchema, LogoutSchema, RefreshSchema, RegisterSchema } from '@nenochat/shared'
+import { LocalLoginSchema, LoginSchema, LogoutSchema, RefreshSchema, RegisterSchema } from '@nenochat/shared'
+import { env, localMode } from '../../env'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import { rateLimit } from '../plugins/rate-limit'
+import { safeEqual } from '../../util/crypto'
+import { err } from '../../util/errors'
 import * as authService from '../../services/auth-service'
 import * as usersRepo from '../../db/repo/users'
 import * as devicesRepo from '../../db/repo/devices'
@@ -29,6 +32,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post('/auth/login', { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) }, async (request) => {
     const input = parse(LoginSchema, request.body)
     return authService.login(db, app.jwt, input)
+  })
+
+  /**
+   * 一体化版入口：客户端启动时拉起本服务端，带上进程内生成的握手令牌换会话。
+   * 非本地模式一律拒绝，联网版服务端不暴露这条路径。
+   */
+  app.post('/auth/local', async (request) => {
+    if (!localMode) throw err.forbidden('该服务器未启用本地模式')
+    const given = request.headers['x-local-token']
+    if (typeof given !== 'string' || !safeEqual(given, env.LOCAL_AUTH_TOKEN)) {
+      throw err.unauthenticated('本机凭证无效')
+    }
+    const input = parse(LocalLoginSchema, request.body)
+    return authService.ensureLocalSession(db, app.jwt, input.device)
   })
 
   app.post('/auth/refresh', { preHandler: rateLimit({ max: 30, windowMs: 60_000 }) }, async (request) => {

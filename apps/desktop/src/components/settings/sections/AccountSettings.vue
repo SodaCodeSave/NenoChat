@@ -10,11 +10,14 @@ import Textarea from '@/components/ui/form/Textarea.vue'
 import Button from '@/components/ui/form/Button.vue'
 import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useServersStore } from '@/stores/servers'
 import { userApi } from '@/api/endpoints'
 import { resetWorkspace } from '@/app/bootstrap'
 
 const router = useRouter()
 const auth = useAuthStore()
+/** 一体版只有内置服务端上的本机账号，没有可退出的登录态 */
+const integrated = useServersStore().integrated
 
 const displayName = ref(auth.user?.displayName ?? '')
 const bio = ref(auth.user?.bio ?? '')
@@ -139,7 +142,7 @@ onBeforeUnmount(() => {
       </SettingRow>
     </SettingsCard>
 
-    <SettingsCard id="danger" title="危险操作" icon="logout" tone="danger">
+    <SettingsCard v-if="!integrated" id="danger" title="危险操作" icon="logout" tone="danger">
       <div class="flex items-center justify-between gap-3">
         <p class="min-w-0 text-[12px] text-muted">退出后需要重新登录，本地数据不会被删除</p>
         <Button variant="danger-ghost" size="sm" icon="logout" @click="confirmLogout = true">

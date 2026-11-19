@@ -58,6 +58,51 @@ jobs:
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           fail_on_unmatched_files: true
 
+  # 一体版：把服务端与 Node 运行时打进安装包，装完即用、不需要再部署服务器。
+  # 与联网版并列产出，标识符不同因此可以同时安装。
+  windows-x64-integrated:
+    name: Windows x64 一体版
+    runs-on: windows-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync package version from git
+        run: pnpm version:sync
+
+      # 产物目录被 gitignore，必须在 tauri build 之前生成，否则资源清单指向不存在的路径
+      - name: Bundle server runtime
+        run: pnpm build:integrated:server
+
+      - name: Build Windows x64 integrated bundles
+        run: pnpm --filter @nenochat/desktop tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.integrated.conf.json
+        env:
+          CI: 'true'
+
+      - name: Upload integrated Windows bundles to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NenoChat-Integrated_*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/NenoChat-Integrated_*.msi
+          fail_on_unmatched_files: true
+
   android-arm64:
     name: Android arm64
     runs-on: ubuntu-latest

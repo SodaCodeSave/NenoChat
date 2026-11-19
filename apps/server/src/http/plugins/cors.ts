@@ -24,7 +24,7 @@ export function applyCors(app: FastifyInstance): void {
       }
       reply.header(
         'Access-Control-Allow-Headers',
-        'Authorization, Content-Type, X-Device-Id, X-Client-Version',
+        'Authorization, Content-Type, X-Device-Id, X-Client-Version, X-Local-Token',
       )
       reply.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
       reply.header('Access-Control-Max-Age', '86400')

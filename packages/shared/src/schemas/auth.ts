@@ -41,6 +41,12 @@ export const RefreshSchema = z.object({
 })
 export type RefreshInput = z.infer<typeof RefreshSchema>
 
+/** 一体化版免密码登录：仅携带设备信息，身份由启动时注入的本机令牌确认 */
+export const LocalLoginSchema = z.object({
+  device: DeviceInfoSchema,
+})
+export type LocalLoginInput = z.infer<typeof LocalLoginSchema>
+
 export const LogoutSchema = z.object({
   refreshToken: z.string().min(10).optional(),
   allDevices: z.boolean().optional(),
