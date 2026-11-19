@@ -17,6 +17,12 @@ describe('服务器双栏页', () => {
     expect(setupSource).toContain(':class="dotClass(status[server.id])"')
   })
 
+  it('每个服务器显示探测到的版本号', () => {
+    expect(setupSource).toContain('const info = await servers.probe(server.baseUrl)')
+    expect(setupSource).toContain('versions.value[server.id] = info.version')
+    expect(setupSource).toContain('v-if="versions[server.id]"')
+  })
+
   it('进页自动探测全部服务器，并可手动刷新重测', () => {
     expect(setupSource).toContain('void testServers()')
     expect(setupSource).toContain('@click="testServers"')

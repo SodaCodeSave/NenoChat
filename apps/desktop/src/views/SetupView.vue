@@ -18,6 +18,7 @@ const probing = ref(false)
 const switchingId = ref<string | null>(null)
 const error = ref<string | null>(null)
 const status = ref<Record<string, ProbeState>>({})
+const versions = ref<Record<string, string | null>>({})
 
 const normalized = computed(() => {
   try {
@@ -33,12 +34,17 @@ async function testServers(): Promise<void> {
   probing.value = true
   const snapshot = [...servers.servers]
   status.value = {}
-  for (const server of snapshot) status.value[server.id] = 'checking'
+  versions.value = {}
+  for (const server of snapshot) {
+    status.value[server.id] = 'checking'
+    versions.value[server.id] = null
+  }
   await Promise.all(
     snapshot.map(async (server) => {
       try {
-        await servers.probe(server.baseUrl)
+        const info = await servers.probe(server.baseUrl)
         status.value[server.id] = 'online'
+        versions.value[server.id] = info.version
       } catch {
         status.value[server.id] = 'offline'
       }
@@ -81,8 +87,9 @@ async function connect(): Promise<void> {
   error.value = null
   try {
     const instance = await servers.add(url.value, label.value || undefined)
-    status.value[instance.id] = 'online'
     await servers.setCurrent(instance.id)
+    status.value[instance.id] = 'online'
+    versions.value[instance.id] = servers.serverInfo?.version ?? null
     resetWorkspace()
     await auth.clearSession()
     url.value = ''
@@ -144,7 +151,13 @@ async function connect(): Promise<void> {
             :title="dotLabel(status[server.id])"
           />
           <span class="min-w-0 flex-1">
-            <span class="block truncate text-[13px] font-medium text-text-strong">{{ server.name }}</span>
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span class="truncate text-[13px] font-medium text-text-strong">{{ server.name }}</span>
+              <span
+                v-if="versions[server.id]"
+                class="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10.5px] text-muted"
+              >{{ versions[server.id] }}</span>
+            </span>
             <span class="block truncate text-[11px] text-muted">{{ server.baseUrl }}</span>
           </span>
           <Icon
