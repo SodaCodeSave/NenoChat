@@ -40,6 +40,13 @@ describe('replaceCargoLockVersion', () => {
     expect(out).toContain('name = "other"\nversion = "9.9.9"')
   })
 
+  it('兼容 CRLF 换行（Windows runner checkout 会把 Cargo.lock 转成 CRLF）', () => {
+    const src = '[[package]]\r\nname = "nenochat"\r\nversion = "0.1.0"\r\n\r\n[[package]]\r\nname = "other"\r\nversion = "9.9.9"\r\n'
+    const out = replaceCargoLockVersion(src, '0.2.0')
+    expect(out).toContain('name = "nenochat"\r\nversion = "0.2.0"')
+    expect(out).toContain('name = "other"\r\nversion = "9.9.9"')
+  })
+
   it('没有根包条目时报错', () => {
     expect(() => replaceCargoLockVersion('[[package]]\nname = "other"\n', '1.0.0')).toThrow(
       '未找到 Cargo.lock 中 nenochat 版本',

@@ -20,9 +20,12 @@ export function replaceTomlVersion(content, version) {
   return next
 }
 
-/** 替换 Cargo.lock 中根包（nenochat）的 version 字段 */
+/** 替换 Cargo.lock 中根包（nenochat）的 version 字段（兼容 LF / CRLF，Windows runner checkout 会转成 CRLF） */
 export function replaceCargoLockVersion(content, version) {
-  const next = content.replace(/(\[\[package\]\]\nname = "nenochat"\nversion = ")[^"]*(")/, `$1${version}$2`)
+  const next = content.replace(
+    /(\[\[package\]\]\r?\nname = "nenochat"\r?\nversion = ")[^"]*(")/,
+    `$1${version}$2`,
+  )
   if (next === content) throw new Error('未找到 Cargo.lock 中 nenochat 版本')
   return next
 }
