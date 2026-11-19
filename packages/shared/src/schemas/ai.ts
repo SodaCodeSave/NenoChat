@@ -16,7 +16,12 @@ export const ProviderSchema = z.object({
   contextWindow: z.number().int().min(256).max(10_000_000).nullable().optional(),
 })
 
-export const ProviderPatchSchema = ProviderSchema.partial()
+/** 服务商局部更新：字段全部可选，且不应用创建时的默认值 */
+export const ProviderPatchSchema = ProviderSchema.omit({ keyLocation: true })
+  .partial()
+  .extend({
+    keyLocation: z.enum([KeyLocation.Local, KeyLocation.Server]).optional(),
+  })
 
 export const TestProviderSchema = z.object({
   baseUrl: z.string().trim().min(8).max(512),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProvider } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
 import SvgIcon from '@/components/ui/SvgIcon.vue'
@@ -27,8 +27,15 @@ const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 
 const showProviderForm = ref(false)
+const editingProviderId = ref<string | null>(null)
+const savingProvider = ref(false)
 const testing = ref(false)
 const refreshingBalance = ref<Record<string, boolean>>({})
+
+/** 当前正在编辑的服务商；为空表示表单处于添加模式 */
+const editingProvider = computed(
+  () => providers.value.find((p) => p.id === editingProviderId.value) ?? null,
+)
 
 const pendingRemoveProvider = ref<AiProvider | null>(null)
 const removingProvider = ref(false)
@@ -184,30 +191,100 @@ async function testConnection(): Promise<void> {
   }
 }
 
-async function addProvider(): Promise<void> {
+async function saveProvider(): Promise<void> {
+  const editingId = editingProviderId.value
+  const original = editingProvider.value
+  const form = providerForm.value
   error.value = null
+  notice.value = null
+
+  if (
+    editingId &&
+    original &&
+    original.keyLocation !== form.keyLocation &&
+    !form.apiKey &&
+    original.apiKeyMasked
+  ) {
+    error.value = '切换密钥存放位置时需要重新填写 API Key'
+    return
+  }
+
+  const payload: ProviderInput = {
+    name: form.name,
+    baseUrl: form.baseUrl,
+    model: form.model,
+    keyLocation: form.keyLocation,
+    visionModel: form.visionModel?.trim() || null,
+    contextWindow: form.contextWindow && form.contextWindow >= 256 ? form.contextWindow : null,
+    ...(form.keyLocation === 'server' && !form.apiKey ? {} : { apiKey: form.apiKey ?? '' }),
+  }
+
+  savingProvider.value = true
   try {
-    const form = {
-      ...providerForm.value,
-      visionModel: providerForm.value.visionModel?.trim() || null,
-      contextWindow:
-        providerForm.value.contextWindow && providerForm.value.contextWindow >= 256
-          ? providerForm.value.contextWindow
-          : null,
+    if (editingId) {
+      const result = await aiApi.updateProvider(editingId, payload)
+      const updated = result.provider
+      // 密钥位置变更后同步本机钥匙串：本机模式写明文，云端模式不留副本
+      if (form.keyLocation === 'local') {
+        if (form.apiKey) await saveProviderKey(editingId, form.apiKey)
+        else await clearProviderKey(editingId)
+      } else {
+        await clearProviderKey(editingId)
+      }
+      providers.value = providers.value.map((p) => (p.id === updated.id ? updated : p))
+      ai.providers = ai.providers.map((p) => (p.id === updated.id ? updated : p))
+      notice.value = '已保存修改'
+    } else {
+      const result = await aiApi.createProvider(payload)
+      // key 存本地钥匙串，服务端只保存「存哪里」这个标记
+      if (form.keyLocation === 'local' && form.apiKey) {
+        await saveProviderKey(result.provider.id, form.apiKey)
+      }
+      notice.value = '已添加 AI 服务商'
     }
-    const created = await aiApi.createProvider(form)
-    // key 存本地钥匙串，服务端只保存「存哪里」这个标记
-    if (providerForm.value.keyLocation === 'local' && providerForm.value.apiKey) {
-      await saveProviderKey(created.provider.id, providerForm.value.apiKey)
-    }
-    await load()
-    resetProviderForm()
+    stopEditProvider()
     showProviderForm.value = false
-    notice.value = '已添加 AI 服务商'
+    await load()
     void probeMissingBalances()
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '添加失败'
+    error.value = e instanceof Error ? e.message : '保存服务商失败'
+  } finally {
+    savingProvider.value = false
   }
+}
+
+/** 进入编辑态：本机密钥从钥匙串回填，云端密钥留空表示不改动 */
+async function startEditProvider(provider: AiProvider): Promise<void> {
+  error.value = null
+  notice.value = null
+  editingProviderId.value = provider.id
+  showProviderForm.value = true
+  const localKey = provider.keyLocation === 'local' ? await loadProviderKey(provider.id) : ''
+  providerForm.value = {
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    apiKey: localKey,
+    keyLocation: provider.keyLocation,
+    visionModel: provider.visionModel ?? '',
+    contextWindow: provider.contextWindow ?? null,
+  }
+}
+
+function stopEditProvider(): void {
+  editingProviderId.value = null
+  resetProviderForm()
+}
+
+function cancelProviderForm(): void {
+  stopEditProvider()
+  showProviderForm.value = false
+}
+
+function toggleProviderForm(): void {
+  if (showProviderForm.value) stopEditProvider()
+  else resetProviderForm()
+  showProviderForm.value = !showProviderForm.value
 }
 
 function resetProviderForm(): void {
@@ -357,7 +434,7 @@ onBeforeUnmount(() => {
           size="sm"
           :variant="showProviderForm ? 'secondary' : 'secondary'"
           :icon="showProviderForm ? 'close' : 'plus'"
-          @click="showProviderForm = !showProviderForm"
+          @click="toggleProviderForm"
         >
           {{ showProviderForm ? '收起' : '添加服务商' }}
         </Button>
@@ -366,6 +443,9 @@ onBeforeUnmount(() => {
       <TokenRouterAdBanner />
 
       <div v-if="showProviderForm" class="mb-3 space-y-3 rounded-lg border border-line bg-surface-2 p-3">
+        <p v-if="editingProvider" class="text-[12px] text-muted">
+          正在编辑 <span class="font-medium text-text-strong">{{ editingProvider.name }}</span>
+        </p>
         <div>
           <p class="mb-1.5 text-[11.5px] font-medium text-muted">快速预设</p>
           <div class="flex flex-wrap gap-1.5">
@@ -425,7 +505,15 @@ onBeforeUnmount(() => {
           />
         </Field>
 
-        <Field label="API Key" for-id="provider-key" hint="留空表示这个端点不需要密钥">
+        <Field
+          label="API Key"
+          for-id="provider-key"
+          :hint="
+            editingProvider && providerForm.keyLocation === 'server'
+              ? `云端密钥不可读取：留空保持原密钥${editingProvider.apiKeyMasked ? `（${editingProvider.apiKeyMasked}）` : ''}，填新值才覆盖`
+              : '留空表示这个端点不需要密钥'
+          "
+        >
           <TextInput
             id="provider-key"
             :model-value="providerForm.apiKey ?? ''"
@@ -474,7 +562,12 @@ onBeforeUnmount(() => {
           <Button size="sm" variant="ghost" :loading="testing" @click="testConnection">
             {{ testing ? '测试中…' : '测试连接' }}
           </Button>
-          <Button size="sm" variant="primary" @click="addProvider">保存服务商</Button>
+          <Button v-if="editingProvider" size="sm" variant="ghost" @click="cancelProviderForm">
+            取消
+          </Button>
+          <Button size="sm" variant="primary" :loading="savingProvider" @click="saveProvider">
+            {{ editingProvider ? '保存修改' : '保存服务商' }}
+          </Button>
         </div>
       </div>
 
@@ -488,6 +581,7 @@ onBeforeUnmount(() => {
           v-for="provider in providers"
           :key="provider.id"
           class="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2"
+          :class="editingProviderId === provider.id ? 'border-accent' : ''"
         >
           <span class="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface">
             <SvgIcon
@@ -535,6 +629,14 @@ onBeforeUnmount(() => {
             @update:model-value="saveContextWindow(provider, $event)"
           />
 
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="edit"
+            title="编辑服务商"
+            aria-label="编辑服务商"
+            @click="startEditProvider(provider)"
+          />
           <Button
             variant="ghost"
             size="sm"

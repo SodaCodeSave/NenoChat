@@ -123,12 +123,15 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
   const current = aiRepo.findProvider(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
+  const keyLocation = input.keyLocation ?? current.key_location
   const apiKeyEnc =
-    input.apiKey === undefined
-      ? undefined
-      : input.apiKey
-        ? encryptSecret(input.apiKey)
-        : null
+    keyLocation === 'server'
+      ? input.apiKey === undefined
+        ? undefined
+        : input.apiKey
+          ? encryptSecret(input.apiKey)
+          : null
+      : null
 
   const row = withTx(db, () =>
     aiRepo.updateProvider(db, id, {
