@@ -28,4 +28,12 @@ describe('AboutSettings', () => {
     expect(source).toContain('servers.serverInfo?.version')
     expect(source).toContain('normalizeServerUrl')
   })
+
+  it('一体版的服务端版本显示为内嵌，不再暴露远端版本号', () => {
+    expect(source).toContain('servers.integrated')
+    expect(source).toContain('内嵌')
+    // 内嵌分支与远端分支互斥，避免两个值同时渲染
+    expect(source).toContain('v-if="servers.integrated"')
+    expect(source).toContain('v-else')
+  })
 })

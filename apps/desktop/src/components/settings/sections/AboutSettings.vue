@@ -77,8 +77,12 @@ onMounted(() => {
       <SettingRow label="客户端版本">
         <span class="font-mono text-[12px] text-text">{{ CLIENT_VERSION }}</span>
       </SettingRow>
-      <SettingRow label="服务端版本">
-        <span class="font-mono text-[12px] text-text">{{ servers.serverInfo?.version ?? '-' }}</span>
+      <SettingRow
+        label="服务端版本"
+        :description="servers.integrated ? '与客户端同包安装，随客户端版本一起更新' : ''"
+      >
+        <span v-if="servers.integrated" class="text-[12px] text-text">内嵌</span>
+        <span v-else class="font-mono text-[12px] text-text">{{ servers.serverInfo?.version ?? '-' }}</span>
       </SettingRow>
       <SettingRow label="协议前缀">
         <span class="max-w-[240px] truncate font-mono text-[11.5px] text-muted">
