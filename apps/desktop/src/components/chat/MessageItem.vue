@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { type ConnectorActionMeta, type Message, extractUrls } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
+import SvgIcon from '@/components/ui/SvgIcon.vue'
 import LinkCard from './LinkCard.vue'
 import LinkInline from './LinkInline.vue'
 import { connectorPresetOf } from '@/config/connectors'
@@ -302,12 +303,7 @@ const liveConnectorLabel = computed(() => {
               <template v-for="(hint, index) in connectorHints" :key="hint.kind">
                 <span v-if="index > 0" :class="qqOwn ? 'text-white/40' : 'text-muted/50'">·</span>
                 <span class="flex items-center gap-1">
-                  <img
-                    v-if="hint.icon"
-                    :src="hint.icon"
-                    class="h-3 w-3 object-contain"
-                    alt=""
-                  />
+                  <SvgIcon v-if="hint.icon" :source="hint.icon" class="h-3 w-3" />
                   <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
                   {{ hint.label }}
                 </span>

@@ -1,26 +1,26 @@
-import openaiIcon from '@lobehub/icons-static-svg/icons/openai.svg'
-import openaiTextIcon from '@lobehub/icons-static-svg/icons/openai-text.svg'
-import anthropicIcon from '@lobehub/icons-static-svg/icons/anthropic.svg'
-import anthropicTextIcon from '@lobehub/icons-static-svg/icons/anthropic-text.svg'
-import geminiIcon from '@lobehub/icons-static-svg/icons/gemini-color.svg'
-import geminiTextIcon from '@lobehub/icons-static-svg/icons/gemini-text.svg'
-import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg'
-import deepseekTextIcon from '@lobehub/icons-static-svg/icons/deepseek-text.svg'
-import kimiIcon from '@lobehub/icons-static-svg/icons/kimi-color.svg'
-import kimiTextIcon from '@lobehub/icons-static-svg/icons/kimi-text.svg'
-import zhipuIcon from '@lobehub/icons-static-svg/icons/zhipu.svg'
-import zhipuTextIcon from '@lobehub/icons-static-svg/icons/zhipu-text.svg'
-import qwenIcon from '@lobehub/icons-static-svg/icons/qwen-color.svg'
-import qwenTextIcon from '@lobehub/icons-static-svg/icons/qwen-text.svg'
-import ollamaIcon from '@lobehub/icons-static-svg/icons/ollama.svg'
-import ollamaTextIcon from '@lobehub/icons-static-svg/icons/ollama-text.svg'
-import siliconcloudIcon from '@lobehub/icons-static-svg/icons/siliconcloud-color.svg'
-import siliconcloudTextIcon from '@lobehub/icons-static-svg/icons/siliconcloud-text.svg'
-import minimaxIcon from '@lobehub/icons-static-svg/icons/minimax-color.svg'
-import minimaxTextIcon from '@lobehub/icons-static-svg/icons/minimax-text.svg'
-import volcengineIcon from '@lobehub/icons-static-svg/icons/volcengine-color.svg'
-import volcengineTextIcon from '@lobehub/icons-static-svg/icons/volcengine-text.svg'
-import tokenrouterIcon from '@/assets/icons/tokenrouter.svg'
+import openaiIcon from '@lobehub/icons-static-svg/icons/openai.svg?raw'
+import openaiTextIcon from '@lobehub/icons-static-svg/icons/openai-text.svg?raw'
+import anthropicIcon from '@lobehub/icons-static-svg/icons/anthropic.svg?raw'
+import anthropicTextIcon from '@lobehub/icons-static-svg/icons/anthropic-text.svg?raw'
+import geminiIcon from '@lobehub/icons-static-svg/icons/gemini-color.svg?raw'
+import geminiTextIcon from '@lobehub/icons-static-svg/icons/gemini-text.svg?raw'
+import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?raw'
+import deepseekTextIcon from '@lobehub/icons-static-svg/icons/deepseek-text.svg?raw'
+import kimiIcon from '@lobehub/icons-static-svg/icons/kimi-color.svg?raw'
+import kimiTextIcon from '@lobehub/icons-static-svg/icons/kimi-text.svg?raw'
+import zhipuIcon from '@lobehub/icons-static-svg/icons/zhipu.svg?raw'
+import zhipuTextIcon from '@lobehub/icons-static-svg/icons/zhipu-text.svg?raw'
+import qwenIcon from '@lobehub/icons-static-svg/icons/qwen-color.svg?raw'
+import qwenTextIcon from '@lobehub/icons-static-svg/icons/qwen-text.svg?raw'
+import ollamaIcon from '@lobehub/icons-static-svg/icons/ollama.svg?raw'
+import ollamaTextIcon from '@lobehub/icons-static-svg/icons/ollama-text.svg?raw'
+import siliconcloudIcon from '@lobehub/icons-static-svg/icons/siliconcloud-color.svg?raw'
+import siliconcloudTextIcon from '@lobehub/icons-static-svg/icons/siliconcloud-text.svg?raw'
+import minimaxIcon from '@lobehub/icons-static-svg/icons/minimax-color.svg?raw'
+import minimaxTextIcon from '@lobehub/icons-static-svg/icons/minimax-text.svg?raw'
+import volcengineIcon from '@lobehub/icons-static-svg/icons/volcengine-color.svg?raw'
+import volcengineTextIcon from '@lobehub/icons-static-svg/icons/volcengine-text.svg?raw'
+import tokenrouterIcon from '@/assets/icons/tokenrouter.svg?raw'
 
 export interface AiProviderPreset {
   id: string
@@ -30,8 +30,9 @@ export interface AiProviderPreset {
   name: string
   baseUrl: string
   model: string
+  /** SVG 源码，由 SvgIcon 内联渲染 */
   icon: string
-  /** 字标图标，预设胶囊里用它替代文字；没有字标的服务商留空回退显示文字 */
+  /** 字标 SVG 源码；没有字标的服务商留空回退显示文字 */
   textIcon?: string
   /** 用于把已保存的服务商匹配回图标的关键词（匹配 name 或 baseUrl，小写） */
   keywords: string[]

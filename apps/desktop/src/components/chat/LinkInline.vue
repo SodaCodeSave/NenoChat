@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { isBilibiliUrl, type LinkPreview } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
+import SvgIcon from '@/components/ui/SvgIcon.vue'
 import { connectorPresetOf } from '@/config/connectors'
 import { loadLinkPreviewCached } from '@/composables/link-preview'
 
@@ -62,12 +63,10 @@ const title = computed(() => preview.value?.title ?? shortUrl.value)
     class="inline-flex max-w-[320px] items-center gap-1 align-middle hover:underline"
     :class="inheritColor ? 'text-current' : 'text-accent'"
   >
-    <img
+    <SvgIcon
       v-if="isBilibili && bilibiliIcon"
-      :src="bilibiliIcon"
-      alt=""
-      class="h-[15px] w-[15px] shrink-0 object-contain"
-      loading="lazy"
+      :source="bilibiliIcon"
+      class="h-[15px] w-[15px]"
     />
     <img
       v-else-if="faviconUrl && !faviconFailed"

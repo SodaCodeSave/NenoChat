@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProvider } from '@nenochat/shared'
 import Icon from '@/components/ui/Icon.vue'
+import SvgIcon from '@/components/ui/SvgIcon.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Field from '@/components/ui/form/Field.vue'
@@ -380,13 +381,13 @@ onBeforeUnmount(() => {
               "
               @click="applyPreset(preset.id)"
             >
-              <img :src="preset.icon" :alt="preset.label" class="h-4 w-4 shrink-0 object-contain" />
-              <img
+              <SvgIcon :source="preset.icon" :label="preset.label" class="h-4 w-4" />
+              <SvgIcon
                 v-if="preset.textIcon"
-                :src="preset.textIcon"
-                :alt="preset.label"
-                :title="preset.label"
-                class="h-3.5 w-auto max-w-[64px] shrink-0 object-contain"
+                :source="preset.textIcon"
+                :label="preset.label"
+                auto-width
+                class="h-3.5 max-w-[64px]"
               />
               <span v-else>{{ preset.label }}</span>
             </button>
@@ -489,11 +490,11 @@ onBeforeUnmount(() => {
           class="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2"
         >
           <span class="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-surface">
-            <img
+            <SvgIcon
               v-if="providerIcon(provider)"
-              :src="providerIcon(provider)!"
-              :alt="provider.name"
-              class="h-4 w-4 object-contain"
+              :source="providerIcon(provider)!"
+              :label="provider.name"
+              class="h-4 w-4"
             />
             <Icon v-else name="sparkles" :size="14" class="text-mention" />
           </span>

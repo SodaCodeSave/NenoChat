@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { Connector, ConnectorType } from '@nenochat/shared'
+import SvgIcon from '@/components/ui/SvgIcon.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import Field from '@/components/ui/form/Field.vue'
 import TextInput from '@/components/ui/form/TextInput.vue'
@@ -263,15 +264,16 @@ onMounted(() => {
         >
           <div class="flex items-start gap-2.5">
             <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface">
-              <img :src="preset.icon" :alt="preset.label" class="h-5 w-5 object-contain" />
+              <SvgIcon :source="preset.icon" :label="preset.label" class="h-5 w-5" />
             </span>
             <div class="min-w-0 flex-1">
               <p class="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-text-strong">
-                <img
+                <SvgIcon
                   v-if="preset.textIcon"
-                  :src="preset.textIcon"
-                  :alt="preset.label"
-                  class="h-3.5 w-auto max-w-[84px] object-contain"
+                  :source="preset.textIcon"
+                  :label="preset.label"
+                  auto-width
+                  class="h-3.5 max-w-[84px]"
                 />
                 <span v-else>{{ preset.label }}</span>
                 <span

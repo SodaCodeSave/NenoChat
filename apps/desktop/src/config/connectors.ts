@@ -1,9 +1,9 @@
-import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg'
-import deepseekTextIcon from '@lobehub/icons-static-svg/icons/deepseek-text.svg'
-import bilibiliIcon from '@lobehub/icons-static-svg/icons/bilibili-color.svg'
-import bilibiliTextIcon from '@lobehub/icons-static-svg/icons/bilibili-text.svg'
-import heweatherIcon from '@/assets/heweather-icon.svg'
-import heweatherTextIcon from '@/assets/heweather-text.svg'
+import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?raw'
+import deepseekTextIcon from '@lobehub/icons-static-svg/icons/deepseek-text.svg?raw'
+import bilibiliIcon from '@lobehub/icons-static-svg/icons/bilibili-color.svg?raw'
+import bilibiliTextIcon from '@lobehub/icons-static-svg/icons/bilibili-text.svg?raw'
+import heweatherIcon from '@/assets/heweather-icon.svg?raw'
+import heweatherTextIcon from '@/assets/heweather-text.svg?raw'
 import type { ConnectorType } from '@nenochat/shared'
 
 export interface ConnectorPreset {
@@ -16,7 +16,9 @@ export interface ConnectorPreset {
   description: string
   /** 连接器能做什么，卡片上第二条说明 */
   capability: string
+  /** SVG 源码，由 SvgIcon 内联渲染 */
   icon: string
+  /** 字标 SVG 源码 */
   textIcon?: string
 }
 
