@@ -51,6 +51,8 @@ export const PersonaSchema = z.object({
   temperature: z.number().min(0).max(2).nullable().optional(),
   replyStyle: z.enum([ReplyStyle.Chatty, ReplyStyle.Concise, ReplyStyle.Narrative]).optional(),
   greeting: z.string().max(2000).nullable().optional(),
+  /** 该角色可用的表情包分组；null = 跟随全局授权，数组 = 白名单 */
+  stickerPackIds: z.array(z.string().min(1).max(64)).max(100).nullable().optional(),
   /** 主动消息跟随全局还是单独配置；不传时按是否显式启用推断 */
   proactiveMode: z.enum(['global', 'custom']).optional(),
   /** 与用户的关系；null 表示清掉 */

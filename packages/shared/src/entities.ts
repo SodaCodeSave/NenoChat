@@ -339,6 +339,8 @@ export interface AiPersona {
   modelOverride?: string | null
   temperature?: number | null
   replyStyle: ReplyStyle
+  /** 该角色可用的表情包分组白名单；null / 空 = 跟随全局（各分组「允许 AI 使用」开关） */
+  stickerPackIds?: string[] | null
   /** 角色自己的主动消息配置，仅在 proactiveMode='custom' 时生效 */
   proactive: ProactiveConfig
   proactiveMode: ProactiveMode

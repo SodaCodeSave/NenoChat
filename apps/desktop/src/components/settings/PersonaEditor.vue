@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { AiPersona, AiProvider } from '@nenochat/shared'
 import AvatarUploader from './AvatarUploader.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -16,6 +16,7 @@ import { aiApi, type PersonaInput } from '@/api/ai'
 import { uploadFile } from '@/api/files'
 import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
 import { useAiStore } from '@/stores/ai'
+import { useStickersStore } from '@/stores/stickers'
 import ModelPicker from './ModelPicker.vue'
 
 const props = defineProps<{
@@ -29,6 +30,12 @@ const emit = defineEmits<{
 }>()
 
 const ai = useAiStore()
+const stickers = useStickersStore()
+
+onMounted(() => {
+  // 表情包分组列表按需拉一次；失败不阻塞表单，只是选不了分组
+  void stickers.load().catch(() => undefined)
+})
 
 /** 当前角色所选服务商的模型列表；默认服务商取第一个 */
 const modelsForSelectedProvider = computed(() => {
@@ -73,6 +80,7 @@ function emptyForm(): PersonaInput {
     modelOverride: null,
     replyStyle: 'chatty',
     greeting: null,
+    stickerPackIds: null,
     proactiveMode: 'global',
     proactive: { ...EMPTY_PROACTIVE },
   }
@@ -93,6 +101,7 @@ function fromPersona(persona: AiPersona | null | undefined): PersonaInput {
     modelOverride: persona.modelOverride ?? null,
     replyStyle: persona.replyStyle,
     greeting: persona.greeting ?? null,
+    stickerPackIds: persona.stickerPackIds ? [...persona.stickerPackIds] : null,
     proactiveMode: persona.proactiveMode ?? 'global',
     proactive: {
       enabled: persona.proactive.enabled,
@@ -123,6 +132,33 @@ const interests = computed(() => form.value.interests ?? [])
 const proactive = computed(() => form.value.proactive ?? { ...EMPTY_PROACTIVE })
 const chanceMode = computed(() => (proactive.value.triggerMode ?? 'idle') === 'chance')
 const followsGlobal = computed(() => (form.value.proactiveMode ?? 'global') === 'global')
+
+/* --------------------------- 表情包授权 --------------------------- */
+
+/** null = 跟随全局；数组 = 白名单（哪怕空数组也代表「一个都不给用」） */
+const stickerMode = computed<'global' | 'custom'>(() =>
+  form.value.stickerPackIds === null || form.value.stickerPackIds === undefined ? 'global' : 'custom',
+)
+
+/** 可勾选的分组：只列图片表情包，emoji 键盘分组对 AI 没有意义 */
+const selectablePacks = computed(() => stickers.packs.filter((entry) => entry.pack.kind !== 'emoji'))
+
+function stickerCountOf(packId: string): number {
+  return stickers.packs.find((entry) => entry.pack.id === packId)?.stickers.length ?? 0
+}
+
+function setStickerMode(mode: 'global' | 'custom'): void {
+  if (mode === stickerMode.value) return
+  // 切到自选时默认全不勾；切回跟随全局时清掉白名单
+  form.value.stickerPackIds = mode === 'custom' ? [] : null
+}
+
+function toggleStickerPack(packId: string): void {
+  const current = form.value.stickerPackIds ?? []
+  form.value.stickerPackIds = current.includes(packId)
+    ? current.filter((id) => id !== packId)
+    : [...current, packId]
+}
 
 /** 跟随全局时把总设置摊开给用户看，免得「为什么它不发」 */
 const globalSummary = computed(() => {
@@ -408,6 +444,60 @@ async function save(): Promise<void> {
         @update:model-value="form.modelOverride = $event || null"
       />
     </Field>
+
+    <div class="rounded-lg border border-line bg-surface-2 p-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[12px] font-medium text-text">可用表情包</span>
+        <Segmented
+          :model-value="stickerMode"
+          size="sm"
+          :options="[
+            { value: 'global', label: '跟随全局' },
+            { value: 'custom', label: '自选分组' },
+          ]"
+          aria-label="表情包授权来源"
+          @update:model-value="setStickerMode($event as 'global' | 'custom')"
+        />
+      </div>
+
+      <template v-if="stickerMode === 'global'">
+        <p class="mt-2 text-[11px] leading-relaxed text-muted">
+          使用所有打开了「允许 AI 使用」开关的分组。想按角色区分就在表情包设置里控制总开关，或切到「自选分组」。
+        </p>
+      </template>
+
+      <template v-else>
+        <div v-if="selectablePacks.length === 0" class="mt-2 text-[11.5px] text-muted">
+          还没有图片表情包，先到 设置 → 表情包 里建一个。
+        </div>
+        <div v-else class="mt-2 flex flex-col gap-1">
+          <label
+            v-for="entry in selectablePacks"
+            :key="entry.pack.id"
+            class="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-surface-3/60"
+          >
+            <input
+              type="checkbox"
+              class="accent-accent"
+              :checked="(form.stickerPackIds ?? []).includes(entry.pack.id)"
+              @change="toggleStickerPack(entry.pack.id)"
+            />
+            <span class="min-w-0 flex-1 truncate text-[12px] text-text">{{ entry.pack.name }}</span>
+            <span class="shrink-0 text-[11px] text-muted">{{ stickerCountOf(entry.pack.id) }} 张</span>
+            <span
+              v-if="!entry.pack.allowAi"
+              class="shrink-0 rounded bg-danger/10 px-1 py-0.5 text-[10px] text-danger"
+              title="该分组没有打开「允许 AI 使用」，里面的表情不会出现在清单里"
+            >
+              未授权 AI
+            </span>
+          </label>
+        </div>
+        <p class="mt-2 text-[11px] leading-relaxed text-muted">
+          只有勾选分组里带情绪标签的表情会进入 AI 的清单；分组本身仍需打开「允许 AI 使用」。
+        </p>
+      </template>
+    </div>
 
     <div class="rounded-lg border border-line bg-surface-2 p-2.5">
       <Segmented

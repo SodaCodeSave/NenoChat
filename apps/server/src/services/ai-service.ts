@@ -180,6 +180,8 @@ export interface PersonaPayload {
   temperature?: number | null
   replyStyle?: ReplyStyle
   greeting?: string | null
+  /** 该角色可用的表情包分组白名单；null / 空 = 跟随全局授权 */
+  stickerPackIds?: string[] | null
   proactive?: {
     enabled: boolean
     minIdleHours: number
@@ -271,6 +273,7 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
       temperature: input.temperature ?? null,
       replyStyle: input.replyStyle,
       greeting: input.greeting ?? null,
+      stickerPackIds: input.stickerPackIds ?? null,
       proactive: input.proactive,
     })
 
@@ -690,9 +693,12 @@ export function appendAiSegment(
   const personaId = input.personaId ?? session?.persona_id ?? conv.ai_persona_id ?? undefined
   const ownerId = conv.ai_owner_user_id ?? null
 
-  // 表情标记解析：清单为空（没授权任何表情包）时按普通文字处理
+  // 表情标记解析：按角色的表情包授权取有效编号（没授权任何表情包时按普通文字处理）
+  const personaRow = personaId ? aiRepo.findPersona(db, personaId) : undefined
   const enabledIds = ownerId
-    ? new Set(stickersRepo.listAiStickers(db, ownerId).map((row) => row.id))
+    ? personaRow
+      ? aiEnabledStickerIds(db, personaRow)
+      : new Set(stickersRepo.listAiStickers(db, ownerId).map((row) => row.id))
     : new Set<string>()
   const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
   const text = marker?.stickerId ? marker.text : input.content
@@ -993,7 +999,7 @@ async function runGenerationOnServer(
     quoted,
     userImages: imageInput.userImages,
     includeImages: imageInput.includeImages,
-    stickers: aiStickerOptions(db, input.userId),
+    stickers: aiStickerOptionsForPersona(db, persona),
     schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
     connectorContext: connector.context,
@@ -1446,9 +1452,24 @@ const STICKER_TAG_PROMPT =
   '这是聊天软件里的一张表情包。请给出 3~5 个描述它的情绪或使用场景的中文标签，' +
   '用逗号分隔（例如：开心,庆祝,可爱）。只输出标签，不要任何解释。'
 
-/** 提示词里可用的表情清单：id + 情绪标签，来自「允许 AI 使用」的分组 */
-export function aiStickerOptions(db: DB, ownerId: string): Array<{ id: string; tags: string[] }> {
-  return stickersRepo.listAiStickers(db, ownerId).map((row) => ({ id: row.id, tags: row.keywords }))
+/**
+ * 按角色取提示词里的表情清单：角色配了 stickerPackIds 白名单时只在白名单分组里挑，
+ * 没配（null）则沿用全部授权分组。群聊与私聊的提示词共用这一个口径。
+ */
+export function aiStickerOptionsForPersona(
+  db: DB,
+  persona: aiRepo.PersonaRow,
+): Array<{ id: string; tags: string[] }> {
+  const packFilter = aiRepo.parseStickerPackIds(persona.sticker_pack_ids)
+  return stickersRepo
+    .listAiStickers(db, persona.owner_id, packFilter)
+    .map((row) => ({ id: row.id, tags: row.keywords }))
+}
+
+/** 落库校验用的有效表情 id 集合，口径与 aiStickerOptionsForPersona 一致 */
+export function aiEnabledStickerIds(db: DB, persona: aiRepo.PersonaRow): Set<string> {
+  const packFilter = aiRepo.parseStickerPackIds(persona.sticker_pack_ids)
+  return new Set(stickersRepo.listAiStickers(db, persona.owner_id, packFilter).map((row) => row.id))
 }
 
 /** "开心,庆祝、 可爱" 这类上游输出收敛成干净的标签数组 */

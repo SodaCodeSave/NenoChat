@@ -148,25 +148,37 @@ export function updateStickerKeywords(db: DB, id: string, keywords: string[]): v
 /**
  * 某个用户名下所有「允许 AI 使用」的图片表情及其情绪标签。
  * 提示词清单与落库时校验标记合法性都从这里取数据。
+ * @param packFilter 角色级白名单：非空时只返回这些分组里的表情；null / 空 = 全部授权分组
  */
-export function listAiStickers(db: DB, ownerId: string): Array<{ id: string; keywords: string[] }> {
+export function listAiStickers(
+  db: DB,
+  ownerId: string,
+  packFilter?: ReadonlyArray<string> | null,
+): Array<{ id: string; packId: string; keywords: string[] }> {
+  const filter = packFilter && packFilter.length > 0 ? [...new Set(packFilter)] : null
+  const placeholders = filter ? filter.map(() => '?').join(',') : ''
   const rows = db
     .prepare(
-      `SELECT s.id, s.keywords FROM stickers s
+      `SELECT s.id, s.pack_id, s.keywords FROM stickers s
        JOIN sticker_packs p ON p.id = s.pack_id
        WHERE p.allow_ai = 1 AND p.owner_id = ?
-         AND s.kind IN ('image', 'gif') AND s.keywords IS NOT NULL`,
+         AND s.kind IN ('image', 'gif') AND s.keywords IS NOT NULL
+         ${filter ? `AND s.pack_id IN (${placeholders})` : ''}`,
     )
-    .all(ownerId) as Array<{ id: string; keywords: string | null }>
+    .all(...(filter ? [ownerId, ...filter] : [ownerId])) as Array<{
+    id: string
+    pack_id: string
+    keywords: string | null
+  }>
 
-  const out: Array<{ id: string; keywords: string[] }> = []
+  const out: Array<{ id: string; packId: string; keywords: string[] }> = []
   for (const row of rows) {
     if (!row.keywords) continue
     try {
       const parsed = JSON.parse(row.keywords)
       if (Array.isArray(parsed)) {
         const tags = parsed.filter((k): k is string => typeof k === 'string' && k.length > 0)
-        if (tags.length > 0) out.push({ id: row.id, keywords: tags })
+        if (tags.length > 0) out.push({ id: row.id, packId: row.pack_id, keywords: tags })
       }
     } catch {
       /* 坏数据跳过 */

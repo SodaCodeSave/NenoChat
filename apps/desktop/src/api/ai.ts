@@ -44,6 +44,8 @@ export interface PersonaInput {
   temperature?: number | null
   replyStyle?: 'chatty' | 'concise' | 'narrative'
   greeting?: string | null
+  /** 该角色可用的表情包分组白名单；null = 跟随全局授权 */
+  stickerPackIds?: string[] | null
   proactiveMode?: 'global' | 'custom'
   proactive?: {
     enabled: boolean

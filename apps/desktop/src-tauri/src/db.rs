@@ -54,5 +54,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0008_drafts_dedupe.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "persona_sticker_packs",
+            sql: include_str!("../migrations/0009_persona_sticker_packs.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

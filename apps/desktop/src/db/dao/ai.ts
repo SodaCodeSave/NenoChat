@@ -25,6 +25,7 @@ export interface PersonaRow {
   in_contacts: number | null
   proactive_enabled: number | null
   proactive_mode: string | null
+  sticker_pack_ids: string | null
   last_proactive_at: number | null
 }
 
@@ -65,6 +66,22 @@ function parseProactive(row: PersonaRow): AiPersona['proactive'] {
   }
 }
 
+/**
+ * sticker_pack_ids 列存 JSON 数组字符串；解析失败或空数组一律当「跟随全局」（null）。
+ * 与服务端 repo/ai.ts 的 parseStickerPackIds 保持同一口径。
+ */
+function parseStickerPackIds(raw: string | null): string[] | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return null
+    const ids = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    return ids.length > 0 ? ids : null
+  } catch {
+    return null
+  }
+}
+
 export function mapPersona(row: PersonaRow): AiPersona {
   const proactive = parseProactive(row)
   return {
@@ -84,6 +101,7 @@ export function mapPersona(row: PersonaRow): AiPersona {
     modelOverride: row.model_override,
     temperature: null,
     replyStyle: row.reply_style as ReplyStyle,
+    stickerPackIds: parseStickerPackIds(row.sticker_pack_ids),
     proactive,
     proactiveMode: row.proactive_mode === 'custom' ? 'custom' : 'global',
     lastProactiveAt: row.last_proactive_at,
@@ -97,8 +115,8 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
     `INSERT INTO ai_personas
        (server_id, id, name, avatar_url, system_prompt, greeting, provider_id, model_override,
         reply_style, proactive, updated_at, interests, card, card_url, card_filename,
-        in_contacts, proactive_enabled, proactive_mode, last_proactive_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        in_contacts, proactive_enabled, proactive_mode, sticker_pack_ids, last_proactive_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT(server_id, id) DO UPDATE SET
        name = excluded.name,
        avatar_url = excluded.avatar_url,
@@ -116,6 +134,7 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
        in_contacts = excluded.in_contacts,
        proactive_enabled = excluded.proactive_enabled,
        proactive_mode = excluded.proactive_mode,
+       sticker_pack_ids = excluded.sticker_pack_ids,
        last_proactive_at = excluded.last_proactive_at`,
     [
       serverId,
@@ -136,6 +155,7 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
       persona.inContacts ? 1 : 0,
       persona.proactive.enabled ? 1 : 0,
       persona.proactiveMode,
+      persona.stickerPackIds?.length ? JSON.stringify(persona.stickerPackIds) : null,
       persona.lastProactiveAt ?? null,
     ],
   )

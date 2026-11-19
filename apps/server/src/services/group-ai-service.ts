@@ -24,7 +24,7 @@ import * as stickersRepo from '../db/repo/stickers'
 import * as usersRepo from '../db/repo/users'
 import { err } from '../util/errors'
 import { now } from '../util/clock'
-import { aiStickerOptions, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
+import { aiStickerOptionsForPersona, aiEnabledStickerIds, callUpstream, appendStickerMessage, resolveServerApiKey } from './ai-service'
 import { appendSystemMessage } from './message-service'
 import * as scheduleService from './schedule-service'
 import {
@@ -391,7 +391,7 @@ function buildTurnPrompt(
     members: rosterOf(db, input.conversationId, input.member.botUserId),
     recent: toPromptRecent(db, messages, input.member.botUserId, nameById),
     mode: input.kind,
-    stickers: aiStickerOptions(db, input.member.persona.owner_id),
+    stickers: aiStickerOptionsForPersona(db, input.member.persona),
     trigger: input.trigger
       ? {
           speaker: input.trigger.speaker,
@@ -441,9 +441,7 @@ function appendGroupSegmentCore(
   const existing = messagesRepo.findByNonceInConversation(db, input.conversationId, input.clientNonce)
   if (existing) return messagesRepo.mapMessage(existing)
 
-  const enabledIds = new Set(
-    stickersRepo.listAiStickers(db, input.persona.owner_id).map((row) => row.id),
-  )
+  const enabledIds = aiEnabledStickerIds(db, input.persona)
   const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
   const text = marker?.stickerId ? marker.text : input.content
 

@@ -208,6 +208,8 @@ export interface PersonaRow {
   model_override: string | null
   temperature: number | null
   reply_style: string
+  /** 角色级表情包白名单 JSON 数组；NULL = 跟随全局授权 */
+  sticker_pack_ids: string | null
   proactive_enabled: number
   proactive_config: string | null
   proactive_mode: string
@@ -255,6 +257,22 @@ function parseProactive(row: PersonaRow): ProactiveConfig {
   }
 }
 
+/**
+ * sticker_pack_ids 列存 JSON 数组字符串；解析失败或空数组一律当「跟随全局」（null）。
+ * 只有显式存了至少一个分组 id 才算白名单模式。
+ */
+export function parseStickerPackIds(raw: string | null): string[] | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return null
+    const ids = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    return ids.length > 0 ? ids : null
+  } catch {
+    return null
+  }
+}
+
 export function mapPersona(row: PersonaRow): AiPersona {
   return {
     id: row.id,
@@ -273,6 +291,7 @@ export function mapPersona(row: PersonaRow): AiPersona {
     modelOverride: row.model_override,
     temperature: row.temperature,
     replyStyle: row.reply_style as ReplyStyle,
+    stickerPackIds: parseStickerPackIds(row.sticker_pack_ids),
     proactive: parseProactive(row),
     proactiveMode: row.proactive_mode === 'custom' ? 'custom' : 'global',
     lastProactiveAt: row.last_proactive_at,
@@ -308,6 +327,7 @@ export interface CreatePersonaInput {
   temperature?: number | null
   replyStyle?: ReplyStyle
   greeting?: string | null
+  stickerPackIds?: string[] | null
   proactive?: Partial<ProactiveConfig>
   proactiveMode?: ProactiveMode
 }
@@ -333,9 +353,9 @@ export function createPersona(db: DB, input: CreatePersonaInput): PersonaRow {
     `INSERT INTO ai_personas
        (id, owner_id, name, avatar_url, system_prompt, greeting, interests, card, card_url,
         card_filename, in_contacts, provider_id, model_override, temperature, reply_style,
-        proactive_enabled, proactive_config, proactive_mode, last_proactive_at, created_at,
-        updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
+        sticker_pack_ids, proactive_enabled, proactive_config, proactive_mode,
+        last_proactive_at, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
   ).run(
     id,
     input.ownerId,
@@ -352,6 +372,7 @@ export function createPersona(db: DB, input: CreatePersonaInput): PersonaRow {
     input.modelOverride ?? null,
     input.temperature ?? null,
     input.replyStyle ?? 'chatty',
+    input.stickerPackIds?.length ? JSON.stringify(input.stickerPackIds) : null,
     proactive.enabled ? 1 : 0,
     JSON.stringify(proactive),
     mode,
@@ -377,6 +398,7 @@ export interface UpdatePersonaInput {
   temperature?: number | null
   replyStyle?: ReplyStyle
   greeting?: string | null
+  stickerPackIds?: string[] | null
   proactive?: Partial<ProactiveConfig>
   proactiveMode?: ProactiveMode
 }
@@ -402,8 +424,8 @@ export function updatePersona(db: DB, id: string, patch: UpdatePersonaInput): Pe
     `UPDATE ai_personas
      SET name = ?, avatar_url = ?, system_prompt = ?, greeting = ?, interests = ?, card = ?,
          card_url = ?, card_filename = ?, in_contacts = ?, provider_id = ?,
-         model_override = ?, temperature = ?, reply_style = ?, proactive_enabled = ?,
-         proactive_config = ?, proactive_mode = ?, updated_at = ?
+         model_override = ?, temperature = ?, reply_style = ?, sticker_pack_ids = ?,
+         proactive_enabled = ?, proactive_config = ?, proactive_mode = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     patch.name ?? current.name,
@@ -419,6 +441,12 @@ export function updatePersona(db: DB, id: string, patch: UpdatePersonaInput): Pe
     patch.modelOverride === undefined ? current.model_override : patch.modelOverride,
     patch.temperature === undefined ? current.temperature : patch.temperature,
     patch.replyStyle ?? current.reply_style,
+    // 空数组与 undefined 语义不同：undefined = 不改，[] / null = 清空白名单回到跟随全局
+    patch.stickerPackIds === undefined
+      ? current.sticker_pack_ids
+      : patch.stickerPackIds?.length
+        ? JSON.stringify(patch.stickerPackIds)
+        : null,
     nextProactive.enabled ? 1 : 0,
     JSON.stringify(nextProactive),
     nextMode,
