@@ -16,6 +16,7 @@ import { aiApi, type ProviderInput } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 import { clearProviderKey, loadProviderKey, saveProviderKey } from '@/platform/ai-keys'
 import { AI_PROVIDER_PRESETS, matchProviderIcon } from '@/config/ai-providers'
+import TokenRouterAdBanner from '@/components/settings/TokenRouterAdBanner.vue'
 
 const ai = useAiStore()
 
@@ -360,6 +361,8 @@ onBeforeUnmount(() => {
           {{ showProviderForm ? '收起' : '添加服务商' }}
         </Button>
       </template>
+
+      <TokenRouterAdBanner />
 
       <div v-if="showProviderForm" class="mb-3 space-y-3 rounded-lg border border-line bg-surface-2 p-3">
         <div>
