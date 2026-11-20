@@ -1,6 +1,6 @@
 // 一体版内嵌 PostgreSQL：安装包里没有独立数据库服务，DATABASE_URL 未设置时
 // 在数据目录（DATA_DIR/pgdata）里拉起一份随应用分发的 PG 实例。
-// persistent 保证重启后数据还在；实例只监听回环地址，trust 认证即足够安全。
+// persistent 保证重启后数据还在；实例只监听回环地址，口令随包分发无保密意义。
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -98,8 +98,8 @@ export async function startEmbeddedDb(): Promise<void> {
   const pg = new EmbeddedPostgres({
     databaseDir: pgdata,
     user: 'postgres',
-    // 固定口令即可：实例只监听回环、口令随包分发无保密意义。
-    // 不能随机生成——initdb 时口令已固化进集群，随机会导致重启后 auth_failed
+    // 固定口令，且必须与连接串一致：initdb 会把口令固化进集群，
+    // 随机生成会导致重启后 28P01 认证失败
     password: 'nenochat-local',
     port,
     // 数据必须跨重启保留；persistent=false 会在 stop 时删除整个数据目录
@@ -114,7 +114,7 @@ export async function startEmbeddedDb(): Promise<void> {
 
   instance = pg
   // 直接用集群自带的 postgres 库，避免重复建库的幂等处理
-  process.env.DATABASE_URL = `postgres://postgres@127.0.0.1:${port}/postgres`
+  process.env.DATABASE_URL = `postgres://postgres:nenochat-local@127.0.0.1:${port}/postgres`
 }
 
 /** 退出时停掉 PG 子进程；正常退出由 embedded-postgres 的退出钩子兜底 */

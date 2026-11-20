@@ -16,6 +16,30 @@ const outDir = path.join(rootDir, 'apps/desktop/src-tauri/resources/server')
 const requireFromServer = createRequire(path.join(serverDir, 'package.json'))
 const esbuild = requireFromServer('esbuild')
 
+/**
+ * embedded-postgres 启动前会给 PG 二进制 chmod 补执行位；Windows 的可执行性
+ * 不由 mode 位决定，NTFS 上的文件常常不带该位，触发无意义的 chmod——
+ * 在 Program Files 这类受保护目录里直接 EPERM 崩溃。打包时打补丁跳过。
+ */
+const skipChmodOnWindows = {
+  name: 'skip-chmod-on-windows',
+  setup(build) {
+    build.onLoad({ filter: /embedded-postgres[\\/]dist[\\/]index\.js$/ }, async (args) => {
+      let code = await import('node:fs/promises').then((fs) => fs.readFile(args.path, 'utf8'))
+      const target =
+        'const ensureBinIsExecutable = (filePath) => __awaiter(void 0, void 0, void 0, function* () {'
+      if (!code.includes(target)) {
+        throw new Error('embedded-postgres 补丁点未找到，上游可能已更新实现')
+      }
+      code = code.replace(
+        target,
+        `${target}\n        if (platform() === 'win32') return;`,
+      )
+      return { contents: code, loader: 'js' }
+    })
+  },
+}
+
 const platform = process.platform
 const arch = process.arch
 const nodeBinaryName = platform === 'win32' ? 'node.exe' : 'node'
@@ -134,6 +158,7 @@ async function bundleServer() {
     sourcemap: false,
     legalComments: 'none',
     logLevel: 'warning',
+    plugins: [skipChmodOnWindows],
     // version.mjs 的 CLI 判定用不到 import.meta，打包成 CJS 时的告警可以忽略
     logOverride: { 'empty-import-meta': 'silent' },
     // 原生模块必须留在磁盘上，交给 Node 自己 require；PG 平台二进制由
