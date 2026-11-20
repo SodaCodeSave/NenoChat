@@ -72,13 +72,21 @@ function copyArgon2() {
 
 /** 内嵌 PostgreSQL 的平台二进制（initdb/postgres 与全部动态库），一体版运行必须 */
 function copyEmbeddedPg() {
-  const pkgName = `@embedded-postgres/${platform}-${arch}`
+  // Node 的平台名 win32 与二进制包的命名 windows 不一致，这里做一次映射
+  const pkgPlatform = { win32: 'windows', darwin: 'darwin', linux: 'linux' }[platform]
+  if (!pkgPlatform) throw new Error(`不支持的平台：${platform}`)
+  const pkgName = `@embedded-postgres/${pkgPlatform}-${arch}`
   const from = realPackageDir(pkgName)
-  const to = path.join(outDir, 'node_modules/@embedded-postgres', `${platform}-${arch}`)
+  const to = path.join(outDir, 'node_modules/@embedded-postgres', `${pkgPlatform}-${arch}`)
   copyFiltered(from, to, (rel) => {
-    // native/ 是二进制主体（约 100MB），dist/ 是定位它的入口脚本
+    // native/ 是二进制主体（约 100MB），dist/ 是定位它的入口脚本，
+    // scripts/ 里有入口引用的 hydrate-symlinks.js，三组都必须保留
     if (rel === 'package.json' || rel === 'LICENSE.md') return true
-    return rel === 'dist' || rel.startsWith('dist/') || rel === 'native' || rel.startsWith('native/')
+    return (
+      rel === 'dist' || rel.startsWith('dist/') ||
+      rel === 'native' || rel.startsWith('native/') ||
+      rel === 'scripts' || rel.startsWith('scripts/')
+    )
   })
   if (!existsSync(path.join(to, 'package.json'))) {
     throw new Error(`${pkgName} 复制失败`)
