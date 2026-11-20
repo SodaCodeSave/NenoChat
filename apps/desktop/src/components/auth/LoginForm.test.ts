@@ -30,9 +30,9 @@ describe('登录入口', () => {
     expect(formSource).not.toContain('showServerSwitch')
   })
 
-  it('裸页面切换带渐入渐出动效', () => {
-    expect(appSource).toContain('page-fade')
-    expect(appSource).toContain('mode="out-in"')
+  it('裸页面切换带渐入渐出动效，主界面路由不受影响', () => {
+    expect(appSource).toContain("'page-fade'")
+    expect(appSource).toContain("viewRoute.meta.layout === 'bare' ? viewRoute.path : undefined")
   })
 
   it('未登录默认落到服务器页', () => {

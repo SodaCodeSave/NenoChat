@@ -109,8 +109,12 @@ onMounted(async () => {
     </div>
     <component :is="layout" v-else key="main">
       <RouterView v-slot="{ Component, route: viewRoute }">
-        <Transition name="page-fade" mode="out-in">
-          <component :is="Component" :key="viewRoute.path" />
+        <!-- 只在裸页面（选服务器 ↔ 登录）之间渐隐渐出，主界面路由照常直切 -->
+        <Transition :name="viewRoute.meta.layout === 'bare' ? 'page-fade' : ''">
+          <component
+            :is="Component"
+            :key="viewRoute.meta.layout === 'bare' ? viewRoute.path : undefined"
+          />
         </Transition>
       </RouterView>
     </component>
