@@ -1,171 +1,107 @@
-# NenoChat
+<div align="center">
+<p align="center"><img src="./apps/desktop/src/assets/nenochat-logo.svg" alt="NenoChat" width="240"></p>
+<p align="center">专为角色扮演而生的Agent客户端</p>
+<p align="center">
 
-基于 Tauri 2 的跨平台 AI 聊天软件。外层是 QQ 式的导航与会话列表，进入群聊后切换为 Discord 式的频道三栏；AI 会话与普通会话共用同一套消息模型，长回复会自动拆成多条像真人一样分批发出。
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/SodaCodeSave/NenoChat?style=flat-square&color=brightgreen)](https://github.com/SodaCodeSave/NenoChat/releases)[![CI](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/ci.yml?style=flat-square&label=CI)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/ci.yml) [![Release Build](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/release-build.yml?style=flat-square&label=Release%20Build)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/release-build.yml)
 
-## 组成
+[![Node](https://img.shields.io/badge/Node.js-≥22.12-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![pnpm](https://img.shields.io/badge/pnpm-12-F69220?style=flat-square&logo=pnpm&logoColor=white)](https://pnpm.io/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white)](https://vuejs.org/) [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)](https://tauri.app/) [![Fastify](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)](https://fastify.dev/)
 
-| 包 | 作用 |
-|---|---|
-| `packages/shared` | 两端唯一真源：实体类型、zod 校验、WS 事件表、LWW 合并、AI 提示词与**分条算法** |
-| `apps/server` | 自建消息服务器：Fastify 5 + WebSocket + better-sqlite3，含鉴权、群组权限、消息、同步、文件、AI |
-| `apps/desktop` | Tauri 2 + Vue 3 客户端：QQ 外壳 + Discord 三栏，本地 SQLite 镜像，离线优先 |
+</p>
+</div>
 
-## 快速开始
+---
 
-```bash
-# 依赖
-pnpm install
+NenoChat 是一个自托管的 AI 角色扮演聊天应用。你部署一个自己的服务端，托管 AI 供应商密钥与聊天数据；客户端长得像一个原生聊天 App——联系人列表、单聊、群聊、朋友圈式的动态空间，只是对面坐着的是你创造的 AI 角色。
 
-# 1) 起服务端（默认 http://0.0.0.0:8787）
-pnpm dev:server
+## 功能特性
 
-# 2) 起前端
-pnpm dev:web            # 浏览器版（手机浏览器可直接访问，用于验证多端同步）
-pnpm dev:app            # Tauri 桌面窗口
-```
+- **单聊与群聊**：创建 AI 角色联系人，拉多个角色进群，AI 之间与 AI 和真人可以互相接话
+- **AI 供应商自由配置**：接入任意兼容的供应商，填 API 地址与密钥即可；密钥由服务端 AES 加密托管，支持自动获取模型列表、按模型开关
+- **主动消息**：AI 会按你设定的频率主动找你聊天、发动态、评论点赞，而不是只被动回复
+- **动态空间**：你和所有 AI 角色共同的朋友圈，可以发图文、互相评论点赞
+- **表情包**：上传表情包分组，授权给指定 AI 角色在聊天中使用
+- **连接器**：给 AI 挂载外部能力，内置哔哩哔哩、和风天气等
+- **多端同步**：换设备登录后消息自动增量同步
+- **一体化版**：不想部署服务端？下载 Windows 一体版，服务端内嵌在客户端里，开箱即用，还能打开局域网让手机扫码接入
 
-首次启动服务端会自动建库并跑迁移，数据放在 `apps/server/data/`。
+## 快速开始（一体化版，推荐新手）
 
-- 首个注册的账号自动成为管理员
-- 注册策略由环境变量 `REGISTRATION_MODE` 控制：`open` / `invite` / `closed`
-- 客户端首次打开会要求填服务器地址，填 `http://localhost:8787` 即可
+1. 到 [Releases](https://github.com/SodaCodeSave/NenoChat/releases) 下载 `NenoChat-Integrated` 的 Windows 安装包并安装
+2. 打开即是聊天界面，无需注册登录、无需配置服务器
+3. 在设置 → AI 中填入供应商地址与 API Key，创建一个 AI 角色，开始聊天
+4. 想让手机也能聊：在设置中打开局域网接入，手机客户端扫码配对即可
 
-> 生产部署务必替换 `JWT_SECRET` 与 `SECRET_KEY`（见 `apps/server/.env.example`）。
+## 快速开始（独立部署）
 
-## 核心设计
+适合多设备或多人共用一个服务器的场景，只需要 Docker。
 
-### 1. 一切皆会话
+### 1. 准备配置
 
-AI 会话就是 `conversations.type = 'ai'`，消息落在同一张 `messages` 表。于是置顶、未读、@提醒、搜索、离线补拉、引用回复全部自动复用，不需要为 AI 单独写一套。
-
-### 2. seq 是会话内唯一排序依据
-
-`messages.seq` 由 `conversations.seq_counter` 在同一事务内分配，同时承担：排序键、分页游标、已读游标、断线补洞的跳号检测。
-
-### 3. 写路径只有一条
-
-任何写操作都在**同一个事务**内完成：实体写入 → `sync_change_log` 追加 → 提交后广播。`payload` 存完整快照而不是 diff，客户端拿到直接 upsert。
-
-### 4. 同步靠游标，不靠内存
-
-`cursor = sync_change_log.seq`，语义是「我已完整应用 seq ≤ cursor 的全部变更」。WS 重连时按 cursor 补拉，追平后才进入实时态，期间产生的实时事件按 seq 排序补发。
-
-### 5. AI 长回复分条
-
-`packages/shared/src/ai/splitter.ts` 是纯函数：去 Markdown 噪音 → 按段落切 → 超长按句末标点切 → 再按逗号切 → 硬切兜底 → 合并过短片段 → 超出条数上限时尾部合并（不截断）。
-
-每种回复风格有独立阈值（`chatty` / `concise` / `narrative`），分条后逐条落库为独立消息，带上 `ai_generation_id` 与 `ai_index`，前端据此只显示一次头像并标注「共 N 条」。
-
-### 6. AI 密钥两种位置
-
-| | 本机（默认） | 服务端托管 |
-|---|---|---|
-| 调用方 | Tauri Rust 网关（reqwest 流式 SSE） | 服务端 |
-| 流式体验 | 逐字打字感 | 分条延迟投递 |
-| 多端共享 | 每台设备各配一次 | 配一次全端可用 |
-| 密钥保管 | 系统钥匙串 | AES-256-GCM，接口只回掩码 |
-
-策略（提示词、记忆、分条）全在 `shared` 里，两端只做运输。
-
-### 7. 角色是「会话 + 通讯录」的一等公民
-
-创建角色时在同一个事务里做三件事：写 `ai_personas`、写 `sync_change_log`、`ensureAiConversation()` 建 `type='ai'` 的会话。所以角色不需要「点一下才出现」——它一建好就在消息列表的「AI 角色」分区与通讯录的「AI 角色」分组里。
-
-会话的 `name` / `avatar_url` 是角色快照，改角色名或换头像时由 `syncPersonaToConversations()` 一次性刷到该角色所有会话上；删角色时连会话一起软删，客户端的 `ordered` 过滤掉 `deletedAt`。
-
-AI 消息写入 `meta.ai.personaId`，渲染时按「消息自带的 personaId → 会话绑定的角色 → 会话名」三级回退，历史消息也能显示对的人。
-
-「通讯录」用的是 `ai_personas.in_contacts` 这一列，而不是 `contacts` 表——后者 `contact_user_id` 外键指向 `users`，结构上放不了 persona。
-
-### 8. 主动消息由服务端统一判定
-
-`proactive-rules.ts` 是纯函数（时间窗口、配额、冷却都在这里），`proactive-service.ts` 负责扫描与生成：
-
-- 空闲以「最后一条**用户**消息」为基准，否则 AI 自己的主动消息会把计时清零
-- 占位用唯一索引 `(conversation_id, day_key, slot)`，先占坑再生成，多实例只有一个能抢到
-- 免打扰窗口支持跨零点（`start > end`）
-- 密钥托管在服务端时离线也能发；密钥在本机时服务端只推 `ai.proactive.due`，由在线客户端代跑
-
-## 目录速览
-
-```
-packages/shared/src/
-  entities.ts enums.ts events.ts constants.ts ids.ts permissions.ts
-  sync/lww.ts              # 字段级 LWW + 时钟钳制
-  ai/splitter.ts           # 长回复分条（含单测）
-  ai/prompt.ts             # 上下文拼装 / 压缩 / 主动消息提示词
-  schemas/                 # zod，两端共用的入参校验
-
-apps/server/src/
-  db/migrations/           # 服务端 DDL 唯一真源
-  services/message-service.ts   # seq + change_log + 广播的单事务写路径
-  services/sync-service.ts      # 增量查询（WS 与 REST 复用）
-  services/ai-service.ts        # 服务商/角色/会话/记忆/服务端生成
-  ws/connection.ts              # catchingUp → live 状态机
-  jobs/                         # 预留：主动消息与记忆兜底
-
-apps/desktop/src/
-  stores/                  # auth / servers / conversations / messages / channels
-                           # members / typing / sync / ai / ui
-  realtime/ws-client.ts    # 握手、心跳、退避重连、请求配对
-  platform/                # db（本地镜像）/ keychain / device
-  components/chat/         # 三栏、消息列表、输入框
-  views/                   # 登录、会话、通讯录、动态、设置
-```
-
-## 命令
+在任意目录创建 `.env`，写入两个强密钥（可用 `openssl rand -hex 32` 生成，至少 32 字符）：
 
 ```bash
-pnpm typecheck     # 三个包全量类型检查
-pnpm test          # shared 单测 + server 集成测试
-pnpm build:web     # 浏览器版产物
-pnpm build:app     # 桌面安装包（联网版：选择服务器 + 登录）
-pnpm build:app:integrated   # 一体化安装包（内置服务端，免登录）
+JWT_SECRET=<你的JWT密钥>
+SECRET_KEY=<你的AES密钥>
+# 可选：注册方式 open(开放) / invite(邀请) / closed(关闭)，多人部署建议 invite
+REGISTRATION_MODE=open
+# 部署在域名反代之后时改成对外地址，否则附件链接会指向容器内
+PUBLIC_BASE_URL=http://你的服务器地址:8787
 ```
 
-一体化版与联网版的区别：
+### 2. 启动服务
 
-- 安装包里带着一份 Node 运行时、服务端代码与迁移脚本（`scripts/build-integrated-server.mjs` 生成）。
-- 客户端启动时把服务端拉起来，只监听 `127.0.0.1` 的随机端口，退出时回收。
-- 服务端以 `LOCAL_MODE=true` 运行：关闭注册，客户端凭进程内注入的握手令牌调用 `/auth/local` 换取会话，首次启动自动创建 `owner` 账号。
-- 内置的服务端标识符是 `com.nenochat.app.integrated`，数据与联网版完全隔离，可与联网版同时安装。
-- 数据落在应用数据目录的 `server/` 下，日志是应用日志目录的 `integrated-server.log`。
-- 设置里的「手机接入」可以把服务端开放到局域网并生成二维码：手机扫码（`nenochat://pair?...`）或用配对码接入，手机和电脑看到同一份数据。配对码 5 分钟有效、一次性，关闭开关后服务端立刻退回只监听本机。
-
-发版时 CI 会产出 Windows（NSIS/MSI，联网版与一体版各一套）、Linux x64（AppImage/deb）与 Android arm64 安装包，最后由 `scripts/release-notes.mjs` 按真实资产列表在 Release 说明顶部生成下载表格。
-
-服务端也可用 Docker 部署：
+使用仓库根目录的 `docker-compose.yml`：
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-## 当前进度
+数据（SQLite 数据库与上传文件）持久化在 `nenochat-data` 数据卷中；NAS 等 bind mount 场景改用 `./data` 目录挂载即可。
 
-已打通并经过自动化测试：
+### 3. 安装客户端并连接
 
-- 账号注册/登录、JWT 刷新轮换、令牌重放检测
-- 私聊（幂等）、群聊（默认频道）、成员角色与权限位
-- 发消息事务、seq 连续、幂等发送、撤回墓碑、置顶
-- 已读游标只前进不后退、群聊已读人数聚合
-- WS 握手、增量追平、实时推送、未认证拒绝
-- 同步变更的可见性过滤（非成员拉不到别人的私聊）
-- AI 服务商/角色/会话、分条消息、记忆读写、密钥脱敏
-- 角色化 AI：创建角色即自动进「消息」与「通讯录」，改名换头像即时同步到会话
-- 角色卡 + 兴趣 + 提示词三段式人设，注入聊天与主动消息提示词
-- 文件上传（头像 / 角色卡 / 附件）：MIME 白名单 + 魔数校验 + sha256 去重 + 静态目录
-- 服务端主动消息调度：空闲时长 / 每日上限 / 免打扰窗口 / 跨实例防重
-- 消息身份渲染：AI 气泡用角色名与头像，不再显示模型名
-- 消息去重收敛到 `composables/message-merge.ts`（id + clientNonce 双键）
-- 动态空间：发布（≤9 图）、信息流分页、点赞、评论、删除，WS 实时广播
-- 表情包：分组管理、图片上传、聊天面板直接发送贴纸；分组级「允许 AI 使用」总开关 + 角色级白名单（`ai_personas.sticker_pack_ids`，空 = 跟随全局授权），提示词清单与落库校验共用同一口径
-- 聊天附件：图片/文件上传（进度）、粘贴截图、图片点击预览
-- 全局搜索：消息（FTS5 trigram，短词回退 LIKE）、联系人、会话，Ctrl/Cmd+K 打开
-- 消息虚拟滚动：可变高度窗口化 + 历史分页 + 滚动锚点
-- 消息操作：右键菜单（回复/复制/编辑/置顶/撤回确认）
+1. 到 [Releases](https://github.com/SodaCodeSave/NenoChat/releases) 下载对应平台的客户端（Windows exe/MSI、Linux AppImage/deb），客户端内置自动更新
+2. 打开客户端，添加服务器地址（如 `http://你的服务器地址:8787`）
+3. 注册账号（取决于服务端的注册模式），进入聊天
+4. 在设置 → AI 中配置供应商与密钥，创建 AI 角色，开始聊天
 
-待接入：
+> 想用本地模型（如 Ollama）？在服务端开启 `ALLOW_PRIVATE_AI_ENDPOINT=true`，客户端里把供应商地址指向内网地址即可。
 
-- 真人好友申请/分组体系（`contacts` 表已建，当前仅用 `ai_personas.in_contacts` 承载 AI 分组）
-- 语音/视频通话（本轮明确不做）
-- 动态与表情的离线镜像（当前在线优先，WS 增量更新）
+## 服务端配置参考
+
+服务端通过环境变量配置，缺失或非法值会在启动时直接报错：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `8787` | 监听端口 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `PUBLIC_BASE_URL` | `http://localhost:8787` | 对外基础地址，用于拼装附件 URL |
+| `DATA_DIR` | `./data` | SQLite 数据库与上传文件目录 |
+| `JWT_SECRET` | （仅开发默认值） | JWT 签名密钥，生产环境必须 ≥ 32 字符 |
+| `SECRET_KEY` | （仅开发默认值） | 托管 AI 密钥的 AES 加密密钥，生产环境必须 ≥ 32 字符 |
+| `REGISTRATION_MODE` | `open` | 注册模式：`open` / `invite` / `closed` |
+| `SERVER_NAME` | `NenoChat` | 服务器名称 |
+| `LOG_LEVEL` | `info` | 日志级别 |
+| `CORS_ORIGINS` | `*` | 允许跨域来源，逗号分隔 |
+| `ALLOW_PRIVATE_AI_ENDPOINT` | `false` | 允许 AI 供应商地址指向内网（本地模型需开启），防 SSRF 默认关闭 |
+
+## 从源码构建
+
+需要 Node.js ≥ 22.12 与 pnpm 12；打包桌面端另需 Rust 工具链与 Tauri 2 系统依赖。
+
+```bash
+pnpm install        # 安装依赖
+pnpm dev            # 同时启动服务端与 Web 客户端
+pnpm dev:app        # Tauri 桌面客户端开发模式
+pnpm typecheck      # 全工作区类型检查
+pnpm test           # 全工作区测试（Vitest）
+pnpm build:app      # 打包 Tauri 桌面应用
+pnpm build:app:integrated  # 构建服务端内嵌的一体化版本
+```
+
+架构为 pnpm monorepo：`apps/server`（Fastify + better-sqlite3 服务端）、`apps/desktop`（Tauri 2 + Vue 3 客户端）、`packages/shared`（前后端共享协议与 Schema）。开发约定见 [AGENTS.md](./AGENTS.md)，界面规范见 [DESIGN.md](./DESIGN.md)。推送 `v*` tag 即触发 GitHub Actions 自动构建并发布 Release（Windows / Linux，含一体版）。
+
+## 许可证
+
+[Apache-2.0](LICENSE)
