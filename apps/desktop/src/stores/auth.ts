@@ -22,6 +22,13 @@ export interface LastUser {
 }
 
 const refreshKey = (serverId: string): string => `refresh.${serverId}`
+/** 保存的账号密码，供 token 失效时静默重登，按服务器隔离 */
+const passwordKey = (serverId: string): string => `password.${serverId}`
+
+interface SavedCredentials {
+  username: string
+  password: string
+}
 const lastUserKey = (serverId: string): string => `nenochat.lastUser.${serverId}`
 
 /** 读取上次登录的用户，供登录页展示与用户名预填 */
@@ -113,7 +120,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function applySession(payload: {
     user: User
     tokens: { accessToken: string; refreshToken: string }
-  }): Promise<void> {
+  }, credentials?: SavedCredentials): Promise<void> {
     const serverId = currentServerId.value
     user.value = payload.user
     accessToken.value = payload.tokens.accessToken
@@ -121,6 +128,8 @@ export const useAuthStore = defineStore('auth', () => {
     setAccessToken(payload.tokens.accessToken)
     status.value = 'authenticated'
     lastFailure = null
+    restoreFailure.value = null
+    restoreError.value = null
 
     if (serverId) {
       try {
@@ -130,6 +139,13 @@ export const useAuthStore = defineStore('auth', () => {
         // 钥匙串不可用（如移动端）时本次登录仍然有效，只是下次需要重新输入密码
         hasStoredCredential.value = false
         console.error('[auth] 无法保存自动登录凭证', e)
+      }
+      if (credentials) {
+        try {
+          await setSecret(passwordKey(serverId), JSON.stringify(credentials))
+        } catch (e) {
+          console.error('[auth] 无法保存密码', e)
+        }
       }
       await useServersStore().rememberUser(serverId, payload.user.id)
       saveLastUser(serverId, payload.user)
@@ -154,7 +170,7 @@ export const useAuthStore = defineStore('auth', () => {
     bindServer()
     try {
       const result = await authApi.login({ username, password, device: devicePayload() })
-      await applySession(result)
+      await applySession(result, { username, password })
       await loadProfile()
     } catch (e) {
       error.value = e instanceof Error ? e.message : '登录失败'
@@ -178,7 +194,7 @@ export const useAuthStore = defineStore('auth', () => {
     bindServer()
     try {
       const result = await authApi.register({ ...input, device: devicePayload() })
-      await applySession(result)
+      await applySession(result, { username: input.username, password: input.password })
       await loadProfile()
     } catch (e) {
       error.value = e instanceof Error ? e.message : '注册失败'
@@ -310,6 +326,57 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /**
+   * token 缺失或失效时，用保存的账号密码静默重登。
+   * 服务端确认凭证无效（401）才删除保存的密码，网络问题保留待下次重试。
+   */
+  async function reloginWithStoredPassword(): Promise<boolean> {
+    const serverId = currentServerId.value
+    if (!serverId) return false
+
+    let raw = ''
+    try {
+      raw = await getSecret(passwordKey(serverId))
+    } catch {
+      return false
+    }
+    if (!raw) return false
+
+    let credentials: SavedCredentials | null = null
+    try {
+      const parsed = JSON.parse(raw) as Partial<SavedCredentials>
+      if (parsed.username && parsed.password) {
+        credentials = { username: parsed.username, password: parsed.password }
+      }
+    } catch {
+      return false
+    }
+    if (!credentials) return false
+    // 有可用的静默重登凭证时保留重试入口，网络恢复后可一键重试
+    hasStoredCredential.value = true
+
+    try {
+      const result = await authApi.login({ ...credentials, device: devicePayload() })
+      await applySession(result)
+      await loadProfile()
+      return true
+    } catch (e) {
+      const failure = classifyFailure(e)
+      if (failure === 'auth') await deleteSecret(passwordKey(serverId))
+      lastFailure = failure
+      restoreFailure.value = failure
+      restoreError.value =
+        failure === 'auth'
+          ? '登录状态已失效，请重新登录'
+          : failure === 'network'
+            ? '无法连接服务器，请检查网络后重试'
+            : e instanceof Error
+              ? e.message
+              : '恢复登录状态失败'
+      return false
+    }
+  }
+
   /** 启动时恢复登录态：有 refresh token 就静默续期，否则等用户手动登录 */
   async function bootstrap(): Promise<boolean> {
     bindServer()
@@ -327,23 +394,22 @@ export const useAuthStore = defineStore('auth', () => {
     lastFailure = null
     refreshToken = await getSecret(refreshKey(serverId))
     hasStoredCredential.value = Boolean(refreshToken)
-    if (!refreshToken) {
-      status.value = 'anonymous'
-      return false
+    if (refreshToken) {
+      const token = await refreshSession()
+      if (token) {
+        try {
+          await loadProfile()
+        } catch {
+          // 档案接口失败多为网络抖动，refresh 响应已带用户信息，不阻断自动登录
+        }
+        return true
+      }
     }
 
-    const token = await refreshSession()
-    if (!token) {
-      status.value = 'anonymous'
-      return false
-    }
-
-    try {
-      await loadProfile()
-    } catch {
-      // 档案接口失败多为网络抖动，refresh 响应已带用户信息，不阻断自动登录
-    }
-    return true
+    // token 缺失或失效：用保存的密码兜底静默重登
+    if (await reloginWithStoredPassword()) return true
+    status.value = 'anonymous'
+    return false
   }
 
   async function clearSession(): Promise<void> {
@@ -369,6 +435,9 @@ export const useAuthStore = defineStore('auth', () => {
       /* 网络不可用时也要清本地凭证 */
     }
     await clearSession()
+    // 主动登出意味着不再自动登录，保存的密码一并清除
+    const serverId = currentServerId.value
+    if (serverId) await deleteSecret(passwordKey(serverId))
   }
 
   return {

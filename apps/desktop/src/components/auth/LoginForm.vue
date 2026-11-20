@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
-import Avatar from '@/components/ui/Avatar.vue'
 import { readLastUser, useAuthStore } from '@/stores/auth'
 import { useConversationsStore } from '@/stores/conversations'
 import { useServersStore } from '@/stores/servers'
@@ -28,7 +27,6 @@ const inviteCode = ref('')
 const busy = ref(false)
 const error = ref<string | null>(null)
 const retrying = ref(false)
-const lastUser = ref(readLastUser(servers.currentId))
 
 const hasServer = computed(() => servers.current !== null)
 
@@ -45,11 +43,10 @@ const canRetryRestore = computed(
 const inviteRequired = computed(() => servers.serverInfo?.registration.inviteRequired ?? false)
 const registrationOpen = computed(() => servers.serverInfo?.registration.open ?? true)
 
-/** 服务器切换后同步绑定地址、重置表单与上次登录用户 */
+/** 服务器切换后同步绑定地址、重置表单并预填之前使用的用户名 */
 function syncServer(): void {
   auth.bindServer()
-  lastUser.value = readLastUser(servers.currentId)
-  username.value = lastUser.value?.username ?? ''
+  username.value = readLastUser(servers.currentId)?.username ?? ''
   password.value = ''
   mode.value = 'login'
   error.value = null
@@ -114,7 +111,7 @@ function switchMode(next: 'login' | 'register' | 'pair'): void {
 }
 
 const heading = computed(() =>
-  mode.value === 'login' ? '登录 NenoChat' : mode.value === 'register' ? '创建账号' : '用电脑上的配对码接入',
+  mode.value === 'login' ? '登录 NenoChat' : mode.value === 'register' ? '创建账号' : '用配对码接入',
 )
 
 const submitLabel = computed(() =>
@@ -123,45 +120,39 @@ const submitLabel = computed(() =>
 </script>
 
 <template>
-  <div class="h-full rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow-soft)]">
-    <div class="mb-5 flex items-start justify-between">
-      <div>
-        <h1 class="text-[17px] font-semibold text-text-strong">{{ heading }}</h1>
-        <button
-          v-if="props.showServerSwitch"
-          type="button"
-          class="mt-0.5 flex items-center gap-1 text-[11.5px] text-muted hover:text-accent"
-          @click="emit('changeServer')"
-        >
-          <Icon name="server" :size="11" />
-          {{ servers.current?.name ?? '未选择服务器' }} · 切换
-        </button>
-        <p v-else class="mt-0.5 text-[11.5px] text-muted">
-          {{ servers.current?.name ?? '未选择服务器' }}
-        </p>
-      </div>
-      <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-accent-text">
-        <Icon name="message" :size="18" />
-      </span>
-    </div>
+  <div class="flex w-full flex-col items-center">
+    <span class="grid h-12 w-12 place-items-center rounded-2xl bg-accent text-accent-text">
+      <Icon name="message" :size="24" />
+    </span>
+    <h1 class="mt-3 text-center text-[17px] font-semibold text-text-strong">{{ heading }}</h1>
+
+    <button
+      v-if="props.showServerSwitch"
+      type="button"
+      class="mt-1 flex items-center gap-1 text-[11.5px] text-muted transition-colors hover:text-accent"
+      @click="emit('changeServer')"
+    >
+      <Icon name="server" :size="11" />
+      {{ servers.current?.name ?? '未选择服务器' }} · 切换
+    </button>
+    <p v-else class="mt-1 text-[11.5px] text-muted">
+      {{ servers.current?.name ?? '未选择服务器' }}
+    </p>
 
     <div
       v-if="!hasServer"
-      class="rounded-xl border border-dashed border-line bg-surface-2 px-3 py-10 text-center text-[12px] text-muted"
+      class="mt-8 w-full rounded-xl border border-dashed border-line bg-surface-2 px-3 py-10 text-center text-[12px] text-muted"
     >
       请先选择或添加一个服务器
     </div>
 
     <template v-else>
-      <div
-        v-if="restoreHint"
-        class="mb-3 rounded-xl border border-line bg-surface-2 px-3 py-2 text-[12px] text-muted"
-      >
-        <p class="text-text-strong">{{ restoreHint }}</p>
+      <div v-if="restoreHint" class="mt-6 w-full text-center">
+        <p class="text-[12px] text-muted">{{ restoreHint }}</p>
         <button
           v-if="canRetryRestore"
           type="button"
-          class="mt-1 font-medium text-accent disabled:opacity-60"
+          class="mt-1.5 text-[12.5px] font-medium text-accent disabled:opacity-60"
           :disabled="retrying"
           @click="retryAutoLogin"
         >
@@ -169,18 +160,10 @@ const submitLabel = computed(() =>
         </button>
       </div>
 
-      <div v-if="lastUser" class="mb-3 flex items-center gap-2.5 rounded-xl bg-surface-2 px-3 py-2">
-        <Avatar :name="lastUser.displayName" :src="lastUser.avatarUrl" :seed="lastUser.id" :size="30" />
-        <div class="min-w-0">
-          <p class="truncate text-[12.5px] font-medium text-text-strong">{{ lastUser.displayName }}</p>
-          <p class="truncate text-[11px] text-muted">上次登录 · @{{ lastUser.username }}</p>
-        </div>
-      </div>
-
-      <div class="mb-4 flex gap-1 rounded-xl bg-surface-2 p-1">
+      <div class="mt-6 flex w-full gap-1 rounded-xl bg-surface-2 p-0.5">
         <button
           type="button"
-          class="flex-1 rounded-lg py-1.5 text-[13px] transition-colors"
+          class="flex-1 rounded-lg py-1 text-[12.5px] transition-colors"
           :class="mode === 'login' ? 'bg-surface font-medium shadow-sm' : 'text-muted'"
           @click="switchMode('login')"
         >
@@ -188,7 +171,7 @@ const submitLabel = computed(() =>
         </button>
         <button
           type="button"
-          class="flex-1 rounded-lg py-1.5 text-[13px] transition-colors"
+          class="flex-1 rounded-lg py-1 text-[12.5px] transition-colors"
           :class="mode === 'register' ? 'bg-surface font-medium shadow-sm' : 'text-muted'"
           :disabled="!registrationOpen"
           @click="switchMode('register')"
@@ -197,7 +180,7 @@ const submitLabel = computed(() =>
         </button>
         <button
           type="button"
-          class="flex-1 rounded-lg py-1.5 text-[13px] transition-colors"
+          class="flex-1 rounded-lg py-1 text-[12.5px] transition-colors"
           :class="mode === 'pair' ? 'bg-surface font-medium shadow-sm' : 'text-muted'"
           @click="switchMode('pair')"
         >
@@ -205,7 +188,7 @@ const submitLabel = computed(() =>
         </button>
       </div>
 
-      <form class="space-y-3" @submit.prevent="submit">
+      <form class="mt-5 w-full space-y-3" @submit.prevent="submit">
         <label v-if="mode !== 'pair'" class="block">
           <span class="mb-1 block text-[12px] font-medium text-muted">用户名</span>
           <input
@@ -259,7 +242,7 @@ const submitLabel = computed(() =>
           />
         </label>
 
-        <p v-if="error" class="rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{{ error }}</p>
+        <p v-if="error" class="rounded-lg bg-danger/10 px-3 py-2 text-center text-[12px] text-danger">{{ error }}</p>
 
         <button
           type="submit"
@@ -270,9 +253,5 @@ const submitLabel = computed(() =>
         </button>
       </form>
     </template>
-
-    <p class="mt-4 text-center text-[11px] text-muted">
-      凭据保存在本机钥匙串，不经过任何第三方
-    </p>
   </div>
 </template>
