@@ -1,6 +1,7 @@
 import type { Conversation, ConversationType } from '@nenochat/shared'
 import { ulid } from '@nenochat/shared'
 import type { DB } from '../index'
+import { stmt } from '../index'
 import { now } from '../../util/clock'
 
 export interface ConversationRow {
@@ -47,7 +48,9 @@ export function mapConversation(row: ConversationRow): Conversation {
 }
 
 export function findById(db: DB, id: string): ConversationRow | undefined {
-  return db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as ConversationRow | undefined
+  return stmt(db, 'SELECT * FROM conversations WHERE id = ?').get(id) as
+    | ConversationRow
+    | undefined
 }
 
 export function findByDmKey(db: DB, dmKey: string): ConversationRow | undefined {
@@ -137,19 +140,18 @@ export function create(db: DB, input: CreateConversationInput): ConversationRow 
 
 /** 分配会话内下一个 seq，必须与消息插入在同一事务内 */
 export function nextSeq(db: DB, id: string): number {
-  const row = db
-    .prepare('UPDATE conversations SET seq_counter = seq_counter + 1 WHERE id = ? RETURNING seq_counter')
-    .get(id) as { seq_counter: number } | undefined
+  const row = stmt(
+    db,
+    'UPDATE conversations SET seq_counter = seq_counter + 1 WHERE id = ? RETURNING seq_counter',
+  ).get(id) as { seq_counter: number } | undefined
   if (!row) throw new Error('会话不存在，无法分配 seq')
   return row.seq_counter
 }
 
 export function touchLastMessage(db: DB, id: string, messageId: string, at: number): void {
-  db.prepare(
-    `UPDATE conversations
+  stmt(db, `UPDATE conversations
      SET last_message_id = ?, last_message_at = ?, message_count = message_count + 1, updated_at = ?
-     WHERE id = ?`,
-  ).run(messageId, at, at, id)
+     WHERE id = ?`).run(messageId, at, at, id)
 }
 
 export interface UpdateConversationInput {

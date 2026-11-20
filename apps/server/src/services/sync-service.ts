@@ -1,5 +1,6 @@
 import type { ChangeRecord } from '@nenochat/shared'
 import type { DB } from '../db'
+import { stmt } from '../db'
 
 export interface ChangesResult {
   changes: ChangeRecord[]
@@ -23,9 +24,9 @@ interface ChangeRow {
  * 保证两种途径产生的数据完全一致。
  */
 export function listChanges(db: DB, userId: string, since: number, limit: number): ChangesResult {
-  const rows = db
-    .prepare(
-      `SELECT c.seq, c.entity, c.entity_id, c.op, c.conversation_id, c.user_id, c.payload, c.created_at
+  const rows = stmt(
+    db,
+    `SELECT c.seq, c.entity, c.entity_id, c.op, c.conversation_id, c.user_id, c.payload, c.created_at
        FROM sync_change_log c
        WHERE c.seq > ?
          AND (c.conversation_id IS NULL OR EXISTS (
@@ -36,8 +37,7 @@ export function listChanges(db: DB, userId: string, since: number, limit: number
          AND (c.user_id IS NULL OR c.user_id = ?)
        ORDER BY c.seq ASC
        LIMIT ?`,
-    )
-    .all(since, userId, userId, limit + 1) as ChangeRow[]
+  ).all(since, userId, userId, limit + 1) as ChangeRow[]
 
   const hasMore = rows.length > limit
   const sliced = hasMore ? rows.slice(0, limit) : rows
@@ -67,17 +67,17 @@ function safeParse(raw: string): unknown {
 
 /** change_log 中仍保留的最小 seq，用于判断客户端游标是否已过期 */
 export function minCursor(db: DB): number {
-  const row = db.prepare('SELECT COALESCE(MIN(seq), 0) AS s FROM sync_change_log').get() as { s: number }
+  const row = stmt(db, 'SELECT COALESCE(MIN(seq), 0) AS s FROM sync_change_log').get() as { s: number }
   return row.s
 }
 
 export function maxCursor(db: DB): number {
-  const row = db.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM sync_change_log').get() as { s: number }
+  const row = stmt(db, 'SELECT COALESCE(MAX(seq), 0) AS s FROM sync_change_log').get() as { s: number }
   return row.s
 }
 
 /** 裁剪过期变更，防止 change_log 无限增长 */
 export function prune(db: DB, before: number): number {
-  const result = db.prepare('DELETE FROM sync_change_log WHERE created_at < ?').run(before)
+  const result = stmt(db, 'DELETE FROM sync_change_log WHERE created_at < ?').run(before)
   return result.changes
 }

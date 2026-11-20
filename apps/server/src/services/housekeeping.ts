@@ -38,6 +38,9 @@ export function runHousekeeping(db: DB): HousekeepingResult {
   // 变更日志复用同步服务里的裁剪逻辑，created_at 为毫秒时间戳
   const prunedChanges = prune(db, ts - HOUSEKEEPING_DEFAULTS.changeLogRetentionMs)
 
+  // TRUNCATE 模式把 WAL 文件截断归零，避免长期运行下 WAL 持续膨胀拖慢读取
+  db.pragma('wal_checkpoint(TRUNCATE)')
+
   // expires_at = 0 是「永不过期」的哨兵值，见 db/repo/refresh-tokens.ts
   const deletedTokens = db
     .prepare(

@@ -1,6 +1,7 @@
 import type { Message, MessageMeta, MessageType, SenderType } from '@nenochat/shared'
 import { ulid } from '@nenochat/shared'
 import type { DB } from '../index'
+import { stmt } from '../index'
 
 export interface MessageRow {
   id: string
@@ -57,7 +58,7 @@ export function mapMessage(row: MessageRow): Message {
 }
 
 export function findById(db: DB, id: string): MessageRow | undefined {
-  return db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined
+  return stmt(db, 'SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined
 }
 
 /** 引用回复时展示的摘要：非文本消息收敛成占位词，撤回后统一提示 */
@@ -77,9 +78,10 @@ export function previewOf(row: MessageRow, max = 80): string {
 
 /** 幂等发送：同一发送者的同一 nonce 只落一条 */
 export function findByNonce(db: DB, senderId: string, clientNonce: string): MessageRow | undefined {
-  return db
-    .prepare('SELECT * FROM messages WHERE sender_id = ? AND client_nonce = ?')
-    .get(senderId, clientNonce) as MessageRow | undefined
+  return stmt(db, 'SELECT * FROM messages WHERE sender_id = ? AND client_nonce = ?').get(
+    senderId,
+    clientNonce,
+  ) as MessageRow | undefined
 }
 
 /** 会话维度查 nonce：AI 消息（sender_id 为 NULL）与系统消息用它做幂等 */
@@ -88,9 +90,10 @@ export function findByNonceInConversation(
   conversationId: string,
   clientNonce: string,
 ): MessageRow | undefined {
-  return db
-    .prepare('SELECT * FROM messages WHERE conversation_id = ? AND client_nonce = ? LIMIT 1')
-    .get(conversationId, clientNonce) as MessageRow | undefined
+  return stmt(db, 'SELECT * FROM messages WHERE conversation_id = ? AND client_nonce = ? LIMIT 1').get(
+    conversationId,
+    clientNonce,
+  ) as MessageRow | undefined
 }
 
 export interface InsertMessageInput {
@@ -111,13 +114,13 @@ export interface InsertMessageInput {
 
 export function insert(db: DB, input: InsertMessageInput): MessageRow {
   const id = ulid()
-  db.prepare(
-    `INSERT INTO messages
+  // RETURNING 一次拿到落库后的完整行，省去额外的回读查询
+  const row = stmt(db, `INSERT INTO messages
        (id, conversation_id, sender_id, sender_type, type, content, meta, reply_to_id,
         seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at, deleted_by,
         created_at, updated_at, updated_by_device)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)`,
-  ).run(
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
+     RETURNING *`).get(
     id,
     input.conversationId,
     input.senderId ?? null,
@@ -133,8 +136,7 @@ export function insert(db: DB, input: InsertMessageInput): MessageRow {
     input.createdAt,
     input.createdAt,
     input.updatedByDevice ?? null,
-  )
-  const row = findById(db, id)
+  ) as MessageRow | undefined
   if (!row) throw new Error('插入消息后回读失败')
   indexFts(db, row)
   return row
@@ -142,11 +144,12 @@ export function insert(db: DB, input: InsertMessageInput): MessageRow {
 
 /** 提及写穿：@ 到谁就写一行，会话列表的 mention_count 从 message_mentions 计数 */
 export function insertMentions(db: DB, row: MessageRow, mentionUserIds: string[]): void {
-  const stmt = db.prepare(
+  const insert = stmt(
+    db,
     'INSERT OR IGNORE INTO message_mentions (conversation_id, message_id, user_id, seq) VALUES (?, ?, ?, ?)',
   )
   for (const userId of mentionUserIds) {
-    stmt.run(row.conversation_id, row.id, userId, row.seq)
+    insert.run(row.conversation_id, row.id, userId, row.seq)
   }
 }
 
@@ -159,7 +162,7 @@ export function insertMentions(db: DB, row: MessageRow, mentionUserIds: string[]
 export function indexFts(db: DB, row: MessageRow): void {
   removeFts(db, row.id)
   if (row.deleted_at || row.content.trim().length === 0) return
-  db.prepare('INSERT INTO message_fts (message_id, conversation_id, content) VALUES (?, ?, ?)').run(
+  stmt(db, 'INSERT INTO message_fts (message_id, conversation_id, content) VALUES (?, ?, ?)').run(
     row.id,
     row.conversation_id,
     row.content,
@@ -167,7 +170,7 @@ export function indexFts(db: DB, row: MessageRow): void {
 }
 
 export function removeFts(db: DB, messageId: string): void {
-  db.prepare('DELETE FROM message_fts WHERE message_id = ?').run(messageId)
+  stmt(db, 'DELETE FROM message_fts WHERE message_id = ?').run(messageId)
 }
 
 export interface PageQuery {
@@ -194,9 +197,9 @@ export function page(db: DB, query: PageQuery): MessageRow[] {
   const order = query.after != null && query.before == null ? 'ASC' : 'DESC'
   params.push(query.limit)
 
-  return db
-    .prepare(`SELECT * FROM messages WHERE ${where} ORDER BY seq ${order} LIMIT ?`)
-    .all(...params) as MessageRow[]
+  return stmt(db, `SELECT * FROM messages WHERE ${where} ORDER BY seq ${order} LIMIT ?`).all(
+    ...params,
+  ) as MessageRow[]
 }
 
 export function updateContent(
@@ -206,14 +209,10 @@ export function updateContent(
   editedAt: number,
   deviceId?: string | null,
 ): MessageRow {
-  db.prepare('UPDATE messages SET content = ?, edited_at = ?, updated_at = ?, updated_by_device = ? WHERE id = ?').run(
-    content,
-    editedAt,
-    editedAt,
-    deviceId ?? null,
-    id,
-  )
-  const row = findById(db, id)
+  const row = stmt(
+    db,
+    'UPDATE messages SET content = ?, edited_at = ?, updated_at = ?, updated_by_device = ? WHERE id = ? RETURNING *',
+  ).get(content, editedAt, editedAt, deviceId ?? null, id) as MessageRow | undefined
   if (!row) throw new Error('更新消息后回读失败')
   indexFts(db, row)
   return row
@@ -221,22 +220,20 @@ export function updateContent(
 
 /** 撤回是写墓碑，不是物理删除，客户端才能同步到「已撤回」状态 */
 export function softDelete(db: DB, id: string, deletedBy: string, at: number): MessageRow {
-  db.prepare(
-    'UPDATE messages SET deleted_at = ?, deleted_by = ?, content = ?, updated_at = ? WHERE id = ?',
-  ).run(at, deletedBy, '', at, id)
-  const row = findById(db, id)
+  const row = stmt(
+    db,
+    'UPDATE messages SET deleted_at = ?, deleted_by = ?, content = ?, updated_at = ? WHERE id = ? RETURNING *',
+  ).get(at, deletedBy, '', at, id) as MessageRow | undefined
   if (!row) throw new Error('撤回消息后回读失败')
   removeFts(db, id)
   return row
 }
 
 export function setPinned(db: DB, id: string, pinnedAt: number | null): MessageRow {
-  db.prepare('UPDATE messages SET pinned_at = ?, updated_at = ? WHERE id = ?').run(
-    pinnedAt,
-    Date.now(),
-    id,
-  )
-  const row = findById(db, id)
+  const row = stmt(
+    db,
+    'UPDATE messages SET pinned_at = ?, updated_at = ? WHERE id = ? RETURNING *',
+  ).get(pinnedAt, Date.now(), id) as MessageRow | undefined
   if (!row) throw new Error('置顶消息后回读失败')
   return row
 }

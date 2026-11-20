@@ -1,4 +1,5 @@
 import type { DB } from '../db'
+import { stmt } from '../db'
 import { now } from '../util/clock'
 
 export interface ChangeInput {
@@ -19,12 +20,11 @@ export interface ChangeInput {
  * 否则会出现「实体存在但客户端拉不到」或「客户端拉到不存在的实体」。
  */
 export function writeChange(db: DB, input: ChangeInput): number {
-  const info = db
-    .prepare(
-      `INSERT INTO sync_change_log (entity, entity_id, op, conversation_id, user_id, payload, actor_id, created_at)
+  const info = stmt(
+    db,
+    `INSERT INTO sync_change_log (entity, entity_id, op, conversation_id, user_id, payload, actor_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  ).run(
       input.entity,
       input.entityId,
       input.op,
