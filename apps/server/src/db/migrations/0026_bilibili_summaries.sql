@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS bilibili_video_summaries (
   title      TEXT,
   summary    TEXT NOT NULL,
   model      TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
   PRIMARY KEY (owner_id, video_id)
 );
 

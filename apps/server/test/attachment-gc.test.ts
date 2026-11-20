@@ -1,16 +1,18 @@
+import { testDatabaseUrl } from './helpers/pg'
 import fs from 'node:fs'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import type { DB } from '../src/db'
+import { one, run, type DB } from '../src/db'
 
 const DAY = 24 * 60 * 60 * 1000
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-gc-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -97,7 +99,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close()
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -150,25 +152,29 @@ describe('附件回收', () => {
 
     // 头像：被 users.avatar_url 引用
     const avatar = await upload(pngBuffer(16), 'avatar.png', 'image/png')
-    db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatar.url, userId)
+    await run(db, 'UPDATE users SET avatar_url = ? WHERE id = ?', [avatar.url, userId])
 
     // 消息附件：被 meta.attachments 引用
     const messageFile = await upload(Buffer.from('# 角色卡正文'), 'card.md', 'text/markdown', 'file')
-    db.prepare(
+    await run(
+      db,
       `INSERT INTO conversations (id, type, created_at, updated_at) VALUES ('gc-conv', 'direct', ?, ?)`,
-    ).run(now, now)
-    db.prepare(
+      [now, now],
+    )
+    await run(
+      db,
       `INSERT INTO messages
          (id, conversation_id, sender_type, type, content, meta, seq, created_at, updated_at)
        VALUES ('gc-msg', 'gc-conv', 'user', 'file', '', ?, 1, ?, ?)`,
-    ).run(
-      JSON.stringify({
-        attachments: [
-          { id: 'x', kind: 'file', filename: 'card.md', mime: 'text/markdown', size: 1, url: messageFile.url },
-        ],
-      }),
-      now,
-      now,
+      [
+        JSON.stringify({
+          attachments: [
+            { id: 'x', kind: 'file', filename: 'card.md', mime: 'text/markdown', size: 1, url: messageFile.url },
+          ],
+        }),
+        now,
+        now,
+      ],
     )
 
     // 宽限期内的无引用附件：这次不能删
@@ -177,7 +183,7 @@ describe('附件回收', () => {
     // 超过宽限期的无引用附件：行与文件都该被回收
     const stale = await upload(pngBuffer(48), 'stale.png', 'image/png')
     const old = now - 3 * DAY
-    db.prepare('UPDATE attachments SET created_at = ? WHERE id = ?').run(old, stale.id)
+    await run(db, 'UPDATE attachments SET created_at = ? WHERE id = ?', [old, stale.id])
     ageFile(stale.storageKey, old)
 
     // 磁盘孤儿：库里没有对应行
@@ -201,7 +207,7 @@ describe('附件回收', () => {
     expect(fileExists(orphanKey)).toBe(false)
     expect(fileExists(youngKey)).toBe(true)
 
-    const staleRow = db.prepare('SELECT id FROM attachments WHERE id = ?').get(stale.id)
+    const staleRow = await one(db, 'SELECT id FROM attachments WHERE id = ?', [stale.id])
     expect(staleRow).toBeUndefined()
     expect(result.freedBytes).toBeGreaterThan(0)
   })

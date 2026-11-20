@@ -121,24 +121,25 @@ function encodeSecret(secret: ConnectorSecret): string | null {
   return encryptSecret(JSON.stringify(cleaned))
 }
 
-export function listConnectors(db: DB, ownerId: string): Connector[] {
-  return repo.listConnectors(db, ownerId).map(toPublic)
+export async function listConnectors(db: DB, ownerId: string): Promise<Connector[]> {
+  const rows = await repo.listConnectors(db, ownerId)
+  return rows.map(toPublic)
 }
 
-export function findOwnedConnector(db: DB, ownerId: string, id: string): repo.ConnectorRow {
-  const row = repo.findConnector(db, id)
+export async function findOwnedConnector(db: DB, ownerId: string, id: string): Promise<repo.ConnectorRow> {
+  const row = await repo.findConnector(db, id)
   if (!row || row.owner_id !== ownerId) throw err.notFound('连接器不存在')
   return row
 }
 
-export function createConnector(
+export async function createConnector(
   db: DB,
   ownerId: string,
   input: ConnectorCreatePayload,
-): Connector {
+): Promise<Connector> {
   const secret = input.secret ?? {}
   assertSecret(input.type, secret)
-  const row = repo.createConnector(db, {
+  const row = await repo.createConnector(db, {
     ownerId,
     type: input.type,
     name: input.name,
@@ -149,13 +150,13 @@ export function createConnector(
   return toPublic(row)
 }
 
-export function updateConnector(
+export async function updateConnector(
   db: DB,
   ownerId: string,
   id: string,
   input: ConnectorPatchPayload,
-): Connector {
-  const current = findOwnedConnector(db, ownerId, id)
+): Promise<Connector> {
+  const current = await findOwnedConnector(db, ownerId, id)
   const type = current.type as ConnectorType
 
   let secretEnc: string | null | undefined
@@ -173,7 +174,7 @@ export function updateConnector(
       ? undefined
       : JSON.stringify(normalizeConfig(type, { ...parseConfig(current), ...input.config }))
 
-  const row = repo.updateConnector(db, id, {
+  const row = await repo.updateConnector(db, id, {
     name: input.name,
     enabled: input.enabled,
     config,
@@ -182,19 +183,19 @@ export function updateConnector(
   return toPublic(row)
 }
 
-export function toggleConnector(
+export async function toggleConnector(
   db: DB,
   ownerId: string,
   id: string,
   enabled: boolean,
-): Connector {
-  findOwnedConnector(db, ownerId, id)
-  return toPublic(repo.updateConnector(db, id, { enabled }))
+): Promise<Connector> {
+  await findOwnedConnector(db, ownerId, id)
+  return toPublic(await repo.updateConnector(db, id, { enabled }))
 }
 
-export function deleteConnector(db: DB, ownerId: string, id: string): void {
-  findOwnedConnector(db, ownerId, id)
-  repo.softDeleteConnector(db, id)
+export async function deleteConnector(db: DB, ownerId: string, id: string): Promise<void> {
+  await findOwnedConnector(db, ownerId, id)
+  await repo.softDeleteConnector(db, id)
 }
 
 /* ------------------------------ 限流 ------------------------------ */
@@ -543,7 +544,7 @@ export async function testConnector(
   ownerId: string,
   id: string,
 ): Promise<{ connector: Connector; ok: boolean; message: string }> {
-  const row = findOwnedConnector(db, ownerId, id)
+  const row = await findOwnedConnector(db, ownerId, id)
   const type = row.type as ConnectorType
   takeRateLimit(`test:${ownerId}:${id}`, 6, 60_000)
 
@@ -564,8 +565,8 @@ export async function testConnector(
     result = { ok: false, message: e instanceof Error ? e.message : '测试失败' }
   }
 
-  repo.saveTestResult(db, id, result)
-  const fresh = repo.findConnector(db, id)
+  await repo.saveTestResult(db, id, result)
+  const fresh = await repo.findConnector(db, id)
   return {
     connector: toPublic(fresh ?? row),
     ok: result.ok,
@@ -574,12 +575,13 @@ export async function testConnector(
 }
 
 /** 供其他服务取「已启用的某类连接器」，没有时返回 null */
-export function enabledConnectorOfType(
+export async function enabledConnectorOfType(
   db: DB,
   ownerId: string,
   type: ConnectorType,
-): repo.ConnectorRow | null {
-  return repo.listEnabledByType(db, ownerId, type)[0] ?? null
+): Promise<repo.ConnectorRow | null> {
+  const rows = await repo.listEnabledByType(db, ownerId, type)
+  return rows[0] ?? null
 }
 
 /** 用用户已启用的 DeepSeek 搜索连接器检索网页 */
@@ -588,7 +590,7 @@ export async function searchWithEnabledConnector(
   ownerId: string,
   query: string,
 ): Promise<ConnectorSearchResult[]> {
-  const row = enabledConnectorOfType(db, ownerId, 'deepseek_search')
+  const row = await enabledConnectorOfType(db, ownerId, 'deepseek_search')
   if (!row) throw err.validation('还没有启用 DeepSeek 搜索连接器')
   takeRateLimit(`search:${ownerId}`, 30, 60_000)
   return searchDeepSeek(row, query)

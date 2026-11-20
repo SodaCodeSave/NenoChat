@@ -1,6 +1,6 @@
 import type { AiSchedule, AiScheduleItem, AiScheduleSource } from '@nenochat/shared'
 import { normalizeScheduleItems, ulid } from '@nenochat/shared'
-import type { DB } from '../index'
+import { one, run, type DB } from '../index'
 import { now } from '../../util/clock'
 
 export interface ScheduleRow {
@@ -32,10 +32,12 @@ export function mapSchedule(row: ScheduleRow): AiSchedule {
   }
 }
 
-export function findSchedule(db: DB, personaId: string, dayKey: string): ScheduleRow | undefined {
-  return db
-    .prepare('SELECT * FROM ai_persona_schedules WHERE persona_id = ? AND day_key = ?')
-    .get(personaId, dayKey) as ScheduleRow | undefined
+export function findSchedule(db: DB, personaId: string, dayKey: string): Promise<ScheduleRow | undefined> {
+  return one<ScheduleRow>(
+    db,
+    'SELECT * FROM ai_persona_schedules WHERE persona_id = ? AND day_key = ?',
+    [personaId, dayKey],
+  )
 }
 
 export interface UpsertScheduleInput {
@@ -46,28 +48,29 @@ export interface UpsertScheduleInput {
   source: AiScheduleSource
 }
 
-export function upsertSchedule(db: DB, input: UpsertScheduleInput): ScheduleRow {
+export async function upsertSchedule(db: DB, input: UpsertScheduleInput): Promise<ScheduleRow> {
   const ts = now()
-  db.prepare(
+  const row = await one<ScheduleRow>(
+    db,
     `INSERT INTO ai_persona_schedules
        (id, owner_id, persona_id, day_key, items, source, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(persona_id, day_key) DO UPDATE SET
        items = excluded.items,
        source = excluded.source,
-       updated_at = excluded.updated_at`,
-  ).run(
-    ulid(),
-    input.ownerId,
-    input.personaId,
-    input.dayKey,
-    JSON.stringify(input.items),
-    input.source,
-    ts,
-    ts,
+       updated_at = excluded.updated_at
+     RETURNING *`,
+    [
+      ulid(),
+      input.ownerId,
+      input.personaId,
+      input.dayKey,
+      JSON.stringify(input.items),
+      input.source,
+      ts,
+      ts,
+    ],
   )
-
-  const row = findSchedule(db, input.personaId, input.dayKey)
   if (!row) throw new Error('保存日程后回读失败')
   return row
 }

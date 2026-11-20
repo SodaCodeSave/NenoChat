@@ -6,18 +6,18 @@ CREATE TABLE IF NOT EXISTS conversations (
   avatar_url              TEXT,
   owner_id                TEXT REFERENCES users(id),
   announcement            TEXT,
-  announcement_updated_at INTEGER,
+  announcement_updated_at BIGINT,
   announcement_updated_by TEXT,
   ai_persona_id           TEXT,
   ai_owner_user_id        TEXT,
   last_message_id         TEXT,
-  last_message_at         INTEGER,
-  message_count           INTEGER NOT NULL DEFAULT 0,
-  seq_counter             INTEGER NOT NULL DEFAULT 0,
+  last_message_at         BIGINT,
+  message_count           BIGINT NOT NULL DEFAULT 0,
+  seq_counter             BIGINT NOT NULL DEFAULT 0,
   dm_key                  TEXT,
-  created_at              INTEGER NOT NULL,
-  updated_at              INTEGER NOT NULL,
-  deleted_at              INTEGER
+  created_at              BIGINT NOT NULL,
+  updated_at              BIGINT NOT NULL,
+  deleted_at              BIGINT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_conv_dm ON conversations(dm_key) WHERE dm_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_conv_updated ON conversations(updated_at DESC);
@@ -27,15 +27,15 @@ CREATE TABLE IF NOT EXISTS conversation_members (
   user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role               TEXT NOT NULL DEFAULT 'member',
   nickname           TEXT,
-  allow              INTEGER NOT NULL DEFAULT 0,
-  deny               INTEGER NOT NULL DEFAULT 0,
-  mute_until         INTEGER,
-  pinned_at          INTEGER,
+  allow              BIGINT NOT NULL DEFAULT 0,
+  deny               BIGINT NOT NULL DEFAULT 0,
+  mute_until         BIGINT,
+  pinned_at          BIGINT,
   notification_level TEXT,
-  joined_at          INTEGER NOT NULL,
+  joined_at          BIGINT NOT NULL,
   invited_by         TEXT,
-  left_at            INTEGER,
-  updated_at         INTEGER NOT NULL,
+  left_at            BIGINT,
+  updated_at         BIGINT NOT NULL,
   PRIMARY KEY (conversation_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS ix_cm_user ON conversation_members(user_id, left_at);
@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS channels (
   topic           TEXT,
   kind            TEXT NOT NULL DEFAULT 'text',
   category        TEXT,
-  position        INTEGER NOT NULL DEFAULT 0,
-  archived_at     INTEGER,
+  position        BIGINT NOT NULL DEFAULT 0,
+  archived_at     BIGINT,
   created_by      TEXT,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL
+  created_at      BIGINT NOT NULL,
+  updated_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_channels_conv ON channels(conversation_id, category, position);
 
@@ -65,16 +65,16 @@ CREATE TABLE IF NOT EXISTS messages (
   content          TEXT NOT NULL DEFAULT '',
   meta             TEXT,
   reply_to_id      TEXT,
-  seq              INTEGER NOT NULL,
+  seq              BIGINT NOT NULL,
   client_nonce     TEXT,
   ai_generation_id TEXT,
-  ai_index         INTEGER,
-  pinned_at        INTEGER,
-  edited_at        INTEGER,
-  deleted_at       INTEGER,
+  ai_index         BIGINT,
+  pinned_at        BIGINT,
+  edited_at        BIGINT,
+  deleted_at       BIGINT,
   deleted_by       TEXT,
-  created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL,
+  created_at       BIGINT NOT NULL,
+  updated_at       BIGINT NOT NULL,
   updated_by_device TEXT,
   UNIQUE (conversation_id, seq)
 );
@@ -89,10 +89,10 @@ CREATE INDEX IF NOT EXISTS ix_msg_generation ON messages(ai_generation_id)
 CREATE TABLE IF NOT EXISTS read_cursors (
   conversation_id      TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  last_read_seq        INTEGER NOT NULL DEFAULT 0,
+  last_read_seq        BIGINT NOT NULL DEFAULT 0,
   last_read_message_id TEXT,
-  last_read_at         INTEGER,
-  updated_at           INTEGER NOT NULL,
+  last_read_at         BIGINT,
+  updated_at           BIGINT NOT NULL,
   device_id            TEXT,
   PRIMARY KEY (conversation_id, user_id)
 );
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS message_receipts (
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   state      TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
+  updated_at BIGINT NOT NULL,
   PRIMARY KEY (message_id, user_id)
 );
 
@@ -113,15 +113,15 @@ CREATE TABLE IF NOT EXISTS attachments (
   kind            TEXT NOT NULL,
   filename        TEXT NOT NULL,
   mime            TEXT NOT NULL,
-  size            INTEGER NOT NULL,
-  width           INTEGER,
-  height          INTEGER,
+  size            BIGINT NOT NULL,
+  width           BIGINT,
+  height          BIGINT,
   sha256          TEXT NOT NULL,
   storage_key     TEXT NOT NULL,
   thumb_key       TEXT,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL,
-  deleted_at      INTEGER
+  created_at      BIGINT NOT NULL,
+  updated_at      BIGINT NOT NULL,
+  deleted_at      BIGINT
 );
 CREATE INDEX IF NOT EXISTS ix_att_sha ON attachments(sha256);
 CREATE INDEX IF NOT EXISTS ix_att_msg ON attachments(message_id) WHERE message_id IS NOT NULL;

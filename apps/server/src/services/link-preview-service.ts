@@ -1,6 +1,6 @@
 import type { LinkPreview } from '@nenochat/shared'
 import { parseBilibiliVideoId } from '@nenochat/shared'
-import type { DB } from '../db'
+import type { Executor } from '../db'
 import * as repo from '../db/repo/link-previews'
 import { sha256 } from '../util/crypto'
 import { assertPublicUrl } from '../util/ssrf'
@@ -153,9 +153,9 @@ function parseHtmlMeta(
   return { title, description, image, siteName }
 }
 
-function withSummary(db: DB, ownerId: string, preview: LinkPreview): LinkPreview {
+async function withSummary(db: Executor, ownerId: string, preview: LinkPreview): Promise<LinkPreview> {
   if (preview.kind !== 'bilibili' || !preview.videoId) return preview
-  const cached = getCachedSummary(db, ownerId, preview.videoId)
+  const cached = await getCachedSummary(db, ownerId, preview.videoId)
   return { ...preview, hasSummary: Boolean(cached.summary) }
 }
 
@@ -164,7 +164,7 @@ function withSummary(db: DB, ownerId: string, preview: LinkPreview): LinkPreview
  * 任何失败都返回 null，客户端保留纯链接，不报错。
  */
 export async function getLinkPreview(
-  db: DB,
+  db: Executor,
   ownerId: string,
   rawUrl: string,
 ): Promise<LinkPreview | null> {
@@ -178,7 +178,7 @@ export async function getLinkPreview(
 
   const normalized = url.toString()
   const urlHash = sha256(normalized)
-  const cached = repo.findLinkPreview(db, urlHash)
+  const cached = await repo.findLinkPreview(db, urlHash)
   if (cached && Date.now() - cached.fetched_at < CACHE_TTL_MS) {
     return withSummary(db, ownerId, repo.mapLinkPreview(cached))
   }
@@ -186,7 +186,7 @@ export async function getLinkPreview(
   takeRateLimit(`link-preview:${ownerId}`, 60, 60_000)
 
   try {
-    const bilibiliEnabled = Boolean(enabledConnectorOfType(db, ownerId, 'bilibili'))
+    const bilibiliEnabled = Boolean(await enabledConnectorOfType(db, ownerId, 'bilibili'))
     const looksBilibili =
       /(^|\.)bilibili\.com$/i.test(url.hostname) ||
       url.hostname === 'b23.tv' ||
@@ -197,7 +197,7 @@ export async function getLinkPreview(
       const target = await loadVideoTarget(normalized)
       if (target) {
         const video = target.info
-        const row = repo.saveLinkPreview(db, {
+        const row = await repo.saveLinkPreview(db, {
           urlHash,
           url: normalized,
           kind: 'bilibili',
@@ -216,7 +216,7 @@ export async function getLinkPreview(
     if (!page) return null
     const meta = parseHtmlMeta(page.html, page.finalUrl)
     if (!meta.title && !meta.description) return null
-    const row = repo.saveLinkPreview(db, {
+    const row = await repo.saveLinkPreview(db, {
       urlHash,
       url: normalized,
       kind: 'website',

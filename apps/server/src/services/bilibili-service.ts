@@ -351,7 +351,7 @@ export async function prepareVideoMaterial(
   ownerId: string,
   input: string,
 ): Promise<BilibiliVideoMaterial | null> {
-  const connector = enabledConnectorOfType(db, ownerId, 'bilibili')
+  const connector = await enabledConnectorOfType(db, ownerId, 'bilibili')
   if (!connector) return null
 
   const request = await resolveVideoRequest(input)
@@ -378,7 +378,7 @@ export async function prepareVideoMaterial(
     }
   }
 
-  const cached = repo.findSummary(db, ownerId, target.cacheKey)
+  const cached = await repo.findSummary(db, ownerId, target.cacheKey)
   return {
     video,
     cacheKey: target.cacheKey,
@@ -418,7 +418,7 @@ export async function ensureVideoSummary(
     const result = await summarize(buildBilibiliSummaryPrompt(material))
     const text = result.text.trim()
     if (!text) return
-    const row = repo.saveSummary(db, {
+    const row = await repo.saveSummary(db, {
       ownerId,
       videoId: material.cacheKey,
       title: material.video.title,
@@ -433,21 +433,21 @@ export async function ensureVideoSummary(
   }
 }
 
-export function getCachedSummary(
+export async function getCachedSummary(
   db: DB,
   ownerId: string,
   videoId: string,
-): { summary: string | null; updatedAt: number | null } {
-  const row = repo.findSummary(db, ownerId, videoId)
+): Promise<{ summary: string | null; updatedAt: number | null }> {
+  const row = await repo.findSummary(db, ownerId, videoId)
   return { summary: row?.summary ?? null, updatedAt: row?.updated_at ?? null }
 }
 
-export function saveClientSummary(
+export async function saveClientSummary(
   db: DB,
   ownerId: string,
   input: { videoId: string; summary: string; model?: string; title?: string },
-): void {
-  repo.saveSummary(db, {
+): Promise<void> {
+  await repo.saveSummary(db, {
     ownerId,
     videoId: input.videoId,
     title: input.title,

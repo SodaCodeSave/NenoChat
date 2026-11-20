@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-providertest-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -81,7 +83,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close()
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   await new Promise<void>((resolve) => upstream.close(() => resolve()))
   try {
     rmSync(dataDir, { recursive: true, force: true })
@@ -191,11 +193,8 @@ describe('用托管密钥测试连接', () => {
     const id = created.json.provider.id
 
     // 直接把密文改坏，模拟 SECRET_KEY 变动后的解密失败
-    const Database = (await import('better-sqlite3')).default
-    const dbPath = path.join(dataDir, 'nenochat.db')
-    const raw = new Database(dbPath)
-    raw.prepare('UPDATE ai_providers SET api_key_enc = ? WHERE id = ?').run('broken-cipher', id)
-    raw.close()
+    const { getDb, run } = await import('../src/db')
+    await run(getDb(), 'UPDATE ai_providers SET api_key_enc = ? WHERE id = ?', ['broken-cipher', id])
 
     const list = await api<{ providers: Array<{ id: string; apiKeyMasked: string | null }> }>(
       'GET',

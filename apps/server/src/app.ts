@@ -5,7 +5,7 @@ import multipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
 import { API_PREFIX, MAX_UPLOAD_FILE_BYTES } from '@nenochat/shared'
 import { env } from './env'
-import { dataDir, getDb } from './db'
+import { dataDir, getDb, initDb } from './db'
 import { applyCors } from './http/plugins/cors'
 import { applyErrorHandler } from './http/plugins/errors'
 import { registerAuthPlugin } from './http/plugins/auth'
@@ -45,7 +45,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   })
 
   // 打开数据库并跑迁移，失败即启动失败（快速失败优于半可用）
-  getDb()
+  await initDb()
 
   // 允许「带 JSON content-type 但没有 body」的请求（常见的 DELETE/POST 空体场景）
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
@@ -112,15 +112,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerWs(app)
 
   // 主动消息调度：由服务端统一判定与生成，多端看到的是同一条
-  const stopProactive = startProactiveScheduler(app, getDb())
+  const stopProactive = await startProactiveScheduler(app, getDb())
   // 角色在动态广场的活动：点赞、评论、自己发一条
-  const stopMoments = startMomentsScheduler(app, getDb())
+  const stopMoments = await startMomentsScheduler(app, getDb())
   // 群聊里角色自己的主动开口
-  const stopGroupAi = startGroupAiScheduler(app, getDb())
+  const stopGroupAi = await startGroupAiScheduler(app, getDb())
   // 无人引用的附件与磁盘孤儿文件，定时回收
-  const stopAttachmentGc = startAttachmentReclaimer(getDb())
+  const stopAttachmentGc = await startAttachmentReclaimer(getDb())
   // 过期变更日志 / 令牌 / 群决策与卡死生成的例行清理
-  const stopHousekeeping = startHousekeepingCron(getDb())
+  const stopHousekeeping = await startHousekeepingCron(getDb())
   app.addHook('onClose', async () => {
     stopProactive()
     stopMoments()

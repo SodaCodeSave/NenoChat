@@ -6,7 +6,7 @@ import {
   type MessageType,
   type ReplyPreview,
 } from '@nenochat/shared'
-import type { DB } from '../db'
+import type { Executor } from '../db'
 import { withTx } from '../db/tx'
 import * as messagesRepo from '../db/repo/messages'
 import * as conversationsRepo from '../db/repo/conversations'
@@ -40,34 +40,33 @@ export interface SendMessageResult {
  * 引用快照：把被回复消息的发送者与摘要定格在 meta 里。
  * 这样历史翻页、换端、离线重启后都能还原引用块，不必再回查原消息。
  */
-function buildReplyPreview(
-  db: DB,
+async function buildReplyPreview(
+  db: Executor,
   conversationId: string,
   replyToId: string,
-): ReplyPreview | null {
-  const row = messagesRepo.findById(db, replyToId)
+): Promise<ReplyPreview | null> {
+  const row = await messagesRepo.findById(db, replyToId)
   if (!row || row.conversation_id !== conversationId) return null
+  const sender = row.sender_id ? await usersRepo.findById(db, row.sender_id) : null
   return {
     id: row.id,
     senderId: row.sender_id,
     senderType: row.sender_type as SenderType,
-    senderName: row.sender_id
-      ? (usersRepo.findById(db, row.sender_id)?.display_name ?? '未知用户')
-      : '系统',
+    senderName: row.sender_id ? (sender?.display_name ?? '未知用户') : '系统',
     preview: messagesRepo.previewOf(row),
     type: row.type as MessageType,
   }
 }
 
 /** 合并引用快照进 meta；被引消息解析不到时返回 matched=false */
-function mergeReplyMeta(
-  db: DB,
+async function mergeReplyMeta(
+  db: Executor,
   conversationId: string,
   replyToId: string | null,
   meta: MessageMeta | null,
-): { meta: MessageMeta | null; matched: boolean } {
+): Promise<{ meta: MessageMeta | null; matched: boolean }> {
   if (!replyToId) return { meta, matched: false }
-  const preview = buildReplyPreview(db, conversationId, replyToId)
+  const preview = await buildReplyPreview(db, conversationId, replyToId)
   if (!preview) return { meta, matched: false }
   return { meta: { ...(meta ?? {}), replyTo: preview }, matched: true }
 }
@@ -84,32 +83,32 @@ function extractMentionIds(meta: MessageMeta | null): string[] {
  * 权限校验、幂等、seq 分配、会话冗余字段、变更日志全部在同一个事务内完成，
  * 广播放在事务提交之后，避免「已广播但回滚」。
  */
-export function send(db: DB, input: SendMessageInput): SendMessageResult {
-  const result = withTx(db, () => {
-    const member = assertPermission(db, input.conversationId, input.senderId, Permission.SEND_MESSAGE)
+export async function send(db: Executor, input: SendMessageInput): Promise<SendMessageResult> {
+  const result = await withTx(db, async (tx) => {
+    const member = await assertPermission(tx, input.conversationId, input.senderId, Permission.SEND_MESSAGE)
     if (isMuted(member)) throw err.forbidden('你已被禁言')
 
     if (input.content.trim().length === 0 && input.type === 'text') {
       throw err.validation('消息内容不能为空')
     }
 
-    const existing = messagesRepo.findByNonce(db, input.senderId, input.clientNonce)
+    const existing = await messagesRepo.findByNonce(tx, input.senderId, input.clientNonce)
     if (existing) {
       return { message: messagesRepo.mapMessage(existing), duplicated: true }
     }
 
     const replyToId = input.replyToId ?? null
-    const reply = mergeReplyMeta(db, input.conversationId, replyToId, input.meta ?? null)
+    const reply = await mergeReplyMeta(tx, input.conversationId, replyToId, input.meta ?? null)
     // 被引消息必须属于同一会话；已撤回的仍可引用，摘要会显示「消息已撤回」
     if (replyToId && !reply.matched) {
       throw err.validation('被回复的消息不存在')
     }
     const meta = reply.meta
 
-    const seq = conversationsRepo.nextSeq(db, input.conversationId)
+    const seq = await conversationsRepo.nextSeq(tx, input.conversationId)
     const ts = now()
 
-    const row = messagesRepo.insert(db, {
+    const row = await messagesRepo.insert(tx, {
       conversationId: input.conversationId,
       senderId: input.senderId,
       senderType: SenderType.User,
@@ -123,16 +122,16 @@ export function send(db: DB, input: SendMessageInput): SendMessageResult {
       updatedByDevice: input.deviceId ?? null,
     })
 
-    conversationsRepo.touchLastMessage(db, input.conversationId, row.id, ts)
+    await conversationsRepo.touchLastMessage(tx, input.conversationId, row.id, ts)
 
     // 提及写穿进 message_mentions，会话列表的 mention_count 才能免扫 meta
     const mentionIds = extractMentionIds(meta)
     if (mentionIds.length > 0) {
-      messagesRepo.insertMentions(db, row, mentionIds)
+      await messagesRepo.insertMentions(tx, row, mentionIds)
     }
 
     const message = messagesRepo.mapMessage(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'message',
       entityId: row.id,
       op: 'upsert',
@@ -145,14 +144,14 @@ export function send(db: DB, input: SendMessageInput): SendMessageResult {
   })
 
   if (!result.duplicated) {
-    emitMessageCreated(db, result.message, input.clientNonce)
+    await emitMessageCreated(db, result.message, input.clientNonce)
   }
   return result
 }
 
 /** 由系统或 AI 产生的消息，跳过权限但走同一套落库与广播 */
-export function appendSystemMessage(
-  db: DB,
+export async function appendSystemMessage(
+  db: Executor,
   input: {
     conversationId: string
     senderType: SenderType
@@ -165,18 +164,18 @@ export function appendSystemMessage(
     aiIndex?: number | null
     clientNonce?: string | null
   },
-): Message {
-  const message = withTx(db, () => {
-    const seq = conversationsRepo.nextSeq(db, input.conversationId)
+): Promise<Message> {
+  const message = await withTx(db, async (tx) => {
+    const seq = await conversationsRepo.nextSeq(tx, input.conversationId)
     const ts = now()
     // AI/系统消息的引用来源同样定格成快照；解析不到就退化成普通消息
     const replyPreview = input.replyToId
-      ? buildReplyPreview(db, input.conversationId, input.replyToId)
+      ? await buildReplyPreview(tx, input.conversationId, input.replyToId)
       : null
     const meta = replyPreview
       ? { ...(input.meta ?? {}), replyTo: replyPreview }
       : (input.meta ?? null)
-    const row = messagesRepo.insert(db, {
+    const row = await messagesRepo.insert(tx, {
       conversationId: input.conversationId,
       senderId: input.senderId ?? null,
       senderType: input.senderType,
@@ -190,14 +189,14 @@ export function appendSystemMessage(
       clientNonce: input.clientNonce ?? null,
       createdAt: ts,
     })
-    conversationsRepo.touchLastMessage(db, input.conversationId, row.id, ts)
+    await conversationsRepo.touchLastMessage(tx, input.conversationId, row.id, ts)
     // AI/系统消息同样写穿提及，保持 mention_count 统计口径一致
     const systemMentionIds = extractMentionIds(meta)
     if (systemMentionIds.length > 0) {
-      messagesRepo.insertMentions(db, row, systemMentionIds)
+      await messagesRepo.insertMentions(tx, row, systemMentionIds)
     }
     const mapped = messagesRepo.mapMessage(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'message',
       entityId: row.id,
       op: 'upsert',
@@ -208,23 +207,23 @@ export function appendSystemMessage(
     return mapped
   })
 
-  emitMessageCreated(db, message, null)
+  await emitMessageCreated(db, message, null)
   return message
 }
 
-export function edit(
-  db: DB,
+export async function edit(
+  db: Executor,
   input: { messageId: string; userId: string; content: string; deviceId?: string | null },
-): Message {
-  const message = withTx(db, () => {
-    const row = messagesRepo.findById(db, input.messageId)
+): Promise<Message> {
+  const message = await withTx(db, async (tx) => {
+    const row = await messagesRepo.findById(tx, input.messageId)
     if (!row || row.deleted_at !== null) throw err.notFound('消息不存在')
     if (row.sender_id !== input.userId) throw err.forbidden('只能编辑自己发送的消息')
 
     const ts = now()
-    const updated = messagesRepo.updateContent(db, row.id, input.content, ts, input.deviceId ?? null)
+    const updated = await messagesRepo.updateContent(tx, row.id, input.content, ts, input.deviceId ?? null)
     const mapped = messagesRepo.mapMessage(updated)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'message',
       entityId: row.id,
       op: 'upsert',
@@ -235,16 +234,16 @@ export function edit(
     return mapped
   })
 
-  emitMessageUpdated(db, message)
+  await emitMessageUpdated(db, message)
   return message
 }
 
-export function recall(db: DB, input: { messageId: string; userId: string }): Message {
-  const message = withTx(db, () => {
-    const row = messagesRepo.findById(db, input.messageId)
+export async function recall(db: Executor, input: { messageId: string; userId: string }): Promise<Message> {
+  const message = await withTx(db, async (tx) => {
+    const row = await messagesRepo.findById(tx, input.messageId)
     if (!row || row.deleted_at !== null) throw err.notFound('消息不存在')
 
-    const member = membersRepo.findActive(db, row.conversation_id, input.userId)
+    const member = await membersRepo.findActive(tx, row.conversation_id, input.userId)
     if (!member) throw err.forbidden('你不在这个会话中')
 
     const isOwn = row.sender_id === input.userId
@@ -252,9 +251,9 @@ export function recall(db: DB, input: { messageId: string; userId: string }): Me
     // 不再用“非 member 即可”这种过宽判定
     if (!isOwn && !can(member, Permission.MANAGE_MESSAGES)) throw err.forbidden('没有权限撤回他人消息')
 
-    const updated = messagesRepo.softDelete(db, row.id, input.userId, now())
+    const updated = await messagesRepo.softDelete(tx, row.id, input.userId, now())
     const mapped = messagesRepo.mapMessage(updated)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'message',
       entityId: row.id,
       op: 'upsert',
@@ -265,20 +264,20 @@ export function recall(db: DB, input: { messageId: string; userId: string }): Me
     return mapped
   })
 
-  emitMessageUpdated(db, message)
+  await emitMessageUpdated(db, message)
   return message
 }
 
-export function pin(db: DB, input: { messageId: string; userId: string; pinned: boolean }): Message {
-  const message = withTx(db, () => {
-    const row = messagesRepo.findById(db, input.messageId)
+export async function pin(db: Executor, input: { messageId: string; userId: string; pinned: boolean }): Promise<Message> {
+  const message = await withTx(db, async (tx) => {
+    const row = await messagesRepo.findById(tx, input.messageId)
     if (!row || row.deleted_at !== null) throw err.notFound('消息不存在')
 
-    assertPermission(db, row.conversation_id, input.userId, Permission.PIN_MESSAGE)
+    await assertPermission(tx, row.conversation_id, input.userId, Permission.PIN_MESSAGE)
 
-    const updated = messagesRepo.setPinned(db, row.id, input.pinned ? now() : null)
+    const updated = await messagesRepo.setPinned(tx, row.id, input.pinned ? now() : null)
     const mapped = messagesRepo.mapMessage(updated)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'message',
       entityId: row.id,
       op: 'upsert',
@@ -289,12 +288,12 @@ export function pin(db: DB, input: { messageId: string; userId: string; pinned: 
     return mapped
   })
 
-  emitMessageUpdated(db, message)
+  await emitMessageUpdated(db, message)
   return message
 }
 
-export function listPage(
-  db: DB,
+export async function listPage(
+  db: Executor,
   input: {
     conversationId: string
     userId: string
@@ -302,11 +301,11 @@ export function listPage(
     after?: number | null
     limit: number
   },
-): { messages: Message[]; hasMore: boolean } {
-  assertMember(db, input.conversationId, input.userId)
+): Promise<{ messages: Message[]; hasMore: boolean }> {
+  await assertMember(db, input.conversationId, input.userId)
 
   // 多取一条用于判断是否还有更多
-  const rows = messagesRepo.page(db, {
+  const rows = await messagesRepo.page(db, {
     conversationId: input.conversationId,
     before: input.before ?? null,
     after: input.after ?? null,
@@ -321,13 +320,13 @@ export function listPage(
 }
 
 /** 以某条消息为锚点加载上下文，供搜索结果跳转使用 */
-export function around(
-  db: DB,
+export async function around(
+  db: Executor,
   input: { conversationId: string; userId: string; messageId: string; limit?: number },
-): { messages: Message[]; hasMore: boolean } {
-  assertMember(db, input.conversationId, input.userId)
+): Promise<{ messages: Message[]; hasMore: boolean }> {
+  await assertMember(db, input.conversationId, input.userId)
 
-  const anchor = messagesRepo.findById(db, input.messageId)
+  const anchor = await messagesRepo.findById(db, input.messageId)
   if (!anchor || anchor.conversation_id !== input.conversationId) {
     throw err.notFound('消息不存在')
   }
@@ -343,24 +342,22 @@ export function around(
   })
 }
 
-export function markRead(
-  db: DB,
+export async function markRead(
+  db: Executor,
   input: { conversationId: string; userId: string; seq: number; messageId?: string | null; deviceId?: string | null },
-): { advanced: boolean; lastReadSeq: number } {
-  assertMember(db, input.conversationId, input.userId)
+): Promise<{ advanced: boolean; lastReadSeq: number }> {
+  await assertMember(db, input.conversationId, input.userId)
 
-  const { advanced, row } = withTx(db, () => readCursorsRepo.advance(db, input))
+  const { advanced, row } = await withTx(db, (tx) => readCursorsRepo.advance(tx, input))
   return { advanced, lastReadSeq: row.last_read_seq }
 }
 
 /** 群聊已读人数：由游标聚合推导 */
-export function readCount(db: DB, conversationId: string, seq: number): number {
+export async function readCount(db: Executor, conversationId: string, seq: number): Promise<number> {
   return readCursorsRepo.countReadUpTo(db, conversationId, seq)
 }
 
-export function onlineMembers(db: DB, conversationId: string): string[] {
-  return membersRepo
-    .listActive(db, conversationId)
-    .map((m) => m.user_id)
-    .filter((id) => hub().isOnline(id))
+export async function onlineMembers(db: Executor, conversationId: string): Promise<string[]> {
+  const members = await membersRepo.listActive(db, conversationId)
+  return members.map((m) => m.user_id).filter((id) => hub().isOnline(id))
 }

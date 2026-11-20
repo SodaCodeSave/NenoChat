@@ -23,24 +23,24 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/connectors', async (request) => {
     const userId = await requireUserId(request)
-    return { connectors: connectorService.listConnectors(db, userId) }
+    return { connectors: await connectorService.listConnectors(db, userId) }
   })
 
   app.post('/connectors', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(ConnectorCreateSchema, request.body)
-    return { connector: connectorService.createConnector(db, userId, input) }
+    return { connector: await connectorService.createConnector(db, userId, input) }
   })
 
   app.patch<{ Params: { id: string } }>('/connectors/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(ConnectorPatchSchema, request.body)
-    return { connector: connectorService.updateConnector(db, userId, request.params.id, input) }
+    return { connector: await connectorService.updateConnector(db, userId, request.params.id, input) }
   })
 
   app.delete<{ Params: { id: string } }>('/connectors/:id', async (request) => {
     const userId = await requireUserId(request)
-    connectorService.deleteConnector(db, userId, request.params.id)
+    await connectorService.deleteConnector(db, userId, request.params.id)
     return { ok: true }
   })
 
@@ -48,13 +48,13 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(ConnectorToggleSchema, request.body)
     return {
-      connector: connectorService.toggleConnector(db, userId, request.params.id, input.enabled),
+      connector: await connectorService.toggleConnector(db, userId, request.params.id, input.enabled),
     }
   })
 
   app.post<{ Params: { id: string } }>('/connectors/:id/test', async (request) => {
     const userId = await requireUserId(request)
-    return connectorService.testConnector(db, userId, request.params.id)
+    return await connectorService.testConnector(db, userId, request.params.id)
   })
 
   /** 用已启用的搜索连接器检索网页；本机密钥模式由客户端拿到结果后自行注入上下文 */
@@ -68,7 +68,7 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   /** 获取已启用的和风天气，供桌面端本机密钥模式注入上下文 */
   app.get('/connectors/heweather/current', async (request) => {
     const userId = await requireUserId(request)
-    const row = connectorService.enabledConnectorOfType(db, userId, 'heweather')
+    const row = await connectorService.enabledConnectorOfType(db, userId, 'heweather')
     if (!row) throw err.validation('还没有启用和风天气连接器')
     return { weather: await connectorService.fetchHeweather(row) }
   })
@@ -77,9 +77,9 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   app.post('/connectors/deepseek/fetch', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(ConnectorFetchSchema, request.body)
-    const row = connectorService.enabledConnectorOfType(db, userId, 'deepseek_search')
+    const row = await connectorService.enabledConnectorOfType(db, userId, 'deepseek_search')
     if (!row) throw err.validation('还没有启用 DeepSeek 搜索连接器')
-    connectorService.takeRateLimit(`fetch:${userId}`, 20, 60_000)
+    await connectorService.takeRateLimit(`fetch:${userId}`, 20, 60_000)
     return { page: await connectorService.fetchDeepSeekPage(row, input.url) }
   })
 
@@ -96,7 +96,7 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   app.post('/connectors/bilibili/summaries', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(BilibiliSummarySaveSchema, request.body)
-    bilibiliService.saveClientSummary(db, userId, input)
+    await bilibiliService.saveClientSummary(db, userId, input)
     return { ok: true }
   })
 
@@ -104,7 +104,7 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   app.get('/connectors/bilibili/summary', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(BilibiliSummaryQuerySchema, request.query)
-    return bilibiliService.getCachedSummary(db, userId, input.videoId)
+    return await bilibiliService.getCachedSummary(db, userId, input.videoId)
   })
 
   /** 聊天链接卡片：服务端抓取并缓存元信息，失败返回 null 由客户端降级为纯链接 */

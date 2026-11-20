@@ -22,21 +22,21 @@ export function can(member: membersRepo.MemberRow, bit: Permission): boolean {
 }
 
 /** 校验当前用户对某会话拥有指定权限，同时返回其成员记录 */
-export function assertPermission(
+export async function assertPermission(
   db: DB,
   conversationId: string,
   userId: string,
   bit: Permission,
-): membersRepo.MemberRow {
-  const member = membersRepo.findActive(db, conversationId, userId)
+): Promise<membersRepo.MemberRow> {
+  const member = await membersRepo.findActive(db, conversationId, userId)
   if (!member) throw err.forbidden('你不在这个会话中')
   if (!can(member, bit)) throw err.forbidden('没有权限执行此操作')
   return member
 }
 
 /** 成员关系校验，不需要额外权限位 */
-export function assertMember(db: DB, conversationId: string, userId: string): membersRepo.MemberRow {
-  const member = membersRepo.findActive(db, conversationId, userId)
+export async function assertMember(db: DB, conversationId: string, userId: string): Promise<membersRepo.MemberRow> {
+  const member = await membersRepo.findActive(db, conversationId, userId)
   if (!member) throw err.forbidden('你不在这个会话中')
   return member
 }

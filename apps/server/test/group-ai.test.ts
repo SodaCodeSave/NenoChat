@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-group-ai-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -191,7 +193,7 @@ afterAll(async () => {
   await app.close()
   await new Promise<void>((resolve) => upstream.close(() => resolve()))
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -268,21 +270,23 @@ describe('群聊拉 AI', () => {
 
 describe('群聊主动开口', () => {
   it('安静够久后角色会自己起个话题', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one, all, run } = await import('../src/db')
     const { scanGroupAutonomyOnce } = await import('../src/services/group-ai-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     // 把群里的消息整体往前挪，制造「安静 3 小时」的局面
-    db.prepare('UPDATE messages SET created_at = created_at - ? WHERE conversation_id = ?').run(
+    await run(db, 'UPDATE messages SET created_at = created_at - ? WHERE conversation_id = ?', [
       3 * 3_600_000,
       groupId,
-    )
+    ])
 
     await scanGroupAutonomyOnce(db, silentLog, { random: () => 0 })
 
-    const logs = db
-      .prepare("SELECT status FROM ai_group_log WHERE conversation_id = ? AND kind = 'autonomy'")
-      .all(groupId) as Array<{ status: string }>
+    const logs = await all<{ status: string }>(
+      db,
+      "SELECT status FROM ai_group_log WHERE conversation_id = ? AND kind = 'autonomy'",
+      [groupId],
+    )
     expect(logs).toHaveLength(1)
     expect(logs[0]!.status).toBe('sent')
 
@@ -292,9 +296,11 @@ describe('群聊主动开口', () => {
 
     // 再扫一次不会因为同一格重复发
     await scanGroupAutonomyOnce(db, silentLog, { random: () => 0 })
-    const again = db
-      .prepare("SELECT COUNT(*) AS c FROM ai_group_log WHERE conversation_id = ? AND kind = 'autonomy'")
-      .get(groupId) as { c: number }
+    const again = (await one<{ c: number }>(
+      db,
+      "SELECT COUNT(*) AS c FROM ai_group_log WHERE conversation_id = ? AND kind = 'autonomy'",
+      [groupId],
+    ))!
     expect(again.c).toBe(1)
   })
 })

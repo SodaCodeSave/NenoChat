@@ -40,24 +40,24 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/ai/providers', async (request) => {
     const userId = await requireUserId(request)
-    return { providers: aiService.listProviders(db, userId) }
+    return { providers: await aiService.listProviders(db, userId) }
   })
 
   app.post('/ai/providers', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(ProviderSchema, request.body)
-    return { provider: aiService.createProvider(db, userId, input) }
+    return { provider: await aiService.createProvider(db, userId, input) }
   })
 
   app.patch<{ Params: { id: string } }>('/ai/providers/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(ProviderPatchSchema, request.body)
-    return { provider: aiService.updateProvider(db, userId, request.params.id, input) }
+    return { provider: await aiService.updateProvider(db, userId, request.params.id, input) }
   })
 
   app.delete<{ Params: { id: string } }>('/ai/providers/:id', async (request) => {
     const userId = await requireUserId(request)
-    aiService.deleteProvider(db, userId, request.params.id)
+    await aiService.deleteProvider(db, userId, request.params.id)
     return { ok: true }
   })
 
@@ -78,7 +78,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
     async (request) => {
       const userId = await requireUserId(request)
-      const provider = aiRepo.findProvider(db, request.params.id)
+      const provider = await aiRepo.findProvider(db, request.params.id)
       if (!provider || provider.owner_id !== userId) throw err.notFound('服务商不存在')
       const models = await aiService.listProviderModels({
         baseUrl: provider.base_url,
@@ -95,7 +95,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       await requireUserId(request)
       const input = parse(TestProviderSchema, request.body)
-      return aiService.testProvider(input)
+      return await aiService.testProvider(input)
     },
   )
 
@@ -106,7 +106,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const userId = await requireUserId(request)
       const override = parse(ProviderStoredTestSchema, request.body ?? {})
-      return aiService.testStoredProvider(db, userId, request.params.id, override)
+      return await aiService.testStoredProvider(db, userId, request.params.id, override)
     },
   )
 
@@ -120,31 +120,31 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/ai/personas', async (request) => {
     const userId = await requireUserId(request)
-    return { personas: aiService.listPersonas(db, userId) }
+    return { personas: await aiService.listPersonas(db, userId) }
   })
 
   app.post('/ai/personas', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(PersonaSchema, request.body)
-    return { persona: aiService.createPersona(db, userId, input) }
+    return { persona: await aiService.createPersona(db, userId, input) }
   })
 
   app.patch<{ Params: { id: string } }>('/ai/personas/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(PersonaPatchSchema, request.body)
-    return { persona: aiService.updatePersona(db, userId, request.params.id, input) }
+    return { persona: await aiService.updatePersona(db, userId, request.params.id, input) }
   })
 
   app.delete<{ Params: { id: string } }>('/ai/personas/:id', async (request) => {
     const userId = await requireUserId(request)
-    aiService.deletePersona(db, userId, request.params.id)
+    await aiService.deletePersona(db, userId, request.params.id)
     return { ok: true }
   })
 
   /* ------------------------------ 日程 ------------------------------ */
 
-  const ownedPersona = (userId: string, personaId: string): aiRepo.PersonaRow => {
-    const persona = aiRepo.findPersona(db, personaId)
+  const ownedPersona = async (userId: string, personaId: string): Promise<aiRepo.PersonaRow> => {
+    const persona = await aiRepo.findPersona(db, personaId)
     if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
     return persona
   }
@@ -152,10 +152,10 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /** 读取某天的日程；date 缺省为今天，只读不触发生成 */
   app.get<{ Params: { id: string } }>('/ai/personas/:id/schedule', async (request) => {
     const userId = await requireUserId(request)
-    const persona = ownedPersona(userId, request.params.id)
+    const persona = await ownedPersona(userId, request.params.id)
     const query = parse(AiScheduleQuerySchema, request.query)
     return {
-      schedule: scheduleService.getSchedule(
+      schedule: await scheduleService.getSchedule(
         db,
         persona.id,
         query.date ?? scheduleService.todayKey(),
@@ -166,7 +166,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /** 确保当天有日程：服务端密钥直接生成，本机密钥让客户端生成后回传 */
   app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule/ensure', async (request) => {
     const userId = await requireUserId(request)
-    const persona = ownedPersona(userId, request.params.id)
+    const persona = await ownedPersona(userId, request.params.id)
     const query = parse(AiScheduleQuerySchema, request.body ?? {})
     return {
       schedule: await scheduleService.ensureSchedule(
@@ -183,7 +183,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
     async (request) => {
       const userId = await requireUserId(request)
-      const persona = ownedPersona(userId, request.params.id)
+      const persona = await ownedPersona(userId, request.params.id)
       const query = parse(AiScheduleQuerySchema, request.body ?? {})
       return {
         schedule: await scheduleService.regenerateSchedule(
@@ -198,13 +198,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /** 保存日程：手动编辑与客户端本地生成的结果都走这里 */
   app.post<{ Params: { id: string } }>('/ai/personas/:id/schedule', async (request) => {
     const userId = await requireUserId(request)
-    const persona = ownedPersona(userId, request.params.id)
+    const persona = await ownedPersona(userId, request.params.id)
     const input = parse(AiScheduleSaveSchema, request.body)
     const items = normalizeScheduleItems(input.items)
     if (items.length === 0) throw err.validation('日程内容不合法')
 
     return {
-      schedule: scheduleService.saveSchedule(db, {
+      schedule: await scheduleService.saveSchedule(db, {
         ownerId: userId,
         personaId: persona.id,
         dayKey: input.dayKey,
@@ -218,13 +218,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/ai/settings', async (request) => {
     const userId = await requireUserId(request)
-    return { settings: aiRepo.readGlobalSettings(db, userId) }
+    return { settings: await aiRepo.readGlobalSettings(db, userId) }
   })
 
   app.patch('/ai/settings', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(AiGlobalSettingsPatchSchema, request.body)
-    return { settings: aiRepo.writeGlobalSettings(db, userId, input) }
+    return { settings: await aiRepo.writeGlobalSettings(db, userId, input) }
   })
 
   /* ------------------------------ 会话 ------------------------------ */
@@ -232,8 +232,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.post('/ai/conversations', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(OpenAiConversationSchema, request.body)
-    const conversation = aiService.openConversation(db, userId, input)
-    emitConversationUpdated(db, conversation)
+    const conversation = await aiService.openConversation(db, userId, input)
+    await emitConversationUpdated(db, conversation)
     return { conversation }
   })
 
@@ -242,10 +242,10 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(AppendAiSegmentSchema, request.body)
     // 归属校验：服务层只校验会话类型，这里必须确认会话属于当前用户，防止拿他人会话 ULID 注入消息
-    const conv = conversationsRepo.findById(db, request.params.id)
+    const conv = await conversationsRepo.findById(db, request.params.id)
     if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
     if (conv.ai_owner_user_id !== userId) throw err.forbidden('无权访问该 AI 会话')
-    const message = aiService.appendAiSegment(db, request.params.id, {
+    const message = await aiService.appendAiSegment(db, request.params.id, {
       generationId: input.generationId,
       index: input.index,
       content: input.content,
@@ -296,7 +296,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.get('/ai/debug/summary', async (request) => {
     const userId = await requireUserId(request)
     const query = parse(z.object({ conversationId: z.string().min(1) }), request.query)
-    return { summary: aiService.debugSummary(db, userId, query.conversationId) }
+    return { summary: await aiService.debugSummary(db, userId, query.conversationId) }
   })
 
   /** 会话最近的群聊决策记录（含规则层未放行与 SKIP） */
@@ -310,7 +310,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       request.query,
     )
     return {
-      decisions: aiService.listGroupDecisions(db, userId, query.conversationId, query.limit ?? 200),
+      decisions: await aiService.listGroupDecisions(db, userId, query.conversationId, query.limit ?? 200),
     }
   })
 
@@ -318,19 +318,19 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.post('/ai/debug/usage-batch', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(z.object({ refIds: z.array(z.string().min(1)).max(200) }), request.body)
-    return { usage: aiService.usageByRefs(db, userId, input.refIds) }
+    return { usage: await aiService.usageByRefs(db, userId, input.refIds) }
   })
 
   /* ------------------------------ 记忆 ------------------------------ */
   app.get<{ Params: { id: string } }>('/ai/conversations/:id/memory', async (request) => {
     const userId = await requireUserId(request)
-    return aiService.listMemory(db, userId, request.params.id)
+    return await aiService.listMemory(db, userId, request.params.id)
   })
 
   app.post<{ Params: { id: string } }>('/ai/conversations/:id/memory', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(MemoryWriteSchema, request.body)
-    aiService.writeMemory(db, userId, request.params.id, input)
+    await aiService.writeMemory(db, userId, request.params.id, input)
     return { ok: true }
   })
 
@@ -338,7 +338,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     '/ai/conversations/:id/memory/facts/:factId',
     async (request) => {
       const userId = await requireUserId(request)
-      aiService.deleteFact(db, userId, request.params.id, request.params.factId)
+      await aiService.deleteFact(db, userId, request.params.id, request.params.factId)
       return { ok: true }
     },
   )

@@ -16,7 +16,7 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
   app.get('/posts', async (request) => {
     const userId = await requireUserId(request)
     const query = parse(PostPageQuerySchema, request.query)
-    return postService.listFeed(db, userId, {
+    return await postService.listFeed(db, userId, {
       before: query.before ?? null,
       limit: query.limit,
     })
@@ -25,39 +25,39 @@ export async function postRoutes(app: FastifyInstance): Promise<void> {
   app.post('/posts', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(CreatePostSchema, request.body)
-    return { post: postService.createPost(db, userId, input) }
+    return { post: await postService.createPost(db, userId, input) }
   })
 
   app.get<{ Params: { id: string } }>('/posts/:id', async (request) => {
     const userId = await requireUserId(request)
-    return { post: postService.getPost(db, userId, request.params.id) }
+    return { post: await postService.getPost(db, userId, request.params.id) }
   })
 
   app.delete<{ Params: { id: string } }>('/posts/:id', async (request) => {
     const userId = await requireUserId(request)
-    postService.deletePost(db, userId, request.params.id)
+    await postService.deletePost(db, userId, request.params.id)
     return { ok: true }
   })
 
   app.post<{ Params: { id: string } }>('/posts/:id/like', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(LikePostSchema, request.body)
-    return postService.setLike(db, userId, request.params.id, input.liked)
+    return await postService.setLike(db, userId, request.params.id, input.liked)
   })
 
   app.get<{ Params: { id: string } }>('/posts/:id/comments', async (request) => {
     await requireUserId(request)
-    return { comments: postService.listComments(db, request.params.id) }
+    return { comments: await postService.listComments(db, request.params.id) }
   })
 
   app.post<{ Params: { id: string } }>('/posts/:id/comments', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(CreateCommentSchema, request.body)
-    return { comment: postService.createComment(db, userId, request.params.id, input) }
+    return { comment: await postService.createComment(db, userId, request.params.id, input) }
   })
 
   app.delete<{ Params: { id: string } }>('/comments/:id', async (request) => {
     const userId = await requireUserId(request)
-    return postService.deleteComment(db, userId, request.params.id)
+    return await postService.deleteComment(db, userId, request.params.id)
   })
 }

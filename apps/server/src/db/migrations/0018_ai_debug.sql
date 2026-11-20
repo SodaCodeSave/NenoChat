@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
   -- 关联对象：私聊 generationId / 群聊 logId 等
   ref_id           TEXT,
   model            TEXT,
-  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-  completion_tokens INTEGER NOT NULL DEFAULT 0,
-  cached_tokens     INTEGER NOT NULL DEFAULT 0,
-  created_at       INTEGER NOT NULL
+  prompt_tokens     BIGINT NOT NULL DEFAULT 0,
+  completion_tokens BIGINT NOT NULL DEFAULT 0,
+  cached_tokens     BIGINT NOT NULL DEFAULT 0,
+  created_at       BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_aiusage_conv ON ai_usage_log(conversation_id, created_at DESC);
@@ -32,21 +32,21 @@ CREATE TABLE IF NOT EXISTS ai_group_decision (
   channel_id         TEXT,
   -- reply（插话）| autonomy（自主开口）
   kind               TEXT NOT NULL,
-  fired              INTEGER NOT NULL,
+  fired              BIGINT NOT NULL,
   -- rules（规则层判定）| model（模型产出）
   stage              TEXT NOT NULL,
   reason             TEXT,
   energy             REAL,
   mood               TEXT,
   log_id             TEXT,
-  created_at         INTEGER NOT NULL
+  created_at         BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_aigdec_conv ON ai_group_decision(conversation_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_aigdec_trigger ON ai_group_decision(trigger_message_id);
 
 -- 模型上下文窗口大小，调试模式算水位用；NULL 表示未配置
-ALTER TABLE ai_providers ADD COLUMN context_window INTEGER;
+ALTER TABLE ai_providers ADD COLUMN context_window BIGINT;
 
 -- 调试模式总开关
-ALTER TABLE ai_global_settings ADD COLUMN debug_mode INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_global_settings ADD COLUMN debug_mode BIGINT NOT NULL DEFAULT 0;

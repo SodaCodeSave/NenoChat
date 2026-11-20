@@ -1,10 +1,35 @@
 services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: nenochat-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nenochat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nenochat}
+      POSTGRES_DB: nenochat
+    volumes:
+      - nenochat-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nenochat -d nenochat']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 日志上限：单文件 10MB、最多 3 个，防止日志撑爆磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   server:
     build:
       context: ../..
       dockerfile: apps/server/Dockerfile
     container_name: nenochat-server
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - '8787:8787'
     environment:
@@ -17,11 +42,12 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      DATABASE_URL: postgres://nenochat:${POSTGRES_PASSWORD:-nenochat}@postgres:5432/nenochat
       # 版本由宿主机 git 派生后注入；镜像内无 .git，留空则回退到 unknown
       APP_VERSION: ${APP_VERSION:-}
       MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-}
     volumes:
-      # 数据卷：SQLite 数据库与上传文件
+      # 数据卷：上传文件（数据库在 postgres 容器卷里）
       - nenochat-data:/app/apps/server/data
     # 日志上限：单文件 10MB、最多 3 个，防止日志撑爆磁盘
     logging:
@@ -32,3 +58,4 @@ services:
 
 volumes:
   nenochat-data:
+  nenochat-pg:

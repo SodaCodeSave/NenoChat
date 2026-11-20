@@ -1,5 +1,5 @@
 import type { NotificationSettings, UserSettings } from '@nenochat/shared'
-import type { DB } from '../index'
+import { one, run, type DB } from '../index'
 import { now } from '../../util/clock'
 
 export interface UserSettingsRow {
@@ -55,81 +55,95 @@ export function mapNotificationSettings(row: NotificationSettingsRow): Notificat
 }
 
 /** 首次访问时补齐默认行，保证后续读取永远有值 */
-export function ensureUserSettings(db: DB, userId: string): UserSettingsRow {
-  const existing = db
-    .prepare('SELECT * FROM user_settings WHERE user_id = ?')
-    .get(userId) as UserSettingsRow | undefined
-  if (existing) return existing
-  db.prepare(
+export async function ensureUserSettings(db: DB, userId: string): Promise<UserSettingsRow> {
+  const inserted = await one<UserSettingsRow>(
+    db,
     `INSERT INTO user_settings (user_id, theme, accent, font_scale, density, send_key, locale, reduce_motion, updated_at)
-     VALUES (?, 'system', 'blue', 1.0, 'cozy', 'enter', 'zh-CN', 0, ?)`,
-  ).run(userId, now())
-  return db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(userId) as UserSettingsRow
+     VALUES (?, 'system', 'blue', 1.0, 'cozy', 'enter', 'zh-CN', 0, ?)
+     ON CONFLICT DO NOTHING
+     RETURNING *`,
+    [userId, now()],
+  )
+  if (inserted) return inserted
+  const existing = await one<UserSettingsRow>(db, 'SELECT * FROM user_settings WHERE user_id = ?', [userId])
+  if (!existing) throw new Error('读取用户设置失败')
+  return existing
 }
 
-export function ensureNotificationSettings(db: DB, userId: string): NotificationSettingsRow {
-  const existing = db
-    .prepare('SELECT * FROM notification_settings WHERE user_id = ?')
-    .get(userId) as NotificationSettingsRow | undefined
-  if (existing) return existing
-  db.prepare(
+export async function ensureNotificationSettings(db: DB, userId: string): Promise<NotificationSettingsRow> {
+  const inserted = await one<NotificationSettingsRow>(
+    db,
     `INSERT INTO notification_settings
        (user_id, desktop_enabled, sound_enabled, show_preview, dm_level, group_level,
         dnd_enabled, dnd_start, dnd_end, timezone, updated_at)
-     VALUES (?, 1, 1, 1, 'all', 'mentions', 0, '23:00', '08:00', 'Asia/Shanghai', ?)`,
-  ).run(userId, now())
-  return db
-    .prepare('SELECT * FROM notification_settings WHERE user_id = ?')
-    .get(userId) as NotificationSettingsRow
+     VALUES (?, 1, 1, 1, 'all', 'mentions', 0, '23:00', '08:00', 'Asia/Shanghai', ?)
+     ON CONFLICT DO NOTHING
+     RETURNING *`,
+    [userId, now()],
+  )
+  if (inserted) return inserted
+  const existing = await one<NotificationSettingsRow>(db, 'SELECT * FROM notification_settings WHERE user_id = ?', [
+    userId,
+  ])
+  if (!existing) throw new Error('读取通知设置失败')
+  return existing
 }
 
-export function updateUserSettings(db: DB, userId: string, patch: Partial<UserSettings>): UserSettingsRow {
-  const current = ensureUserSettings(db, userId)
-  db.prepare(
+export async function updateUserSettings(db: DB, userId: string, patch: Partial<UserSettings>): Promise<UserSettingsRow> {
+  const current = await ensureUserSettings(db, userId)
+  const row = await one<UserSettingsRow>(
+    db,
     `UPDATE user_settings
      SET theme = ?, accent = ?, font_scale = ?, density = ?, send_key = ?, locale = ?,
          reduce_motion = ?, updated_at = ?
-     WHERE user_id = ?`,
-  ).run(
-    patch.theme ?? current.theme,
-    patch.accent ?? current.accent,
-    patch.fontScale ?? current.font_scale,
-    patch.density ?? current.density,
-    patch.sendKey ?? current.send_key,
-    patch.locale ?? current.locale,
-    patch.reduceMotion === undefined ? current.reduce_motion : patch.reduceMotion ? 1 : 0,
-    now(),
-    userId,
+     WHERE user_id = ?
+     RETURNING *`,
+    [
+      patch.theme ?? current.theme,
+      patch.accent ?? current.accent,
+      patch.fontScale ?? current.font_scale,
+      patch.density ?? current.density,
+      patch.sendKey ?? current.send_key,
+      patch.locale ?? current.locale,
+      patch.reduceMotion === undefined ? current.reduce_motion : patch.reduceMotion ? 1 : 0,
+      now(),
+      userId,
+    ],
   )
-  return ensureUserSettings(db, userId)
+  if (!row) throw new Error('更新用户设置后回读失败')
+  return row
 }
 
-export function updateNotificationSettings(
+export async function updateNotificationSettings(
   db: DB,
   userId: string,
   patch: Partial<NotificationSettings>,
-): NotificationSettingsRow {
-  const current = ensureNotificationSettings(db, userId)
+): Promise<NotificationSettingsRow> {
+  const current = await ensureNotificationSettings(db, userId)
   const bool = (v: boolean | undefined, fallback: number): number =>
     v === undefined ? fallback : v ? 1 : 0
 
-  db.prepare(
+  const row = await one<NotificationSettingsRow>(
+    db,
     `UPDATE notification_settings
      SET desktop_enabled = ?, sound_enabled = ?, show_preview = ?, dm_level = ?, group_level = ?,
          dnd_enabled = ?, dnd_start = ?, dnd_end = ?, timezone = ?, updated_at = ?
-     WHERE user_id = ?`,
-  ).run(
-    bool(patch.desktopEnabled, current.desktop_enabled),
-    bool(patch.soundEnabled, current.sound_enabled),
-    bool(patch.showPreview, current.show_preview),
-    patch.dmLevel ?? current.dm_level,
-    patch.groupLevel ?? current.group_level,
-    bool(patch.dndEnabled, current.dnd_enabled),
-    patch.dndStart ?? current.dnd_start,
-    patch.dndEnd ?? current.dnd_end,
-    patch.timezone ?? current.timezone,
-    now(),
-    userId,
+     WHERE user_id = ?
+     RETURNING *`,
+    [
+      bool(patch.desktopEnabled, current.desktop_enabled),
+      bool(patch.soundEnabled, current.sound_enabled),
+      bool(patch.showPreview, current.show_preview),
+      patch.dmLevel ?? current.dm_level,
+      patch.groupLevel ?? current.group_level,
+      bool(patch.dndEnabled, current.dnd_enabled),
+      patch.dndStart ?? current.dnd_start,
+      patch.dndEnd ?? current.dnd_end,
+      patch.timezone ?? current.timezone,
+      now(),
+      userId,
+    ],
   )
-  return ensureNotificationSettings(db, userId)
+  if (!row) throw new Error('更新通知设置后回读失败')
+  return row
 }

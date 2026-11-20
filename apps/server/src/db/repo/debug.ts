@@ -1,6 +1,6 @@
 import type { AiDebugSummary, AiGroupDecision, AiUsageEntry, AiUsageKind } from '@nenochat/shared'
 import { ulid } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, one, run, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 /* ------------------------------ usage 落库 ------------------------------ */
@@ -18,27 +18,29 @@ export interface InsertUsageInput {
   cachedTokens?: number
 }
 
-export function insertUsage(db: DB, input: InsertUsageInput): AiUsageEntry {
+export async function insertUsage(db: Executor, input: InsertUsageInput): Promise<AiUsageEntry> {
   const id = ulid()
   const ts = now()
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_usage_log
        (id, owner_id, conversation_id, persona_id, provider_id, kind, ref_id, model,
         prompt_tokens, completion_tokens, cached_tokens, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.ownerId,
-    input.conversationId ?? null,
-    input.personaId ?? null,
-    input.providerId ?? null,
-    input.kind,
-    input.refId ?? null,
-    input.model ?? null,
-    input.promptTokens,
-    input.completionTokens,
-    input.cachedTokens ?? 0,
-    ts,
+    [
+      id,
+      input.ownerId,
+      input.conversationId ?? null,
+      input.personaId ?? null,
+      input.providerId ?? null,
+      input.kind,
+      input.refId ?? null,
+      input.model ?? null,
+      input.promptTokens,
+      input.completionTokens,
+      input.cachedTokens ?? 0,
+      ts,
+    ],
   )
   return {
     id,
@@ -89,25 +91,28 @@ function mapUsage(row: UsageRow): AiUsageEntry {
 }
 
 /** 按 refId 查最近一条 usage（群聊 logId / 私聊 generationId） */
-export function findUsageByRef(db: DB, refId: string): AiUsageEntry | null {
-  const row = db
-    .prepare('SELECT * FROM ai_usage_log WHERE ref_id = ? ORDER BY created_at DESC LIMIT 1')
-    .get(refId) as UsageRow | undefined
+export async function findUsageByRef(db: Executor, refId: string): Promise<AiUsageEntry | null> {
+  const row = await one<UsageRow>(
+    db,
+    'SELECT * FROM ai_usage_log WHERE ref_id = ? ORDER BY created_at DESC LIMIT 1',
+    [refId],
+  )
   return row ? mapUsage(row) : null
 }
 
 /** 按 refId 批量查：每个 ref 取最近一条。ownerId 是硬过滤，只返回主人自己的记录 */
-export function findUsageByRefs(
-  db: DB,
+export async function findUsageByRefs(
+  db: Executor,
   ownerId: string,
   refIds: string[],
-): Record<string, AiUsageEntry> {
+): Promise<Record<string, AiUsageEntry>> {
   const output: Record<string, AiUsageEntry> = {}
-  const statement = db.prepare(
-    'SELECT * FROM ai_usage_log WHERE ref_id = ? AND owner_id = ? ORDER BY created_at DESC LIMIT 1',
-  )
   for (const refId of refIds) {
-    const row = statement.get(refId, ownerId) as UsageRow | undefined
+    const row = await one<UsageRow>(
+      db,
+      'SELECT * FROM ai_usage_log WHERE ref_id = ? AND owner_id = ? ORDER BY created_at DESC LIMIT 1',
+      [refId, ownerId],
+    )
     if (row) output[refId] = mapUsage(row)
   }
   return output
@@ -124,32 +129,40 @@ interface UsageAggRow {
   last_provider_id: string | null
 }
 
-function aggregate(db: DB, whereSql: string, param: string): UsageAggRow {
-  const sums = db
-    .prepare(
-      `SELECT
-         COUNT(*) AS calls,
-         COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-         COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-         COALESCE(SUM(cached_tokens), 0) AS cached_tokens
-       FROM ai_usage_log u
-       WHERE ${whereSql}`,
-    )
-    .get(param) as Pick<UsageAggRow, 'calls' | 'prompt_tokens' | 'completion_tokens' | 'cached_tokens'>
+async function aggregate(db: Executor, whereSql: string, param: string): Promise<UsageAggRow> {
+  const sums = await one<
+    Pick<UsageAggRow, 'calls' | 'prompt_tokens' | 'completion_tokens' | 'cached_tokens'>
+  >(
+    db,
+    `SELECT
+       COUNT(*) AS calls,
+       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+     FROM ai_usage_log u
+     WHERE ${whereSql}`,
+    [param],
+  )
 
-  const last = db
-    .prepare(
-      `SELECT prompt_tokens, model, created_at, provider_id
-       FROM ai_usage_log
-       WHERE ${whereSql}
-       ORDER BY created_at DESC LIMIT 1`,
-    )
-    .get(param) as
-    | { prompt_tokens: number; model: string | null; created_at: number; provider_id: string | null }
-    | undefined
+  const last = await one<{
+    prompt_tokens: number
+    model: string | null
+    created_at: number
+    provider_id: string | null
+  }>(
+    db,
+    `SELECT prompt_tokens, model, created_at, provider_id
+     FROM ai_usage_log
+     WHERE ${whereSql}
+     ORDER BY created_at DESC LIMIT 1`,
+    [param],
+  )
 
   return {
-    ...sums,
+    calls: sums?.calls ?? 0,
+    prompt_tokens: sums?.prompt_tokens ?? 0,
+    completion_tokens: sums?.completion_tokens ?? 0,
+    cached_tokens: sums?.cached_tokens ?? 0,
     last_prompt_tokens: last?.prompt_tokens ?? null,
     last_model: last?.model ?? null,
     last_at: last?.created_at ?? null,
@@ -158,12 +171,12 @@ function aggregate(db: DB, whereSql: string, param: string): UsageAggRow {
 }
 
 /** 会话内聚合 usage，并补上上下文水位信息 */
-export function debugSummary(
-  db: DB,
+export async function debugSummary(
+  db: Executor,
   conversationId: string,
   context: { contextWindow: number | null; lastCompactedSeq: number | null; tokenEstimate: number | null },
-): AiDebugSummary {
-  const row = aggregate(db, 'u.conversation_id = ?', conversationId)
+): Promise<AiDebugSummary> {
+  const row = await aggregate(db, 'u.conversation_id = ?', conversationId)
   const hitRate =
     row.prompt_tokens > 0 ? row.cached_tokens / row.prompt_tokens : null
   const contextLevel =
@@ -219,7 +232,7 @@ interface DecisionRow {
   created_at: number
 }
 
-function mapDecision(db: DB, row: DecisionRow): AiGroupDecision {
+async function mapDecision(db: Executor, row: DecisionRow): Promise<AiGroupDecision> {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -233,13 +246,13 @@ function mapDecision(db: DB, row: DecisionRow): AiGroupDecision {
     energy: row.energy,
     mood: row.mood,
     logId: row.log_id,
-    usage: row.log_id ? usageOfDecision(db, row.log_id) : null,
+    usage: row.log_id ? await usageOfDecision(db, row.log_id) : null,
     createdAt: row.created_at,
   }
 }
 
-function usageOfDecision(db: DB, logId: string): AiGroupDecision['usage'] {
-  const usage = findUsageByRef(db, logId)
+async function usageOfDecision(db: Executor, logId: string): Promise<AiGroupDecision['usage']> {
+  const usage = await findUsageByRef(db, logId)
   if (!usage) return null
   return {
     promptTokens: usage.promptTokens,
@@ -248,28 +261,30 @@ function usageOfDecision(db: DB, logId: string): AiGroupDecision['usage'] {
   }
 }
 
-export function insertDecision(db: DB, input: InsertDecisionInput): AiGroupDecision {
+export async function insertDecision(db: Executor, input: InsertDecisionInput): Promise<AiGroupDecision> {
   const id = ulid()
   const ts = now()
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_group_decision
        (id, conversation_id, persona_id, persona_name, trigger_message_id,
         kind, fired, stage, reason, energy, mood, log_id, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.conversationId,
-    input.personaId,
-    input.personaName,
-    input.triggerMessageId ?? null,
-    input.kind,
-    input.fired ? 1 : 0,
-    input.stage,
-    input.reason ?? null,
-    input.energy ?? null,
-    input.mood ?? null,
-    input.logId ?? null,
-    ts,
+    [
+      id,
+      input.conversationId,
+      input.personaId,
+      input.personaName,
+      input.triggerMessageId ?? null,
+      input.kind,
+      input.fired ? 1 : 0,
+      input.stage,
+      input.reason ?? null,
+      input.energy ?? null,
+      input.mood ?? null,
+      input.logId ?? null,
+      ts,
+    ],
   )
   return {
     id,
@@ -297,31 +312,33 @@ export interface DecisionOutcomeInput {
 }
 
 /** 模型层产出后回填到规则层放行时创建的那条决策记录上，返回回填后的完整记录 */
-export function updateDecisionOutcome(db: DB, logId: string, patch: DecisionOutcomeInput): AiGroupDecision | null {
-  const row = db
-    .prepare(
-      'SELECT id FROM ai_group_decision WHERE log_id = ? AND stage = ? ORDER BY created_at DESC LIMIT 1',
-    )
-    .get(logId, 'rules') as { id: string } | undefined
+export async function updateDecisionOutcome(db: Executor, logId: string, patch: DecisionOutcomeInput): Promise<AiGroupDecision | null> {
+  const row = await one<{ id: string }>(
+    db,
+    'SELECT id FROM ai_group_decision WHERE log_id = ? AND stage = ? ORDER BY created_at DESC LIMIT 1',
+    [logId, 'rules'],
+  )
   if (!row) return null
-  db.prepare(
+  await run(
+    db,
     'UPDATE ai_group_decision SET stage = ?, reason = ?, fired = ? WHERE id = ?',
-  ).run('model', patch.reason, (patch.fired ?? true) ? 1 : 0, row.id)
+    ['model', patch.reason, (patch.fired ?? true) ? 1 : 0, row.id],
+  )
 
-  const updated = db.prepare('SELECT * FROM ai_group_decision WHERE id = ?').get(row.id) as
-    | DecisionRow
-    | undefined
+  const updated = await one<DecisionRow>(db, 'SELECT * FROM ai_group_decision WHERE id = ?', [row.id])
   return updated ? mapDecision(db, updated) : null
 }
 
 /** 会话最近的决策记录，新在前 */
-export function listDecisions(db: DB, conversationId: string, limit: number): AiGroupDecision[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM ai_group_decision
-       WHERE conversation_id = ?
-       ORDER BY created_at DESC LIMIT ?`,
-    )
-    .all(conversationId, limit) as DecisionRow[]
-  return rows.map((row) => mapDecision(db, row))
+export async function listDecisions(db: Executor, conversationId: string, limit: number): Promise<AiGroupDecision[]> {
+  const rows = await all<DecisionRow>(
+    db,
+    `SELECT * FROM ai_group_decision
+     WHERE conversation_id = ?
+     ORDER BY created_at DESC LIMIT ?`,
+    [conversationId, limit],
+  )
+  const decisions: AiGroupDecision[] = []
+  for (const row of rows) decisions.push(await mapDecision(db, row))
+  return decisions
 }

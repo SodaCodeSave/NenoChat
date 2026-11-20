@@ -27,7 +27,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const query = parse(MessagePageQuerySchema, request.query)
 
-    return messageService.listPage(db, {
+    return await messageService.listPage(db, {
       conversationId: request.params.id,
       userId,
       before: query.before ?? null,
@@ -40,7 +40,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     '/conversations/:id/messages/around/:messageId',
     async (request) => {
       const userId = await requireUserId(request)
-      return messageService.around(db, {
+      return await messageService.around(db, {
         conversationId: request.params.id,
         userId,
         messageId: request.params.messageId,
@@ -52,7 +52,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(SendMessageSchema, request.body)
 
-    const result = messageService.send(db, {
+    const result = await messageService.send(db, {
       conversationId: input.conversationId,
       senderId: userId,
       clientNonce: input.clientNonce,
@@ -65,7 +65,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
 
     // 群聊里的 AI 成员按自己的规则与心情决定是否接话，不阻塞这次发送
     if (!result.duplicated && input.type === 'text') {
-      scheduleGroupResponse(db, {
+      void scheduleGroupResponse(db, {
         conversationId: input.conversationId,
         messageId: result.message.id,
         senderId: userId,
@@ -82,7 +82,7 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(EditMessageSchema, request.body)
     return {
-      message: messageService.edit(db, {
+      message: await messageService.edit(db, {
         messageId: request.params.id,
         userId,
         content: input.content,
@@ -93,25 +93,26 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/messages/:id', async (request) => {
     const userId = await requireUserId(request)
-    return { message: messageService.recall(db, { messageId: request.params.id, userId }) }
+    return { message: await messageService.recall(db, { messageId: request.params.id, userId }) }
   })
 
   app.post<{ Params: { id: string } }>('/messages/:id/pin', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(PinMessageSchema, request.body)
-    return { message: messageService.pin(db, { messageId: request.params.id, userId, pinned: input.pinned }) }
+    return { message: await messageService.pin(db, { messageId: request.params.id, userId, pinned: input.pinned }) }
   })
 
   app.get<{ Params: { id: string } }>('/conversations/:id/pins', async (request) => {
     const userId = await requireUserId(request)
-    assertMember(db, request.params.id, userId)
-    return { messages: messagesRepo.listPinned(db, request.params.id).map(messagesRepo.mapMessage) }
+    await assertMember(db, request.params.id, userId)
+    const pinned = await messagesRepo.listPinned(db, request.params.id)
+    return { messages: pinned.map(messagesRepo.mapMessage) }
   })
 
   app.post<{ Params: { id: string } }>('/conversations/:id/read', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(MarkReadSchema, request.body)
-    return messageService.markRead(db, {
+    return await messageService.markRead(db, {
       conversationId: request.params.id,
       userId,
       seq: input.messageSeq,
@@ -125,9 +126,11 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     '/conversations/:id/read-count',
     async (request) => {
       const userId = await requireUserId(request)
-      assertMember(db, request.params.id, userId)
+      await assertMember(db, request.params.id, userId)
       const seq = Number(request.query.seq ?? 0)
-      return { count: readCursorsRepo.countReadUpTo(db, request.params.id, Number.isFinite(seq) ? seq : 0) }
+      return {
+        count: await readCursorsRepo.countReadUpTo(db, request.params.id, Number.isFinite(seq) ? seq : 0),
+      }
     },
   )
 }

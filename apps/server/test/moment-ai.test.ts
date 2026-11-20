@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-moment-ai-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -128,7 +130,7 @@ afterAll(async () => {
   await app.close()
   await new Promise<void>((resolve) => upstream.close(() => resolve()))
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -138,20 +140,20 @@ afterAll(async () => {
 
 describe('角色在动态广场的自动互动', () => {
   it('关掉全局开关时什么都不做', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one } = await import('../src/db')
     const { scanMomentsOnce } = await import('../src/services/moment-ai-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     await scanMomentsOnce(db, silentLog, { random: () => 0 })
 
-    const actions = db.prepare('SELECT COUNT(*) AS c FROM ai_moment_actions').get() as { c: number }
+    const actions = (await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM ai_moment_actions'))!
     expect(actions.c).toBe(0)
   })
 
   it('打开后角色会点赞、评论并自己发一条动态', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, all } = await import('../src/db')
     const { scanMomentsOnce } = await import('../src/services/moment-ai-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     const settings = await api<{ settings: { momentsEnabled: boolean } }>(
       'PATCH',
@@ -166,9 +168,10 @@ describe('角色在动态广场的自动互动', () => {
     noon.setHours(12, 0, 0, 0)
     await scanMomentsOnce(db, silentLog, { random: () => 0, now: noon.getTime() })
 
-    const kinds = db
-      .prepare('SELECT kind, status FROM ai_moment_actions ORDER BY kind')
-      .all() as Array<{ kind: string; status: string }>
+    const kinds = await all<{ kind: string; status: string }>(
+      db,
+      'SELECT kind, status FROM ai_moment_actions ORDER BY kind',
+    )
     expect(kinds.map((row) => row.kind).sort()).toEqual(['comment', 'like', 'post'])
     expect(kinds.every((row) => row.status === 'done')).toBe(true)
 
@@ -196,24 +199,23 @@ describe('角色在动态广场的自动互动', () => {
   })
 
   it('同一角色不会对同一条动态重复评论，日额度用完后也不再动手', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one, all } = await import('../src/db')
     const { scanMomentsOnce } = await import('../src/services/moment-ai-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
-    const before = db.prepare('SELECT COUNT(*) AS c FROM ai_moment_actions').get() as { c: number }
+    const before = (await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM ai_moment_actions'))!
     await scanMomentsOnce(db, silentLog, { random: () => 0 })
-    const after = db.prepare('SELECT COUNT(*) AS c FROM ai_moment_actions').get() as { c: number }
+    const after = (await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM ai_moment_actions'))!
 
     // 发动态与评论的日额度都是 1 / 2，已用满；点赞额度 2 条里还能再点一次现存的另一条
     expect(after.c - before.c).toBeLessThanOrEqual(1)
 
-    const dupe = db
-      .prepare(
-        `SELECT persona_id, post_id, COUNT(*) AS c FROM ai_moment_actions
+    const dupe = await all<{ c: number }>(
+      db,
+      `SELECT persona_id, post_id, COUNT(*) AS c FROM ai_moment_actions
          WHERE kind = 'comment' AND post_id <> ''
-         GROUP BY persona_id, post_id HAVING c > 1`,
-      )
-      .all() as Array<{ c: number }>
+         GROUP BY persona_id, post_id HAVING COUNT(*) > 1`,
+    )
     expect(dupe).toHaveLength(0)
   })
 

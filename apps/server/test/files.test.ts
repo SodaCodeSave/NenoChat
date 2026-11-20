@@ -1,19 +1,22 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { one, type DB } from '../src/db'
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-files-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
 
 let app: FastifyInstance
 let token = ''
-let db: import('better-sqlite3').Database
+let db: DB
 
 /** 最小 PNG：只需要前 8 字节通过魔数校验 */
 function pngBuffer(padding = 32): Buffer {
@@ -57,7 +60,7 @@ beforeAll(async () => {
   await app.ready()
 
   const { getDb } = await import('../src/db')
-  db = getDb() as unknown as import('better-sqlite3').Database
+  db = getDb()
 
   const reg = await app.inject({
     method: 'POST',
@@ -76,7 +79,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close()
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -130,7 +133,7 @@ describe('文件上传', () => {
   })
 
   it('attachments 表落了一条可追溯记录', async () => {
-    const row = db.prepare('SELECT COUNT(*) AS c FROM attachments').get() as { c: number }
+    const row = (await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM attachments'))!
     expect(row.c).toBeGreaterThan(0)
   })
 })

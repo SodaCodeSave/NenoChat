@@ -13,7 +13,7 @@ export interface RealtimeHub {
     payload: unknown,
     seq?: number,
     exceptUserId?: string,
-  ): void
+  ): Promise<void>
   isOnline(userId: string): boolean
   onlineUserIds(): string[]
 }
@@ -21,7 +21,7 @@ export interface RealtimeHub {
 const noopHub: RealtimeHub = {
   sendToUser: () => {},
   sendToUsers: () => {},
-  sendToConversation: () => {},
+  sendToConversation: () => Promise.resolve(),
   isOnline: () => false,
   onlineUserIds: () => [],
 }

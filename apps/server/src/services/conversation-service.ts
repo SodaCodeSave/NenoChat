@@ -32,8 +32,9 @@ export interface ConversationSummary extends Conversation {
   partnerAvatarUrl?: string | null
 }
 
-export function list(db: DB, userId: string): ConversationSummary[] {
-  return conversationsRepo.listForUser(db, userId).map((row) => ({
+export async function list(db: DB, userId: string): Promise<ConversationSummary[]> {
+  const rows = await conversationsRepo.listForUser(db, userId)
+  return rows.map((row) => ({
     ...conversationsRepo.mapConversation(row),
     pinnedAt: row.pinned_at,
     notificationLevel: row.notification_level,
@@ -53,20 +54,17 @@ export interface DetailResult {
   members: Array<Member & { user: ReturnType<typeof usersRepo.mapPublicUser> | null }>
 }
 
-export function detail(db: DB, conversationId: string, userId: string): DetailResult {
-  const member = assertMember(db, conversationId, userId)
-  const conv = conversationsRepo.findById(db, conversationId)
+export async function detail(db: DB, conversationId: string, userId: string): Promise<DetailResult> {
+  const member = await assertMember(db, conversationId, userId)
+  const conv = await conversationsRepo.findById(db, conversationId)
   if (!conv || conv.deleted_at !== null) throw err.notFound('会话不存在')
 
-  const memberRows = membersRepo.listActive(db, conversationId)
-  const userMap = new Map(
-    usersRepo
-      .listByIds(
-        db,
-        memberRows.map((m) => m.user_id),
-      )
-      .map((u) => [u.id, u]),
+  const memberRows = await membersRepo.listActive(db, conversationId)
+  const userRows = await usersRepo.listByIds(
+    db,
+    memberRows.map((m) => m.user_id),
   )
+  const userMap = new Map(userRows.map((u) => [u.id, u]))
 
   return {
     conversation: conversationsRepo.mapConversation(conv),
@@ -82,30 +80,30 @@ export function detail(db: DB, conversationId: string, userId: string): DetailRe
 }
 
 /** 私聊幂等：同一对用户永远只有一个 direct 会话 */
-export function openDirect(db: DB, userId: string, targetUserId: string): Conversation {
+export async function openDirect(db: DB, userId: string, targetUserId: string): Promise<Conversation> {
   if (userId === targetUserId) throw err.validation('不能和自己创建私聊')
 
-  const target = usersRepo.findById(db, targetUserId)
+  const target = await usersRepo.findById(db, targetUserId)
   if (!target) throw err.notFound('用户不存在')
 
-  const active = conversationsRepo.findActiveDirectWithUser(db, userId, targetUserId)
+  const active = await conversationsRepo.findActiveDirectWithUser(db, userId, targetUserId)
   if (active) return conversationsRepo.mapConversation(active)
 
   const baseKey = dmKey(userId, targetUserId)
-  const existing = conversationsRepo.findByDmKey(db, baseKey)
+  const existing = await conversationsRepo.findByDmKey(db, baseKey)
 
-  const conv = withTx(db, () => {
-    const row = conversationsRepo.create(db, {
+  const conv = await withTx(db, async (tx) => {
+    const row = await conversationsRepo.create(tx, {
       type: ConversationType.Direct,
       name: null,
       ownerId: userId,
       dmKey: existing ? `${baseKey}:${ulid()}` : baseKey,
     })
-    membersRepo.upsert(db, { conversationId: row.id, userId, role: Role.Owner })
-    membersRepo.upsert(db, { conversationId: row.id, userId: targetUserId, role: Role.Member })
+    await membersRepo.upsert(tx, { conversationId: row.id, userId, role: Role.Owner })
+    await membersRepo.upsert(tx, { conversationId: row.id, userId: targetUserId, role: Role.Member })
 
     const mapped = conversationsRepo.mapConversation(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'conversation',
       entityId: row.id,
       op: 'upsert',
@@ -116,7 +114,7 @@ export function openDirect(db: DB, userId: string, targetUserId: string): Conver
     return mapped
   })
 
-  emitConversationUpdated(db, conv)
+  await emitConversationUpdated(db, conv)
   return conv
 }
 
@@ -130,13 +128,13 @@ export interface CreateGroupInput {
  * 真人成员随便拉；AI 角色只能由它的主人拉进群，
  * 避免别人拿你的角色和密钥去聊天、替你花钱。
  */
-function assertAddableUsers(db: DB, actorId: string, userIds: string[]): void {
+async function assertAddableUsers(db: DB, actorId: string, userIds: string[]): Promise<void> {
   for (const id of Array.from(new Set(userIds))) {
-    const user = usersRepo.findById(db, id)
+    const user = await usersRepo.findById(db, id)
     if (!user) throw err.notFound('用户不存在')
 
     if (user.is_bot === 1) {
-      const persona = aiRepo.findPersonaByUserId(db, id)
+      const persona = await aiRepo.findPersonaByUserId(db, id)
       if (!persona || persona.owner_id !== actorId) {
         throw err.forbidden('只能把自己的 AI 角色拉进群')
       }
@@ -144,12 +142,12 @@ function assertAddableUsers(db: DB, actorId: string, userIds: string[]): void {
   }
 }
 
-export function createGroup(db: DB, userId: string, input: CreateGroupInput): DetailResult {
+export async function createGroup(db: DB, userId: string, input: CreateGroupInput): Promise<DetailResult> {
   const members = Array.from(new Set([userId, ...(input.memberIds ?? [])]))
-  assertAddableUsers(db, userId, members)
+  await assertAddableUsers(db, userId, members)
 
-  const conversationId = withTx(db, () => {
-    const row = conversationsRepo.create(db, {
+  const conversationId = await withTx(db, async (tx) => {
+    const row = await conversationsRepo.create(tx, {
       type: ConversationType.Group,
       name: input.name,
       avatarUrl: input.avatarUrl ?? null,
@@ -157,7 +155,7 @@ export function createGroup(db: DB, userId: string, input: CreateGroupInput): De
     })
 
     for (const memberId of members) {
-      membersRepo.upsert(db, {
+      await membersRepo.upsert(tx, {
         conversationId: row.id,
         userId: memberId,
         role: memberId === userId ? Role.Owner : Role.Member,
@@ -166,7 +164,7 @@ export function createGroup(db: DB, userId: string, input: CreateGroupInput): De
     }
 
     const mapped = conversationsRepo.mapConversation(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'conversation',
       entityId: row.id,
       op: 'upsert',
@@ -186,22 +184,22 @@ export interface UpdateConversationInput {
   announcement?: string | null
 }
 
-export function update(
+export async function update(
   db: DB,
   conversationId: string,
   userId: string,
   patch: UpdateConversationInput,
-): Conversation {
-  const conv = withTx(db, () => {
+): Promise<Conversation> {
+  const conv = await withTx(db, async (tx) => {
     // 改公告需要单独的管理权限，改名/头像同样走会话管理权限
-    assertPermission(db, conversationId, userId, Permission.MANAGE_CONVERSATION)
+    await assertPermission(tx, conversationId, userId, Permission.MANAGE_CONVERSATION)
 
-    const row = conversationsRepo.update(db, conversationId, {
+    const row = await conversationsRepo.update(tx, conversationId, {
       ...patch,
       announcementUpdatedBy: patch.announcement !== undefined ? userId : undefined,
     })
     const mapped = conversationsRepo.mapConversation(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'conversation',
       entityId: row.id,
       op: 'upsert',
@@ -212,21 +210,21 @@ export function update(
     return mapped
   })
 
-  emitConversationUpdated(db, conv)
+  await emitConversationUpdated(db, conv)
   return conv
 }
 
-export function addMembers(db: DB, conversationId: string, actorId: string, userIds: string[]): Member[] {
-  assertPermission(db, conversationId, actorId, Permission.MANAGE_MEMBERS)
-  assertAddableUsers(db, actorId, userIds)
+export async function addMembers(db: DB, conversationId: string, actorId: string, userIds: string[]): Promise<Member[]> {
+  await assertPermission(db, conversationId, actorId, Permission.MANAGE_MEMBERS)
+  await assertAddableUsers(db, actorId, userIds)
 
-  const added = withTx(db, () => {
+  const added = await withTx(db, async (tx) => {
     const result: membersRepo.MemberRow[] = []
     for (const userId of Array.from(new Set(userIds))) {
-      if (!usersRepo.findById(db, userId)) continue
-      if (membersRepo.findActive(db, conversationId, userId)) continue
-      const row = membersRepo.upsert(db, { conversationId, userId, invitedBy: actorId })
-      writeChange(db, {
+      if (!(await usersRepo.findById(tx, userId))) continue
+      if (await membersRepo.findActive(tx, conversationId, userId)) continue
+      const row = await membersRepo.upsert(tx, { conversationId, userId, invitedBy: actorId })
+      await writeChange(tx, {
         entity: 'member',
         entityId: userId,
         op: 'upsert',
@@ -240,33 +238,33 @@ export function addMembers(db: DB, conversationId: string, actorId: string, user
   })
 
   for (const row of added) {
-    const user = usersRepo.findById(db, row.user_id)
-    emitMemberUpserted(db, conversationId, membersRepo.mapMember(row), user ? usersRepo.mapUser(user) : undefined)
+    const user = await usersRepo.findById(db, row.user_id)
+    await emitMemberUpserted(db, conversationId, membersRepo.mapMember(row), user ? usersRepo.mapUser(user) : undefined)
   }
   return added.map(membersRepo.mapMember)
 }
 
-export function removeMember(
+export async function removeMember(
   db: DB,
   conversationId: string,
   actorId: string,
   targetUserId: string,
-): void {
-  const recipients = withTx(db, () => {
-    const target = membersRepo.findActive(db, conversationId, targetUserId)
+): Promise<void> {
+  const recipients = await withTx(db, async (tx) => {
+    const target = await membersRepo.findActive(tx, conversationId, targetUserId)
     if (!target) throw err.notFound('该成员不在会话中')
 
     const isSelf = actorId === targetUserId
-    const actor = assertMember(db, conversationId, actorId)
+    const actor = await assertMember(tx, conversationId, actorId)
     if (!isSelf) {
-      assertPermission(db, conversationId, actorId, Permission.MANAGE_MEMBERS)
+      await assertPermission(tx, conversationId, actorId, Permission.MANAGE_MEMBERS)
       assertOutranks(actor, target)
     } else if (target.role === Role.Owner) {
       throw err.forbidden('群主不能直接退出，请先转让群主')
     }
 
-    membersRepo.markLeft(db, conversationId, targetUserId)
-    writeChange(db, {
+    await membersRepo.markLeft(tx, conversationId, targetUserId)
+    await writeChange(tx, {
       entity: 'member',
       entityId: targetUserId,
       op: 'delete',
@@ -275,10 +273,11 @@ export function removeMember(
       actorId,
     })
 
-    return membersRepo.listActive(db, conversationId).map((m) => m.user_id)
+    const rows = await membersRepo.listActive(tx, conversationId)
+    return rows.map((m) => m.user_id)
   })
 
-  emitMemberRemoved(db, conversationId, targetUserId, recipients)
+  await emitMemberRemoved(db, conversationId, targetUserId, recipients)
 }
 
 export interface ConversationCleanup {
@@ -288,22 +287,22 @@ export interface ConversationCleanup {
 }
 
 /** 只清当前用户这一侧的私聊：退出真人私聊，彻底删除自己的 AI 会话 */
-export function cleanupForUser(
+export async function cleanupForUser(
   db: DB,
   conversationId: string,
   actorId: string,
-): ConversationCleanup | null {
-  const conversation = conversationsRepo.findById(db, conversationId)
+): Promise<ConversationCleanup | null> {
+  const conversation = await conversationsRepo.findById(db, conversationId)
   if (!conversation || conversation.deleted_at !== null) return null
   if (conversation.type !== ConversationType.Direct && conversation.type !== ConversationType.Ai) {
     throw err.forbidden('只能删除私聊会话')
   }
-  if (!membersRepo.findActive(db, conversationId, actorId)) return null
+  if (!(await membersRepo.findActive(db, conversationId, actorId))) return null
 
   if (conversation.type === ConversationType.Ai) {
-    conversationsRepo.hardDelete(db, conversationId)
+    await conversationsRepo.hardDelete(db, conversationId)
   } else {
-    writeChange(db, {
+    await writeChange(db, {
       entity: 'member',
       entityId: actorId,
       op: 'delete',
@@ -311,10 +310,10 @@ export function cleanupForUser(
       payload: { conversationId, userId: actorId },
       actorId,
     })
-    membersRepo.markLeft(db, conversationId, actorId)
+    await membersRepo.markLeft(db, conversationId, actorId)
   }
 
-  writeChange(db, {
+  await writeChange(db, {
     entity: 'conversation',
     entityId: conversationId,
     op: 'delete',
@@ -327,22 +326,22 @@ export function cleanupForUser(
 }
 
 /** 清理完成后的广播：真人私聊通知对端成员变化，AI 会话没有第二方 */
-export function emitConversationCleanup(db: DB, cleanup: ConversationCleanup): void {
+export async function emitConversationCleanup(db: DB, cleanup: ConversationCleanup): Promise<void> {
   if (cleanup.type === ConversationType.Direct) {
-    emitMemberRemoved(db, cleanup.conversationId, cleanup.actorId)
+    await emitMemberRemoved(db, cleanup.conversationId, cleanup.actorId)
   }
 }
 
-export function deleteConversationForUser(db: DB, conversationId: string, actorId: string): void {
-  const cleanup = withTx(db, () => cleanupForUser(db, conversationId, actorId))
-  if (cleanup) emitConversationCleanup(db, cleanup)
+export async function deleteConversationForUser(db: DB, conversationId: string, actorId: string): Promise<void> {
+  const cleanup = await withTx(db, async (tx) => cleanupForUser(tx, conversationId, actorId))
+  if (cleanup) await emitConversationCleanup(db, cleanup)
 }
 
-export function setPin(db: DB, conversationId: string, userId: string, pinned: boolean): Member {
-  const member = withTx(db, () => {
-    assertMember(db, conversationId, userId)
-    const row = membersRepo.update(db, conversationId, userId, { pinnedAt: pinned ? now() : null })
-    writeChange(db, {
+export async function setPin(db: DB, conversationId: string, userId: string, pinned: boolean): Promise<Member> {
+  const member = await withTx(db, async (tx) => {
+    await assertMember(tx, conversationId, userId)
+    const row = await membersRepo.update(tx, conversationId, userId, { pinnedAt: pinned ? now() : null })
+    await writeChange(tx, {
       entity: 'member',
       entityId: userId,
       op: 'upsert',
@@ -355,31 +354,31 @@ export function setPin(db: DB, conversationId: string, userId: string, pinned: b
   return membersRepo.mapMember(member)
 }
 
-export function updateMember(
+export async function updateMember(
   db: DB,
   conversationId: string,
   actorId: string,
   targetUserId: string,
   patch: membersRepo.UpdateMemberInput,
-): Member {
-  const row = withTx(db, () => {
-    const target = membersRepo.findActive(db, conversationId, targetUserId)
+): Promise<Member> {
+  const row = await withTx(db, async (tx) => {
+    const target = await membersRepo.findActive(tx, conversationId, targetUserId)
     if (!target) throw err.notFound('该成员不在会话中')
 
-    if (patch.role !== undefined && usersRepo.findById(db, targetUserId)?.is_bot === 1) {
+    if (patch.role !== undefined && (await usersRepo.findById(tx, targetUserId))?.is_bot === 1) {
       throw err.forbidden('AI 角色不能担任管理员')
     }
 
-    const actor = assertMember(db, conversationId, actorId)
+    const actor = await assertMember(tx, conversationId, actorId)
     if (actorId !== targetUserId) {
-      assertPermission(db, conversationId, actorId, Permission.MANAGE_MEMBERS)
+      await assertPermission(tx, conversationId, actorId, Permission.MANAGE_MEMBERS)
       assertOutranks(actor, target)
     } else if (patch.role !== undefined) {
       throw err.forbidden('不能修改自己的角色')
     }
 
-    const updated = membersRepo.update(db, conversationId, targetUserId, patch)
-    writeChange(db, {
+    const updated = await membersRepo.update(tx, conversationId, targetUserId, patch)
+    await writeChange(tx, {
       entity: 'member',
       entityId: targetUserId,
       op: 'upsert',
@@ -390,33 +389,33 @@ export function updateMember(
     return updated
   })
 
-  emitMemberUpserted(db, conversationId, membersRepo.mapMember(row))
+  await emitMemberUpserted(db, conversationId, membersRepo.mapMember(row))
   return membersRepo.mapMember(row)
 }
 
 /** 转让群主：原群主降为管理员，目标必须是群里的真人成员 */
-export function transferOwner(
+export async function transferOwner(
   db: DB,
   conversationId: string,
   actorId: string,
   targetUserId: string,
-): { previous: Member; next: Member } {
-  const result = withTx(db, () => {
-    const actor = assertMember(db, conversationId, actorId)
+): Promise<{ previous: Member; next: Member }> {
+  const result = await withTx(db, async (tx) => {
+    const actor = await assertMember(tx, conversationId, actorId)
     if (actor.role !== Role.Owner) throw err.forbidden('只有群主可以转让群主')
 
-    const target = membersRepo.findActive(db, conversationId, targetUserId)
+    const target = await membersRepo.findActive(tx, conversationId, targetUserId)
     if (!target) throw err.notFound('该成员不在会话中')
     if (targetUserId === actorId) throw err.validation('你已经是群主了')
-    if (usersRepo.findById(db, targetUserId)?.is_bot === 1) {
+    if ((await usersRepo.findById(tx, targetUserId))?.is_bot === 1) {
       throw err.forbidden('AI 角色不能当群主')
     }
 
-    const previous = membersRepo.update(db, conversationId, actorId, { role: Role.Admin })
-    const next = membersRepo.update(db, conversationId, targetUserId, { role: Role.Owner })
+    const previous = await membersRepo.update(tx, conversationId, actorId, { role: Role.Admin })
+    const next = await membersRepo.update(tx, conversationId, targetUserId, { role: Role.Owner })
 
     for (const row of [previous, next]) {
-      writeChange(db, {
+      await writeChange(tx, {
         entity: 'member',
         entityId: row.user_id,
         op: 'upsert',
@@ -428,27 +427,27 @@ export function transferOwner(
     return { previous, next }
   })
 
-  emitMemberUpserted(db, conversationId, membersRepo.mapMember(result.previous))
-  emitMemberUpserted(db, conversationId, membersRepo.mapMember(result.next))
+  await emitMemberUpserted(db, conversationId, membersRepo.mapMember(result.previous))
+  await emitMemberUpserted(db, conversationId, membersRepo.mapMember(result.next))
   return { previous: membersRepo.mapMember(result.previous), next: membersRepo.mapMember(result.next) }
 }
 
 /** 解散群：软删除会话，成员与历史消息保留在库里便于审计 */
-export function dissolveGroup(db: DB, conversationId: string, actorId: string): void {
-  const conversation = withTx(db, () => {
-    const actor = assertMember(db, conversationId, actorId)
+export async function dissolveGroup(db: DB, conversationId: string, actorId: string): Promise<void> {
+  const conversation = await withTx(db, async (tx) => {
+    const actor = await assertMember(tx, conversationId, actorId)
     if (actor.role !== Role.Owner) throw err.forbidden('只有群主可以解散群')
 
-    const row = conversationsRepo.findById(db, conversationId)
+    const row = await conversationsRepo.findById(tx, conversationId)
     if (!row || row.type !== ConversationType.Group || row.deleted_at !== null) {
       throw err.notFound('群聊不存在')
     }
 
-    conversationsRepo.softDelete(db, conversationId)
-    const next = conversationsRepo.findById(db, conversationId)
+    await conversationsRepo.softDelete(tx, conversationId)
+    const next = await conversationsRepo.findById(tx, conversationId)
     if (!next) throw err.notFound('群聊不存在')
     const mapped = conversationsRepo.mapConversation(next)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'conversation',
       entityId: conversationId,
       op: 'delete',
@@ -459,5 +458,5 @@ export function dissolveGroup(db: DB, conversationId: string, actorId: string): 
     return mapped
   })
 
-  emitConversationUpdated(db, conversation)
+  await emitConversationUpdated(db, conversation)
 }

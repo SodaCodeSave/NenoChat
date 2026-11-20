@@ -29,19 +29,19 @@ export function scheduleNowMinutes(ts = Date.now()): number {
   return minutesOfDay(ts, TZ_OFFSET_MIN)
 }
 
-export function getSchedule(db: DB, personaId: string, dayKey: string): AiSchedule | null {
-  const row = scheduleRepo.findSchedule(db, personaId, dayKey)
+export async function getSchedule(db: DB, personaId: string, dayKey: string): Promise<AiSchedule | null> {
+  const row = await scheduleRepo.findSchedule(db, personaId, dayKey)
   if (!row) return null
   const schedule = scheduleRepo.mapSchedule(row)
   return schedule.items.length > 0 ? schedule : null
 }
 
 /** 给提示词用：只读当天已生成的日程，不触发生成 */
-export function scheduleForPrompt(db: DB, personaId: string, ts = Date.now()): AiSchedule | null {
+export async function scheduleForPrompt(db: DB, personaId: string, ts = Date.now()): Promise<AiSchedule | null> {
   return getSchedule(db, personaId, todayKey(ts))
 }
 
-export function saveSchedule(
+export async function saveSchedule(
   db: DB,
   input: {
     ownerId: string
@@ -50,8 +50,8 @@ export function saveSchedule(
     items: AiScheduleItem[]
     source: AiScheduleSource
   },
-): AiSchedule {
-  return scheduleRepo.mapSchedule(scheduleRepo.upsertSchedule(db, input))
+): Promise<AiSchedule> {
+  return scheduleRepo.mapSchedule(await scheduleRepo.upsertSchedule(db, input))
 }
 
 /**
@@ -59,14 +59,14 @@ export function saveSchedule(
  * 与客户端的 providerOf 保持一致：角色指定的服务商可能已被删除，
  * 这时要回退到默认服务商，再回退到最早创建的那个。
  */
-function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
+async function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
   if (persona.provider_id) {
-    const explicit = aiRepo.findProvider(db, persona.provider_id)
+    const explicit = await aiRepo.findProvider(db, persona.provider_id)
     if (explicit) return explicit
   }
   return (
-    aiRepo.defaultProvider(db, persona.owner_id) ??
-    aiRepo.listProviders(db, persona.owner_id)[0]
+    (await aiRepo.defaultProvider(db, persona.owner_id)) ??
+    (await aiRepo.listProviders(db, persona.owner_id))[0]
   )
 }
 
@@ -76,7 +76,7 @@ export async function generateScheduleOnServer(
   persona: aiRepo.PersonaRow,
   dayKey: string,
 ): Promise<AiSchedule> {
-  const provider = resolveProvider(db, persona)
+  const provider = await resolveProvider(db, persona)
   if (!provider) throw err.validation('请先配置 AI 服务商')
 
   // 关闭的模型不可被选用：日程生成同样走主模型，停用就拒绝
@@ -123,7 +123,7 @@ export async function ensureSchedule(
   persona: aiRepo.PersonaRow,
   dayKey = todayKey(),
 ): Promise<AiSchedule | null> {
-  const existing = getSchedule(db, persona.id, dayKey)
+  const existing = await getSchedule(db, persona.id, dayKey)
   if (existing) return existing
   return generateScheduleOnServer(db, persona, dayKey).catch(() => null)
 }
@@ -134,7 +134,7 @@ export async function regenerateSchedule(
   persona: aiRepo.PersonaRow,
   dayKey = todayKey(),
 ): Promise<AiSchedule | null> {
-  const existing = getSchedule(db, persona.id, dayKey)
+  const existing = await getSchedule(db, persona.id, dayKey)
   const schedule = await generateScheduleOnServer(db, persona, dayKey)
   return schedule ?? existing
 }

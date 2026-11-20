@@ -15,7 +15,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(NotificationSettingsPatchSchema, request.body)
     return {
-      notificationSettings: mapNotificationSettings(updateNotificationSettings(db, userId, input)),
+      notificationSettings: mapNotificationSettings(await updateNotificationSettings(db, userId, input)),
     }
   })
 }

@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   conversation_id TEXT,
   message_id      TEXT,
   post_id         TEXT,
-  is_read         INTEGER NOT NULL DEFAULT 0,
-  created_at      INTEGER NOT NULL
+  is_read         BIGINT NOT NULL DEFAULT 0,
+  created_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_notif_user ON notifications(user_id, is_read, created_at DESC);
 
@@ -19,9 +19,9 @@ CREATE TABLE IF NOT EXISTS sticker_packs (
   owner_id   TEXT REFERENCES users(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   kind       TEXT NOT NULL DEFAULT 'image',
-  position   INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  position   BIGINT NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS stickers (
@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS stickers (
   value         TEXT,
   attachment_id TEXT REFERENCES attachments(id),
   keywords      TEXT,
-  position      INTEGER NOT NULL DEFAULT 0,
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  position      BIGINT NOT NULL DEFAULT 0,
+  created_at    BIGINT NOT NULL,
+  updated_at    BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_stickers_pack ON stickers(pack_id, position);

@@ -52,15 +52,15 @@ function mapPack(row: stickersRepo.StickerPackRow): StickerPackWithStickers['pac
  * 列出当前用户的表情包。首次调用会自动建一个默认分组，
  * 否则「上传表情」在新账号上没有落点。
  */
-export function listPacks(db: DB, userId: string): StickerPackWithStickers[] {
-  let packs = stickersRepo.listPacks(db, userId)
+export async function listPacks(db: DB, userId: string): Promise<StickerPackWithStickers[]> {
+  let packs = await stickersRepo.listPacks(db, userId)
 
   if (!packs.some((pack) => pack.owner_id === userId)) {
-    stickersRepo.createPack(db, { ownerId: userId, name: stickersRepo.DEFAULT_PACK_NAME })
-    packs = stickersRepo.listPacks(db, userId)
+    await stickersRepo.createPack(db, { ownerId: userId, name: stickersRepo.DEFAULT_PACK_NAME })
+    packs = await stickersRepo.listPacks(db, userId)
   }
 
-  const stickers = stickersRepo.listStickers(db, packs.map((pack) => pack.id))
+  const stickers = await stickersRepo.listStickers(db, packs.map((pack) => pack.id))
   const grouped = new Map<string, Sticker[]>()
   for (const row of stickers) {
     const list = grouped.get(row.pack_id) ?? []
@@ -74,73 +74,74 @@ export function listPacks(db: DB, userId: string): StickerPackWithStickers[] {
   }))
 }
 
-export function createPack(db: DB, userId: string, name: string): StickerPackWithStickers {
-  const count = stickersRepo.listPacks(db, userId).filter((p) => p.owner_id === userId).length
-  const row = stickersRepo.createPack(db, { ownerId: userId, name, position: count })
+export async function createPack(db: DB, userId: string, name: string): Promise<StickerPackWithStickers> {
+  const packs = await stickersRepo.listPacks(db, userId)
+  const count = packs.filter((p) => p.owner_id === userId).length
+  const row = await stickersRepo.createPack(db, { ownerId: userId, name, position: count })
 
   hub().sendToUser(userId, 'stickerPack.upserted', { pack: mapPack(row) })
 
   return { pack: mapPack(row), stickers: [] }
 }
 
-export function renamePack(db: DB, userId: string, packId: string, name: string): StickerPackWithStickers['pack'] {
-  const pack = stickersRepo.findPack(db, packId)
+export async function renamePack(db: DB, userId: string, packId: string, name: string): Promise<StickerPackWithStickers['pack']> {
+  const pack = await stickersRepo.findPack(db, packId)
   if (!pack || pack.owner_id !== userId) throw err.notFound('表情包不存在')
 
-  stickersRepo.renamePack(db, packId, name)
-  const updated = stickersRepo.findPack(db, packId) as stickersRepo.StickerPackRow
+  await stickersRepo.renamePack(db, packId, name)
+  const updated = (await stickersRepo.findPack(db, packId)) as stickersRepo.StickerPackRow
   hub().sendToUser(userId, 'stickerPack.upserted', { pack: mapPack(updated) })
   return mapPack(updated)
 }
 
 /** 改名与 AI 授权开关共用；多端通过 WS 事件同步开关状态 */
-export function updatePack(
+export async function updatePack(
   db: DB,
   userId: string,
   packId: string,
   patch: { name?: string; allowAi?: boolean },
-): StickerPackWithStickers['pack'] {
-  const pack = stickersRepo.findPack(db, packId)
+): Promise<StickerPackWithStickers['pack']> {
+  const pack = await stickersRepo.findPack(db, packId)
   if (!pack || pack.owner_id !== userId) throw err.notFound('表情包不存在')
 
-  stickersRepo.updatePack(db, packId, patch)
-  const updated = stickersRepo.findPack(db, packId) as stickersRepo.StickerPackRow
+  await stickersRepo.updatePack(db, packId, patch)
+  const updated = (await stickersRepo.findPack(db, packId)) as stickersRepo.StickerPackRow
   const mapped = mapPack(updated)
   hub().sendToUser(userId, 'stickerPack.upserted', { pack: mapped })
   return mapped
 }
 
-export function deletePack(db: DB, userId: string, packId: string): void {
-  const pack = stickersRepo.findPack(db, packId)
+export async function deletePack(db: DB, userId: string, packId: string): Promise<void> {
+  const pack = await stickersRepo.findPack(db, packId)
   if (!pack || pack.owner_id !== userId) throw err.notFound('表情包不存在')
-  if (stickersRepo.countInPack(db, packId) > 0) {
+  if ((await stickersRepo.countInPack(db, packId)) > 0) {
     throw err.validation('分组里还有表情，请先清空再删除')
   }
 
-  stickersRepo.deletePack(db, packId)
+  await stickersRepo.deletePack(db, packId)
   hub().sendToUser(userId, 'stickerPack.removed', { packId })
 }
 
-export function addSticker(
+export async function addSticker(
   db: DB,
   userId: string,
   input: { packId: string; attachmentId: string; keywords: string[] },
-): Sticker {
-  const pack = stickersRepo.findPack(db, input.packId)
+): Promise<Sticker> {
+  const pack = await stickersRepo.findPack(db, input.packId)
   if (!pack || pack.owner_id !== userId) throw err.notFound('表情包不存在')
 
-  const attachment = attachmentsRepo.findById(db, input.attachmentId)
+  const attachment = await attachmentsRepo.findById(db, input.attachmentId)
   if (!attachment) throw err.validation('文件不存在或已删除')
   if (attachment.owner_id !== userId) throw err.forbidden('不能引用他人的文件')
   if (!attachment.mime.startsWith('image/')) throw err.validation('表情必须是图片')
 
-  const row = withTx(db, () =>
-    stickersRepo.createSticker(db, {
+  const row = await withTx(db, async (tx) =>
+    stickersRepo.createSticker(tx, {
       packId: input.packId,
       kind: attachment.mime === 'image/gif' ? 'gif' : 'image',
       attachmentId: input.attachmentId,
       keywords: input.keywords,
-      position: stickersRepo.countInPack(db, input.packId),
+      position: await stickersRepo.countInPack(tx, input.packId),
     }),
   )
 
@@ -149,32 +150,32 @@ export function addSticker(
   return sticker
 }
 
-export function deleteSticker(db: DB, userId: string, stickerId: string): void {
-  const sticker = stickersRepo.findSticker(db, stickerId)
+export async function deleteSticker(db: DB, userId: string, stickerId: string): Promise<void> {
+  const sticker = await stickersRepo.findSticker(db, stickerId)
   if (!sticker) throw err.notFound('表情不存在')
 
-  const pack = stickersRepo.findPack(db, sticker.pack_id)
+  const pack = await stickersRepo.findPack(db, sticker.pack_id)
   if (!pack || pack.owner_id !== userId) throw err.forbidden('不能删除他人的表情')
 
-  stickersRepo.deleteSticker(db, stickerId)
+  await stickersRepo.deleteSticker(db, stickerId)
   hub().sendToUser(userId, 'sticker.removed', { stickerId })
 }
 
 /** 覆写表情关键词：本机识图分析完成后回传，或服务端分析写回 */
-export function updateStickerKeywords(
+export async function updateStickerKeywords(
   db: DB,
   userId: string,
   stickerId: string,
   keywords: string[],
-): Sticker {
-  const sticker = stickersRepo.findSticker(db, stickerId)
+): Promise<Sticker> {
+  const sticker = await stickersRepo.findSticker(db, stickerId)
   if (!sticker) throw err.notFound('表情不存在')
-  const pack = stickersRepo.findPack(db, sticker.pack_id)
+  const pack = await stickersRepo.findPack(db, sticker.pack_id)
   if (!pack || pack.owner_id !== userId) throw err.forbidden('不能修改他人的表情')
 
-  stickersRepo.updateStickerKeywords(db, stickerId, keywords)
-  const updated = stickersRepo.findSticker(db, stickerId) as stickersRepo.StickerRow
-  const attachment = sticker.attachment_id ? attachmentsRepo.findById(db, sticker.attachment_id) : null
+  await stickersRepo.updateStickerKeywords(db, stickerId, keywords)
+  const updated = (await stickersRepo.findSticker(db, stickerId)) as stickersRepo.StickerRow
+  const attachment = sticker.attachment_id ? await attachmentsRepo.findById(db, sticker.attachment_id) : null
   const mapped = mapSticker({
     ...updated,
     storage_key: attachment?.storage_key ?? null,
@@ -264,10 +265,10 @@ function buildKeywords(category: string, description: unknown): string[] {
 }
 
 /** 同名分组自动加 (2)、(3) 后缀，重复导入不会覆盖已有表情 */
-function uniquePackName(db: DB, userId: string, base: string): string {
+async function uniquePackName(db: DB, userId: string, base: string): Promise<string> {
+  const packs = await stickersRepo.listPacks(db, userId)
   const names = new Set(
-    stickersRepo
-      .listPacks(db, userId)
+    packs
       .filter((pack) => pack.owner_id === userId)
       .map((pack) => pack.name),
   )
@@ -287,7 +288,7 @@ function uniquePackName(db: DB, userId: string, base: string): string {
  * 整包可能再套一层文件夹（解压后的仓库目录），按 manifest 的位置推根前缀。
  * 分类名进关键词，manifest 里的中文描述提取成短标签一起写进去。
  */
-export function importAstrbotPack(db: DB, userId: string, zip: Buffer): StickerPackImportResult {
+export async function importAstrbotPack(db: DB, userId: string, zip: Buffer): Promise<StickerPackImportResult> {
   // 第一遍：只取 manifest（图片数据不解压，避免整包在内存里过一遍）
   const manifests: Array<{ path: string; data: Buffer }> = []
   walkZip(
@@ -313,64 +314,68 @@ export function importAstrbotPack(db: DB, userId: string, zip: Buffer): StickerP
   const memesPrefix = `${rootPrefix}memes/`
   const packName = typeof manifest.name === 'string' ? manifest.name : '导入的表情包'
 
-  const ownedCount = stickersRepo.listPacks(db, userId).filter((pack) => pack.owner_id === userId).length
-  const pack = stickersRepo.createPack(db, {
+  const ownedPacks = await stickersRepo.listPacks(db, userId)
+  const ownedCount = ownedPacks.filter((pack) => pack.owner_id === userId).length
+  const pack = await stickersRepo.createPack(db, {
     ownerId: userId,
-    name: uniquePackName(db, userId, packName),
+    name: await uniquePackName(db, userId, packName),
     position: ownedCount,
   })
 
-  // 第二遍：逐张落盘并建表情记录
-  let matched = 0
-  let imported = 0
-  let skipped = 0
-  const failures: string[] = []
-
+  // 第二遍：先收集命中条目，再逐张落盘并建表情记录（落库是异步的，没法在 zip 回调里内联做）
+  const entries: Array<{ path: string; data: Buffer }> = []
   walkZip(
     zip,
     (path) => path.startsWith(memesPrefix) && isPackImage(path),
     (path, data) => {
-      matched += 1
-      if (imported >= MAX_STICKER_PACK_FILES) {
-        skipped += 1
-        if (failures.length < 20) failures.push(path.slice(memesPrefix.length))
-        return
-      }
-
-      const relative = path.slice(memesPrefix.length)
-      const slash = relative.indexOf('/')
-      const category = slash === -1 ? '' : relative.slice(0, slash)
-      const filename = slash === -1 ? relative : relative.slice(slash + 1)
-      const mime = PACK_IMAGE_MIME.get(filename.split('.').pop()!.toLowerCase())!
-
-      try {
-        // 复用上传同一套落盘/去重/魔数校验逻辑
-        const attachment = saveUpload(db, { userId, buffer: data, filename, mime, kind: 'sticker' })
-        stickersRepo.createSticker(db, {
-          packId: pack.id,
-          kind: mime === 'image/gif' ? 'gif' : 'image',
-          attachmentId: attachment.id,
-          keywords: buildKeywords(category, manifest.categories?.[category]?.description),
-          position: imported,
-        })
-        imported += 1
-      } catch {
-        skipped += 1
-        if (failures.length < 20) failures.push(relative)
-      }
+      entries.push({ path, data })
     },
   )
 
-  if (matched === 0) {
-    stickersRepo.deletePack(db, pack.id)
+  let imported = 0
+  let skipped = 0
+  const failures: string[] = []
+
+  for (const entry of entries) {
+    if (imported >= MAX_STICKER_PACK_FILES) {
+      skipped += 1
+      if (failures.length < 20) failures.push(entry.path.slice(memesPrefix.length))
+      continue
+    }
+
+    const relative = entry.path.slice(memesPrefix.length)
+    const slash = relative.indexOf('/')
+    const category = slash === -1 ? '' : relative.slice(0, slash)
+    const filename = slash === -1 ? relative : relative.slice(slash + 1)
+    const mime = PACK_IMAGE_MIME.get(filename.split('.').pop()!.toLowerCase())!
+
+    try {
+      // 复用上传同一套落盘/去重/魔数校验逻辑
+      const attachment = await saveUpload(db, { userId, buffer: entry.data, filename, mime, kind: 'sticker' })
+      await stickersRepo.createSticker(db, {
+        packId: pack.id,
+        kind: mime === 'image/gif' ? 'gif' : 'image',
+        attachmentId: attachment.id,
+        keywords: buildKeywords(category, manifest.categories?.[category]?.description),
+        position: imported,
+      })
+      imported += 1
+    } catch {
+      skipped += 1
+      if (failures.length < 20) failures.push(relative)
+    }
+  }
+
+  if (entries.length === 0) {
+    await stickersRepo.deletePack(db, pack.id)
     throw err.validation('压缩包里没有找到 memes 目录下的表情图片')
   }
 
   if (imported === 0) {
-    stickersRepo.deletePack(db, pack.id)
+    await stickersRepo.deletePack(db, pack.id)
     throw err.validation('导入失败：压缩包里的图片都无法识别')
   }
 
-  const row = stickersRepo.findPack(db, pack.id) as stickersRepo.StickerPackRow
+  const row = (await stickersRepo.findPack(db, pack.id)) as stickersRepo.StickerPackRow
   return { pack: mapPack(row), imported, skipped, failures }
 }

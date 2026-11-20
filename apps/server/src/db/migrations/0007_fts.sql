@@ -1,7 +1,3 @@
--- 消息全文索引。trigram 分词要求查询串至少 3 个字符，短查询在应用层回退到 LIKE。
-CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-  message_id UNINDEXED,
-  conversation_id UNINDEXED,
-  content,
-  tokenize = 'trigram'
-);
+-- 消息全文检索：pg_trgm GIN 索引加速 LIKE，trigram 分词对中文同样有效
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS ix_msg_content_trgm ON messages USING gin (content gin_trgm_ops);

@@ -65,10 +65,10 @@ export interface SaveUploadInput {
 
 /**
  * 落盘 + 去重 + 写 attachments 行。
- * 用同步 API（fs.writeFileSync / better-sqlite3）：文件最大 50MB，
+ * 文件写入用同步 API（fs.writeFileSync）：文件最大 50MB，
  * 路由层已经把流读成 Buffer，这里再异步化只会增加竞态面。
  */
-export function saveUpload(db: DB, input: SaveUploadInput): Attachment {
+export async function saveUpload(db: DB, input: SaveUploadInput): Promise<Attachment> {
   const mime = input.mime.split(';')[0]!.trim().toLowerCase()
   const ext = IMAGE_MIME.get(mime) ?? TEXT_MIME.get(mime)
   if (!ext) throw err.validation(`不支持的文件类型：${input.mime}`)
@@ -86,7 +86,7 @@ export function saveUpload(db: DB, input: SaveUploadInput): Attachment {
 
   const sha256 = crypto.createHash('sha256').update(input.buffer).digest('hex')
 
-  const existing = attachmentsRepo.findBySha(db, input.userId, sha256)
+  const existing = await attachmentsRepo.findBySha(db, input.userId, sha256)
   if (existing) return attachmentsRepo.mapAttachment(existing)
 
   const folder = input.kind === 'avatar' ? 'avatars' : input.kind === 'sticker' ? 'stickers' : 'files'
@@ -101,7 +101,7 @@ export function saveUpload(db: DB, input: SaveUploadInput): Attachment {
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
   }
 
-  const row = attachmentsRepo.create(db, {
+  const row = await attachmentsRepo.create(db, {
     ownerId: input.userId,
     kind: input.kind,
     filename: sanitizeName(input.filename),

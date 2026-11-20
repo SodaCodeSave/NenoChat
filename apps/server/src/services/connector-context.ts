@@ -46,7 +46,7 @@ export async function buildConnectorContext(
   const actions: ConnectorActionMeta[] = []
   let fetchContext: string | null = null
 
-  const weather = connectorService.enabledConnectorOfType(db, ownerId, 'heweather')
+  const weather = await connectorService.enabledConnectorOfType(db, ownerId, 'heweather')
   if (weather) {
     const config = JSON.parse(weather.config || '{}') as Record<string, unknown>
     const mentioned = /天气|气温|温度|下雨|降雨|晴天|阴天|预报|几度|穿什么/.test(text)
@@ -92,7 +92,7 @@ export async function buildConnectorContext(
     .slice(0, 3)
   if (pageUrls.length > 0 && options.summarize) {
     try {
-      const row = connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
+      const row = await connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
       if (row) {
         options.onActionStart?.('fetch')
         connectorService.takeRateLimit(`ai-fetch:${ownerId}`, 20, 60_000)
@@ -128,7 +128,7 @@ export async function buildConnectorContext(
   // 明确检索意图：走用户已启用的 DeepSeek 搜索
   if (shouldSearchWeb(text)) {
     try {
-      const row = connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
+      const row = await connectorService.enabledConnectorOfType(db, ownerId, 'deepseek_search')
       if (row) {
         options.onActionStart?.('web_search')
         connectorService.takeRateLimit(`ai-search:${ownerId}`, 20, 60_000)

@@ -1,5 +1,5 @@
 import { ulid } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, one, run, type DB } from '../index'
 import { now } from '../../util/clock'
 
 export interface StickerPackRow {
@@ -34,43 +34,47 @@ export interface StickerListRow extends StickerRow {
 
 export const DEFAULT_PACK_NAME = '我的表情'
 
-export function listPacks(db: DB, userId: string): StickerPackRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM sticker_packs
+export function listPacks(db: DB, userId: string): Promise<StickerPackRow[]> {
+  return all<StickerPackRow>(
+    db,
+    `SELECT * FROM sticker_packs
        WHERE owner_id = ? OR owner_id IS NULL
        ORDER BY position ASC, created_at ASC`,
-    )
-    .all(userId) as StickerPackRow[]
+    [userId],
+  )
 }
 
-export function findPack(db: DB, id: string): StickerPackRow | undefined {
-  return db.prepare('SELECT * FROM sticker_packs WHERE id = ?').get(id) as StickerPackRow | undefined
+export function findPack(db: DB, id: string): Promise<StickerPackRow | undefined> {
+  return one<StickerPackRow>(db, 'SELECT * FROM sticker_packs WHERE id = ?', [id])
 }
 
-export function createPack(
+export async function createPack(
   db: DB,
   input: { ownerId: string; name: string; kind?: string; position?: number },
-): StickerPackRow {
+): Promise<StickerPackRow> {
   const id = ulid()
   const ts = now()
-  db.prepare(
+  const row = await one<StickerPackRow>(
+    db,
     `INSERT INTO sticker_packs (id, owner_id, name, kind, position, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.ownerId, input.name, input.kind ?? 'image', input.position ?? 0, ts, ts)
-  return findPack(db, id) as StickerPackRow
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     RETURNING *`,
+    [id, input.ownerId, input.name, input.kind ?? 'image', input.position ?? 0, ts, ts],
+  )
+  if (!row) throw new Error('创建表情分组后回读失败')
+  return row
 }
 
-export function renamePack(db: DB, id: string, name: string): void {
-  db.prepare('UPDATE sticker_packs SET name = ?, updated_at = ? WHERE id = ?').run(name, now(), id)
+export async function renamePack(db: DB, id: string, name: string): Promise<void> {
+  await run(db, 'UPDATE sticker_packs SET name = ?, updated_at = ? WHERE id = ?', [name, now(), id])
 }
 
 /** 分组改名与 AI 授权开关共用一个更新入口；传 undefined 的字段不动 */
-export function updatePack(
+export async function updatePack(
   db: DB,
   id: string,
   patch: { name?: string; allowAi?: boolean },
-): void {
+): Promise<void> {
   const sets: string[] = []
   const args: Array<string | number> = []
   if (patch.name !== undefined) {
@@ -84,65 +88,69 @@ export function updatePack(
   if (sets.length === 0) return
   sets.push('updated_at = ?')
   args.push(now(), id)
-  db.prepare(`UPDATE sticker_packs SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+  await run(db, `UPDATE sticker_packs SET ${sets.join(', ')} WHERE id = ?`, args)
 }
 
-export function deletePack(db: DB, id: string): void {
-  db.prepare('DELETE FROM sticker_packs WHERE id = ?').run(id)
+export async function deletePack(db: DB, id: string): Promise<void> {
+  await run(db, 'DELETE FROM sticker_packs WHERE id = ?', [id])
 }
 
 /** 表情连同附件信息一次查出，避免逐条回查 */
-export function listStickers(db: DB, packIds: string[]): StickerListRow[] {
+export async function listStickers(db: DB, packIds: string[]): Promise<StickerListRow[]> {
   if (packIds.length === 0) return []
   const placeholders = packIds.map(() => '?').join(',')
-  return db
-    .prepare(
-      `SELECT s.*, a.storage_key, a.mime, a.filename, a.size
-       FROM stickers s
-       LEFT JOIN attachments a ON a.id = s.attachment_id AND a.deleted_at IS NULL
-       WHERE s.pack_id IN (${placeholders})
-       ORDER BY s.position ASC, s.created_at ASC`,
-    )
-    .all(...packIds) as StickerListRow[]
+  return all<StickerListRow>(
+    db,
+    `SELECT s.*, a.storage_key, a.mime, a.filename, a.size
+     FROM stickers s
+     LEFT JOIN attachments a ON a.id = s.attachment_id AND a.deleted_at IS NULL
+     WHERE s.pack_id IN (${placeholders})
+     ORDER BY s.position ASC, s.created_at ASC`,
+    packIds,
+  )
 }
 
-export function findSticker(db: DB, id: string): StickerRow | undefined {
-  return db.prepare('SELECT * FROM stickers WHERE id = ?').get(id) as StickerRow | undefined
+export function findSticker(db: DB, id: string): Promise<StickerRow | undefined> {
+  return one<StickerRow>(db, 'SELECT * FROM stickers WHERE id = ?', [id])
 }
 
-export function createSticker(
+export async function createSticker(
   db: DB,
   input: { packId: string; kind: string; attachmentId: string; keywords: string[]; position: number },
-): StickerRow {
+): Promise<StickerRow> {
   const id = ulid()
   const ts = now()
-  db.prepare(
+  const row = await one<StickerRow>(
+    db,
     `INSERT INTO stickers (id, pack_id, kind, value, attachment_id, keywords, position, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.packId,
-    input.kind,
-    input.attachmentId,
-    input.keywords.length > 0 ? JSON.stringify(input.keywords) : null,
-    input.position,
-    ts,
-    ts,
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
+     RETURNING *`,
+    [
+      id,
+      input.packId,
+      input.kind,
+      input.attachmentId,
+      input.keywords.length > 0 ? JSON.stringify(input.keywords) : null,
+      input.position,
+      ts,
+      ts,
+    ],
   )
-  return findSticker(db, id) as StickerRow
+  if (!row) throw new Error('创建表情后回读失败')
+  return row
 }
 
-export function deleteSticker(db: DB, id: string): void {
-  db.prepare('DELETE FROM stickers WHERE id = ?').run(id)
+export async function deleteSticker(db: DB, id: string): Promise<void> {
+  await run(db, 'DELETE FROM stickers WHERE id = ?', [id])
 }
 
 /** 覆写一个表情的关键词（AI 情绪分析结果写回用） */
-export function updateStickerKeywords(db: DB, id: string, keywords: string[]): void {
-  db.prepare('UPDATE stickers SET keywords = ?, updated_at = ? WHERE id = ?').run(
+export async function updateStickerKeywords(db: DB, id: string, keywords: string[]): Promise<void> {
+  await run(db, 'UPDATE stickers SET keywords = ?, updated_at = ? WHERE id = ?', [
     keywords.length > 0 ? JSON.stringify(keywords) : null,
     now(),
     id,
-  )
+  ])
 }
 
 /**
@@ -150,26 +158,22 @@ export function updateStickerKeywords(db: DB, id: string, keywords: string[]): v
  * 提示词清单与落库时校验标记合法性都从这里取数据。
  * @param packFilter 角色级白名单：非空时只返回这些分组里的表情；null / 空 = 全部授权分组
  */
-export function listAiStickers(
+export async function listAiStickers(
   db: DB,
   ownerId: string,
   packFilter?: ReadonlyArray<string> | null,
-): Array<{ id: string; packId: string; keywords: string[] }> {
+): Promise<Array<{ id: string; packId: string; keywords: string[] }>> {
   const filter = packFilter && packFilter.length > 0 ? [...new Set(packFilter)] : null
   const placeholders = filter ? filter.map(() => '?').join(',') : ''
-  const rows = db
-    .prepare(
-      `SELECT s.id, s.pack_id, s.keywords FROM stickers s
-       JOIN sticker_packs p ON p.id = s.pack_id
-       WHERE p.allow_ai = 1 AND p.owner_id = ?
-         AND s.kind IN ('image', 'gif') AND s.keywords IS NOT NULL
-         ${filter ? `AND s.pack_id IN (${placeholders})` : ''}`,
-    )
-    .all(...(filter ? [ownerId, ...filter] : [ownerId])) as Array<{
-    id: string
-    pack_id: string
-    keywords: string | null
-  }>
+  const rows = await all<{ id: string; pack_id: string; keywords: string | null }>(
+    db,
+    `SELECT s.id, s.pack_id, s.keywords FROM stickers s
+     JOIN sticker_packs p ON p.id = s.pack_id
+     WHERE p.allow_ai = 1 AND p.owner_id = ?
+       AND s.kind IN ('image', 'gif') AND s.keywords IS NOT NULL
+       ${filter ? `AND s.pack_id IN (${placeholders})` : ''}`,
+    filter ? [ownerId, ...filter] : [ownerId],
+  )
 
   const out: Array<{ id: string; packId: string; keywords: string[] }> = []
   for (const row of rows) {
@@ -188,19 +192,19 @@ export function listAiStickers(
 }
 
 /** 某个用户名下还没有任何情绪标签的图片表情，供一键补扫遍历 */
-export function listStickersMissingTags(db: DB, ownerId: string): Array<{ id: string; attachment_id: string }> {
-  return db
-    .prepare(
-      `SELECT s.id, s.attachment_id FROM stickers s
-       JOIN sticker_packs p ON p.id = s.pack_id
-       WHERE p.owner_id = ? AND p.kind = 'image'
-         AND s.kind IN ('image', 'gif') AND s.attachment_id IS NOT NULL
-         AND (s.keywords IS NULL OR s.keywords = '[]' OR s.keywords = '')`,
-    )
-    .all(ownerId) as Array<{ id: string; attachment_id: string }>
+export function listStickersMissingTags(db: DB, ownerId: string): Promise<Array<{ id: string; attachment_id: string }>> {
+  return all<{ id: string; attachment_id: string }>(
+    db,
+    `SELECT s.id, s.attachment_id FROM stickers s
+     JOIN sticker_packs p ON p.id = s.pack_id
+     WHERE p.owner_id = ? AND p.kind = 'image'
+       AND s.kind IN ('image', 'gif') AND s.attachment_id IS NOT NULL
+       AND (s.keywords IS NULL OR s.keywords = '[]' OR s.keywords = '')`,
+    [ownerId],
+  )
 }
 
-export function countInPack(db: DB, packId: string): number {
-  const row = db.prepare('SELECT COUNT(*) AS n FROM stickers WHERE pack_id = ?').get(packId) as { n: number }
-  return row.n
+export async function countInPack(db: DB, packId: string): Promise<number> {
+  const row = await one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM stickers WHERE pack_id = ?', [packId])
+  return row?.n ?? 0
 }

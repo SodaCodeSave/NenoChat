@@ -1,7 +1,6 @@
 import type { Message, MessageMeta, MessageType, SenderType } from '@nenochat/shared'
 import { ulid } from '@nenochat/shared'
-import type { DB } from '../index'
-import { stmt } from '../index'
+import { all, one, run, type Executor } from '../index'
 
 export interface MessageRow {
   id: string
@@ -57,8 +56,8 @@ export function mapMessage(row: MessageRow): Message {
   }
 }
 
-export function findById(db: DB, id: string): MessageRow | undefined {
-  return stmt(db, 'SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined
+export function findById(db: Executor, id: string): Promise<MessageRow | undefined> {
+  return one<MessageRow>(db, 'SELECT * FROM messages WHERE id = ?', [id])
 }
 
 /** 引用回复时展示的摘要：非文本消息收敛成占位词，撤回后统一提示 */
@@ -77,23 +76,24 @@ export function previewOf(row: MessageRow, max = 80): string {
 }
 
 /** 幂等发送：同一发送者的同一 nonce 只落一条 */
-export function findByNonce(db: DB, senderId: string, clientNonce: string): MessageRow | undefined {
-  return stmt(db, 'SELECT * FROM messages WHERE sender_id = ? AND client_nonce = ?').get(
+export function findByNonce(db: Executor, senderId: string, clientNonce: string): Promise<MessageRow | undefined> {
+  return one<MessageRow>(db, 'SELECT * FROM messages WHERE sender_id = ? AND client_nonce = ?', [
     senderId,
     clientNonce,
-  ) as MessageRow | undefined
+  ])
 }
 
 /** 会话维度查 nonce：AI 消息（sender_id 为 NULL）与系统消息用它做幂等 */
 export function findByNonceInConversation(
-  db: DB,
+  db: Executor,
   conversationId: string,
   clientNonce: string,
-): MessageRow | undefined {
-  return stmt(db, 'SELECT * FROM messages WHERE conversation_id = ? AND client_nonce = ? LIMIT 1').get(
-    conversationId,
-    clientNonce,
-  ) as MessageRow | undefined
+): Promise<MessageRow | undefined> {
+  return one<MessageRow>(
+    db,
+    'SELECT * FROM messages WHERE conversation_id = ? AND client_nonce = ? LIMIT 1',
+    [conversationId, clientNonce],
+  )
 }
 
 export interface InsertMessageInput {
@@ -112,65 +112,48 @@ export interface InsertMessageInput {
   updatedByDevice?: string | null
 }
 
-export function insert(db: DB, input: InsertMessageInput): MessageRow {
+export async function insert(db: Executor, input: InsertMessageInput): Promise<MessageRow> {
   const id = ulid()
   // RETURNING 一次拿到落库后的完整行，省去额外的回读查询
-  const row = stmt(db, `INSERT INTO messages
+  const row = await one<MessageRow>(
+    db,
+    `INSERT INTO messages
        (id, conversation_id, sender_id, sender_type, type, content, meta, reply_to_id,
         seq, client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at, deleted_by,
         created_at, updated_at, updated_by_device)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
-     RETURNING *`).get(
-    id,
-    input.conversationId,
-    input.senderId ?? null,
-    input.senderType ?? 'user',
-    input.type,
-    input.content,
-    input.meta ? JSON.stringify(input.meta) : null,
-    input.replyToId ?? null,
-    input.seq,
-    input.clientNonce ?? null,
-    input.aiGenerationId ?? null,
-    input.aiIndex ?? null,
-    input.createdAt,
-    input.createdAt,
-    input.updatedByDevice ?? null,
-  ) as MessageRow | undefined
+     RETURNING *`,
+    [
+      id,
+      input.conversationId,
+      input.senderId ?? null,
+      input.senderType ?? 'user',
+      input.type,
+      input.content,
+      input.meta ? JSON.stringify(input.meta) : null,
+      input.replyToId ?? null,
+      input.seq,
+      input.clientNonce ?? null,
+      input.aiGenerationId ?? null,
+      input.aiIndex ?? null,
+      input.createdAt,
+      input.createdAt,
+      input.updatedByDevice ?? null,
+    ],
+  )
   if (!row) throw new Error('插入消息后回读失败')
-  indexFts(db, row)
   return row
 }
 
 /** 提及写穿：@ 到谁就写一行，会话列表的 mention_count 从 message_mentions 计数 */
-export function insertMentions(db: DB, row: MessageRow, mentionUserIds: string[]): void {
-  const insert = stmt(
-    db,
-    'INSERT OR IGNORE INTO message_mentions (conversation_id, message_id, user_id, seq) VALUES (?, ?, ?, ?)',
-  )
+export async function insertMentions(db: Executor, row: MessageRow, mentionUserIds: string[]): Promise<void> {
   for (const userId of mentionUserIds) {
-    insert.run(row.conversation_id, row.id, userId, row.seq)
+    await run(
+      db,
+      'INSERT INTO message_mentions (conversation_id, message_id, user_id, seq) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
+      [row.conversation_id, row.id, userId, row.seq],
+    )
   }
-}
-
-/* --------------------------- 全文索引维护 --------------------------- */
-
-/**
- * FTS5 没有唯一约束，更新前先删后插。
- * 索引与消息行必须同事务写入，否则搜索会与消息状态不一致。
- */
-export function indexFts(db: DB, row: MessageRow): void {
-  removeFts(db, row.id)
-  if (row.deleted_at || row.content.trim().length === 0) return
-  stmt(db, 'INSERT INTO message_fts (message_id, conversation_id, content) VALUES (?, ?, ?)').run(
-    row.id,
-    row.conversation_id,
-    row.content,
-  )
-}
-
-export function removeFts(db: DB, messageId: string): void {
-  stmt(db, 'DELETE FROM message_fts WHERE message_id = ?').run(messageId)
 }
 
 export interface PageQuery {
@@ -181,7 +164,7 @@ export interface PageQuery {
 }
 
 /** 双向分页：before 向前翻历史，after 用于补洞 */
-export function page(db: DB, query: PageQuery): MessageRow[] {
+export async function page(db: Executor, query: PageQuery): Promise<MessageRow[]> {
   const params: unknown[] = [query.conversationId]
   let where = 'conversation_id = ?'
 
@@ -197,60 +180,61 @@ export function page(db: DB, query: PageQuery): MessageRow[] {
   const order = query.after != null && query.before == null ? 'ASC' : 'DESC'
   params.push(query.limit)
 
-  return stmt(db, `SELECT * FROM messages WHERE ${where} ORDER BY seq ${order} LIMIT ?`).all(
-    ...params,
-  ) as MessageRow[]
+  return all<MessageRow>(db, `SELECT * FROM messages WHERE ${where} ORDER BY seq ${order} LIMIT ?`, params)
 }
 
-export function updateContent(
-  db: DB,
+export async function updateContent(
+  db: Executor,
   id: string,
   content: string,
   editedAt: number,
   deviceId?: string | null,
-): MessageRow {
-  const row = stmt(
+): Promise<MessageRow> {
+  const row = await one<MessageRow>(
     db,
     'UPDATE messages SET content = ?, edited_at = ?, updated_at = ?, updated_by_device = ? WHERE id = ? RETURNING *',
-  ).get(content, editedAt, editedAt, deviceId ?? null, id) as MessageRow | undefined
+    [content, editedAt, editedAt, deviceId ?? null, id],
+  )
   if (!row) throw new Error('更新消息后回读失败')
-  indexFts(db, row)
   return row
 }
 
 /** 撤回是写墓碑，不是物理删除，客户端才能同步到「已撤回」状态 */
-export function softDelete(db: DB, id: string, deletedBy: string, at: number): MessageRow {
-  const row = stmt(
+export async function softDelete(db: Executor, id: string, deletedBy: string, at: number): Promise<MessageRow> {
+  const row = await one<MessageRow>(
     db,
     'UPDATE messages SET deleted_at = ?, deleted_by = ?, content = ?, updated_at = ? WHERE id = ? RETURNING *',
-  ).get(at, deletedBy, '', at, id) as MessageRow | undefined
+    [at, deletedBy, '', at, id],
+  )
   if (!row) throw new Error('撤回消息后回读失败')
-  removeFts(db, id)
   return row
 }
 
-export function setPinned(db: DB, id: string, pinnedAt: number | null): MessageRow {
-  const row = stmt(
+export async function setPinned(db: Executor, id: string, pinnedAt: number | null): Promise<MessageRow> {
+  const row = await one<MessageRow>(
     db,
     'UPDATE messages SET pinned_at = ?, updated_at = ? WHERE id = ? RETURNING *',
-  ).get(pinnedAt, Date.now(), id) as MessageRow | undefined
+    [pinnedAt, Date.now(), id],
+  )
   if (!row) throw new Error('置顶消息后回读失败')
   return row
 }
 
-export function listPinned(db: DB, conversationId: string): MessageRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM messages
+export function listPinned(db: Executor, conversationId: string): Promise<MessageRow[]> {
+  return all<MessageRow>(
+    db,
+    `SELECT * FROM messages
        WHERE conversation_id = ? AND pinned_at IS NOT NULL AND deleted_at IS NULL
        ORDER BY pinned_at DESC`,
-    )
-    .all(conversationId) as MessageRow[]
+    [conversationId],
+  )
 }
 
-export function lastSeq(db: DB, conversationId: string): number {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?')
-    .get(conversationId) as { s: number }
-  return row.s
+export async function lastSeq(db: Executor, conversationId: string): Promise<number> {
+  const row = await one<{ s: number }>(
+    db,
+    'SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?',
+    [conversationId],
+  )
+  return row?.s ?? 0
 }

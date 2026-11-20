@@ -33,13 +33,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) },
     async (request) => {
       const input = parse(RegisterSchema, request.body)
-      return authService.register(db, app.jwt, input)
+      return await authService.register(db, app.jwt, input)
     },
   )
 
   app.post('/auth/login', { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) }, async (request) => {
     const input = parse(LoginSchema, request.body)
-    return authService.login(db, app.jwt, input)
+    return await authService.login(db, app.jwt, input)
   })
 
   /**
@@ -53,7 +53,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       throw err.unauthenticated('本机凭证无效')
     }
     const input = parse(LocalLoginSchema, request.body)
-    return authService.ensureLocalSession(db, app.jwt, input.device)
+    return await authService.ensureLocalSession(db, app.jwt, input.device)
   })
 
   /**
@@ -62,53 +62,54 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post('/auth/pair/code', async (request) => {
     await requireUserId(request)
     if (!pairingEnabled) throw err.forbidden('未开启局域网接入')
-    return pairingService.issueCode()
+    return await pairingService.issueCode()
   })
 
   /** 手机扫码后凭配对码换会话；码一次性，过期即失效 */
   app.post('/auth/pair', { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) }, async (request) => {
     if (!pairingEnabled) throw err.forbidden('未开启局域网接入')
     const input = parse(LocalPairSchema, request.body)
-    if (!pairingService.consumeCode(input.code)) {
+    if (!(await pairingService.consumeCode(input.code))) {
       throw err.unauthenticated('配对码无效或已过期，请在电脑上刷新后重试')
     }
-    return authService.ensureLocalSession(db, app.jwt, input.device)
+    return await authService.ensureLocalSession(db, app.jwt, input.device)
   })
 
   app.post('/auth/refresh', { preHandler: rateLimit({ max: 30, windowMs: 60_000 }) }, async (request) => {
     const input = parse(RefreshSchema, request.body)
-    return authService.refresh(db, app.jwt, input.refreshToken, input.device.id)
+    return await authService.refresh(db, app.jwt, input.refreshToken, input.device.id)
   })
 
   app.post('/auth/logout', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(LogoutSchema, request.body ?? {})
-    authService.logout(db, userId, input.refreshToken, input.allDevices)
+    await authService.logout(db, userId, input.refreshToken, input.allDevices)
     return { ok: true }
   })
 
   /** 当前登录态自检：返回用户资料与两端设置，客户端启动时一次性拉齐 */
   app.get('/auth/me', async (request) => {
     const userId = await requireUserId(request)
-    const row = usersRepo.findById(db, userId)
+    const row = await usersRepo.findById(db, userId)
     if (!row) return { user: null, settings: null, notificationSettings: null }
 
     return {
       user: usersRepo.mapUser(row),
-      settings: mapUserSettings(ensureUserSettings(db, userId)),
-      notificationSettings: mapNotificationSettings(ensureNotificationSettings(db, userId)),
+      settings: mapUserSettings(await ensureUserSettings(db, userId)),
+      notificationSettings: mapNotificationSettings(await ensureNotificationSettings(db, userId)),
     }
   })
 
   /** 当前账号的登录设备列表，用于「远程登出」 */
   app.get('/auth/devices', async (request) => {
     const userId = await requireUserId(request)
-    return { devices: devicesRepo.list(db, userId).map(devicesRepo.mapDevice) }
+    const devices = await devicesRepo.list(db, userId)
+    return { devices: devices.map(devicesRepo.mapDevice) }
   })
 
   app.delete<{ Params: { deviceId: string } }>('/auth/devices/:deviceId', async (request) => {
     const userId = await requireUserId(request)
-    authService.revokeDevice(db, userId, request.params.deviceId)
+    await authService.revokeDevice(db, userId, request.params.deviceId)
     return { ok: true }
   })
 }

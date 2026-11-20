@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS ai_group_state (
   persona_id      TEXT NOT NULL,
   energy          REAL NOT NULL DEFAULT 70,
   mood            TEXT NOT NULL DEFAULT '平静',
-  last_reply_at   INTEGER,
-  last_autonomy_at INTEGER,
-  updated_at      INTEGER NOT NULL,
+  last_reply_at   BIGINT,
+  last_autonomy_at BIGINT,
+  updated_at      BIGINT NOT NULL,
   PRIMARY KEY (conversation_id, persona_id)
 );
 
@@ -22,12 +22,12 @@ CREATE TABLE IF NOT EXISTS ai_group_log (
   -- reply（插话）| autonomy（主动开口）
   kind            TEXT NOT NULL,
   day_key         TEXT NOT NULL,
-  slot            INTEGER NOT NULL DEFAULT 0,
+  slot            BIGINT NOT NULL DEFAULT 0,
   -- pending | dispatched | sent | skipped | failed
   status          TEXT NOT NULL,
   message_id      TEXT,
   reason          TEXT,
-  created_at      INTEGER NOT NULL
+  created_at      BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_aiglog_quota
@@ -39,21 +39,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_aiglog_autonomy
 
 -- 0011 之后、代码开始绑定影子账号之前创建的角色：补一个用户身份，
 -- 否则这些角色没法进群、也没法出现在通讯录里
-INSERT OR IGNORE INTO users
+INSERT INTO users
   (id, username, display_name, password_hash, avatar_url, bio, status, is_admin,
    last_seen_at, created_at, updated_at, updated_by_device, is_bot)
 SELECT 'bot-' || p.id, 'ai_bot-' || p.id, p.name, '!', p.avatar_url, NULL, 'active', 0,
        NULL, p.created_at, p.updated_at, NULL, 1
 FROM ai_personas p
-WHERE p.deleted_at IS NULL AND p.user_id IS NULL;
+WHERE p.deleted_at IS NULL AND p.user_id IS NULL
+ON CONFLICT DO NOTHING;
 
 UPDATE ai_personas
 SET user_id = 'bot-' || id
 WHERE deleted_at IS NULL AND user_id IS NULL;
 
 -- 角色与主人互为好友：通讯录统一列表里 AI 和真人没有区别
-INSERT OR IGNORE INTO contacts
+INSERT INTO contacts
   (owner_id, contact_user_id, alias, relation, request_message, created_at, updated_at)
 SELECT p.owner_id, p.user_id, NULL, 'friend', NULL, p.created_at, p.updated_at
 FROM ai_personas p
-WHERE p.deleted_at IS NULL AND p.user_id IS NOT NULL;
+WHERE p.deleted_at IS NULL AND p.user_id IS NOT NULL
+ON CONFLICT DO NOTHING;

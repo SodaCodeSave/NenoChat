@@ -57,7 +57,7 @@ PUBLIC_BASE_URL=http://你的服务器地址:8787
 docker compose up -d
 ```
 
-数据（SQLite 数据库与上传文件）持久化在 `nenochat-data` 数据卷中；NAS 等 bind mount 场景改用 `./data` 目录挂载即可。
+数据库（PostgreSQL）持久化在 `nenochat-pg` 数据卷，上传文件在 `nenochat-data` 数据卷；NAS 等 bind mount 场景改用 `./data` 目录挂载即可。
 
 ### 3. 安装客户端并连接
 
@@ -77,7 +77,8 @@ docker compose up -d
 | `PORT` | `8787` | 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PUBLIC_BASE_URL` | `http://localhost:8787` | 对外基础地址，用于拼装附件 URL |
-| `DATA_DIR` | `./data` | SQLite 数据库与上传文件目录 |
+| `DATABASE_URL` | `postgres://nenochat:nenochat@localhost:5432/nenochat` | PostgreSQL 连接串 |
+| `DATA_DIR` | `./data` | 上传文件目录 |
 | `JWT_SECRET` | （仅开发默认值） | JWT 签名密钥，生产环境必须 ≥ 32 字符 |
 | `SECRET_KEY` | （仅开发默认值） | 托管 AI 密钥的 AES 加密密钥，生产环境必须 ≥ 32 字符 |
 | `REGISTRATION_MODE` | `open` | 注册模式：`open` / `invite` / `closed` |

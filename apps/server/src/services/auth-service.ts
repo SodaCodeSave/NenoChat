@@ -9,6 +9,7 @@ import {
   type User,
 } from '@nenochat/shared'
 import type { DB } from '../db'
+import { one, run } from '../db'
 import { withTx } from '../db/tx'
 import * as usersRepo from '../db/repo/users'
 import * as devicesRepo from '../db/repo/devices'
@@ -41,20 +42,20 @@ export interface AuthSession {
 
 const ACCESS_TTL_SECONDS = Math.floor(ACCESS_TOKEN_TTL_MS / 1000)
 
-function issueTokens(
+async function issueTokens(
   db: DB,
   signer: JwtSigner,
   user: User,
   deviceId: string,
   familyId: string = ulid(),
-): { tokens: AuthTokens; tokenId: string } {
+): Promise<{ tokens: AuthTokens; tokenId: string }> {
   const accessToken = signer.sign(
     { sub: user.id, did: deviceId, typ: 'access' } satisfies AccessTokenPayload,
     { expiresIn: ACCESS_TTL_SECONDS },
   )
 
   const refreshToken = randomToken(32)
-  const tokenId = tokensRepo.insert(db, {
+  const tokenId = await tokensRepo.insert(db, {
     userId: user.id,
     deviceId,
     tokenHash: sha256(refreshToken),
@@ -66,60 +67,60 @@ function issueTokens(
   return { tokens: { accessToken, refreshToken, expiresIn: ACCESS_TTL_SECONDS }, tokenId }
 }
 
-function assertRegistrationAllowed(db: DB, inviteCode?: string): void {
+async function assertRegistrationAllowed(db: DB, inviteCode?: string): Promise<void> {
   const mode = env.REGISTRATION_MODE
   if (mode === 'closed') throw err.forbidden('本服务器已关闭注册')
 
   if (mode === 'invite') {
     if (!inviteCode) throw err.validation('本服务器需要邀请码')
-    const invite = db
-      .prepare('SELECT code, max_uses, uses, expires_at FROM invites WHERE code = ?')
-      .get(inviteCode) as
-      | { code: string; max_uses: number; uses: number; expires_at: number | null }
-      | undefined
+    const invite = await one<{ code: string; max_uses: number; uses: number; expires_at: number | null }>(
+      db,
+      'SELECT code, max_uses, uses, expires_at FROM invites WHERE code = ?',
+      [inviteCode],
+    )
     if (!invite) throw err.validation('邀请码无效')
     if (invite.expires_at !== null && invite.expires_at < now()) throw err.validation('邀请码已过期')
     if (invite.uses >= invite.max_uses) throw err.validation('邀请码已用尽')
-    db.prepare('UPDATE invites SET uses = uses + 1 WHERE code = ?').run(inviteCode)
+    await run(db, 'UPDATE invites SET uses = uses + 1 WHERE code = ?', [inviteCode])
   }
 }
 
 /** 首个注册的用户自动成为管理员，方便自建服务器开箱即可运维 */
-function isFirstUser(db: DB): boolean {
-  const row = db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }
-  return row.c === 0
+async function isFirstUser(db: DB): Promise<boolean> {
+  const row = await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM users')
+  return (row?.c ?? 0) === 0
 }
 
 export async function register(db: DB, signer: JwtSigner, input: RegisterInput): Promise<AuthSession> {
   const passwordHash = await hashPassword(input.password)
 
-  return withTx(db, () => {
-    assertRegistrationAllowed(db, input.inviteCode)
+  return withTx(db, async (tx) => {
+    await assertRegistrationAllowed(tx, input.inviteCode)
 
-    if (usersRepo.usernameExists(db, input.username)) {
+    if (await usersRepo.usernameExists(tx, input.username)) {
       throw err.conflict('用户名已被占用')
     }
 
-    const row = usersRepo.create(db, {
+    const row = await usersRepo.create(tx, {
       username: input.username,
       displayName: input.displayName,
       passwordHash,
-      isAdmin: isFirstUser(db),
+      isAdmin: await isFirstUser(tx),
       deviceId: input.device.id,
     })
 
-    devicesRepo.upsert(db, row.id, input.device)
-    ensureUserSettings(db, row.id)
-    ensureNotificationSettings(db, row.id)
+    await devicesRepo.upsert(tx, row.id, input.device)
+    await ensureUserSettings(tx, row.id)
+    await ensureNotificationSettings(tx, row.id)
 
     const user = usersRepo.mapUser(row)
-    const { tokens } = issueTokens(db, signer, user, input.device.id)
+    const { tokens } = await issueTokens(tx, signer, user, input.device.id)
     return { user, tokens }
   })
 }
 
 export async function login(db: DB, signer: JwtSigner, input: LoginInput): Promise<AuthSession> {
-  const row = usersRepo.findByUsername(db, input.username)
+  const row = await usersRepo.findByUsername(db, input.username)
   // 用户不存在与密码错误返回同一提示，避免用户名枚举
   if (!row) throw err.unauthenticated('用户名或密码不正确')
   // 影子账号（AI 角色）不能登录，密码散列也不是真实凭据
@@ -128,14 +129,14 @@ export async function login(db: DB, signer: JwtSigner, input: LoginInput): Promi
   const ok = await verifyPassword(row.password_hash, input.password)
   if (!ok) throw err.unauthenticated('用户名或密码不正确')
 
-  return withTx(db, () => {
-    devicesRepo.upsert(db, row.id, input.device)
-    ensureUserSettings(db, row.id)
-    ensureNotificationSettings(db, row.id)
-    usersRepo.touchLastSeen(db, row.id)
+  return withTx(db, async (tx) => {
+    await devicesRepo.upsert(tx, row.id, input.device)
+    await ensureUserSettings(tx, row.id)
+    await ensureNotificationSettings(tx, row.id)
+    await usersRepo.touchLastSeen(tx, row.id)
 
     const user = usersRepo.mapUser(row)
-    const { tokens } = issueTokens(db, signer, user, input.device.id)
+    const { tokens } = await issueTokens(tx, signer, user, input.device.id)
     return { user, tokens }
   })
 }
@@ -149,15 +150,15 @@ export async function ensureLocalSession(
   signer: JwtSigner,
   device: DeviceInfo,
 ): Promise<AuthSession> {
-  const existing = usersRepo.findByUsername(db, LOCAL_USERNAME)
+  const existing = await usersRepo.findByUsername(db, LOCAL_USERNAME)
   if (existing) {
     if (existing.status === 'disabled') throw err.forbidden('账号已被禁用')
-    return withTx(db, () => {
-      devicesRepo.upsert(db, existing.id, device)
-      ensureUserSettings(db, existing.id)
-      ensureNotificationSettings(db, existing.id)
-      usersRepo.touchLastSeen(db, existing.id)
-      const { tokens } = issueTokens(db, signer, usersRepo.mapUser(existing), device.id)
+    return withTx(db, async (tx) => {
+      await devicesRepo.upsert(tx, existing.id, device)
+      await ensureUserSettings(tx, existing.id)
+      await ensureNotificationSettings(tx, existing.id)
+      await usersRepo.touchLastSeen(tx, existing.id)
+      const { tokens } = await issueTokens(tx, signer, usersRepo.mapUser(existing), device.id)
       return { user: usersRepo.mapUser(existing), tokens }
     })
   }
@@ -165,66 +166,66 @@ export async function ensureLocalSession(
   // 密码用随机串占位：本机账号只能凭启动令牌进入，密码登录对它无效
   const passwordHash = await hashPassword(randomToken(24))
 
-  return withTx(db, () => {
-    const row = usersRepo.create(db, {
+  return withTx(db, async (tx) => {
+    const row = await usersRepo.create(tx, {
       username: LOCAL_USERNAME,
       displayName: LOCAL_DISPLAY_NAME,
       passwordHash,
       isAdmin: true,
       deviceId: device.id,
     })
-    devicesRepo.upsert(db, row.id, device)
-    ensureUserSettings(db, row.id)
-    ensureNotificationSettings(db, row.id)
+    await devicesRepo.upsert(tx, row.id, device)
+    await ensureUserSettings(tx, row.id)
+    await ensureNotificationSettings(tx, row.id)
 
     const user = usersRepo.mapUser(row)
-    const { tokens } = issueTokens(db, signer, user, device.id)
+    const { tokens } = await issueTokens(tx, signer, user, device.id)
     return { user, tokens }
   })
 }
 
-export function refresh(
+export async function refresh(
   db: DB,
   signer: JwtSigner,
   refreshToken: string,
   deviceId: string,
-): AuthSession {
+): Promise<AuthSession> {
   const hash = sha256(refreshToken)
-  const existing = tokensRepo.findByHash(db, hash)
+  const existing = await tokensRepo.findByHash(db, hash)
   if (!existing) throw err.unauthenticated('登录凭证无效')
   if (existing.revoked_at !== null) {
     // 已轮换过的 token 再次出现，视为泄露：整条链作废
-    tokensRepo.revokeFamily(db, existing.family_id)
+    await tokensRepo.revokeFamily(db, existing.family_id)
     throw err.unauthenticated('登录凭证已失效，请重新登录')
   }
   if (existing.expires_at > 0 && existing.expires_at < now()) throw err.tokenExpired()
 
-  const row = usersRepo.findById(db, existing.user_id)
+  const row = await usersRepo.findById(db, existing.user_id)
   if (!row) throw err.unauthenticated('用户不存在')
   if (row.status === 'disabled') throw err.forbidden('账号已被禁用')
 
-  return withTx(db, () => {
+  return withTx(db, async (tx) => {
     const user = usersRepo.mapUser(row)
-    const { tokens, tokenId } = issueTokens(db, signer, user, deviceId, existing.family_id)
+    const { tokens, tokenId } = await issueTokens(tx, signer, user, deviceId, existing.family_id)
     // 新 token 落库后立刻作废旧 token，保证一条链上同时只有一个有效凭证
-    tokensRepo.revoke(db, existing.id, tokenId)
-    devicesRepo.touch(db, row.id, deviceId)
+    await tokensRepo.revoke(tx, existing.id, tokenId)
+    await devicesRepo.touch(tx, row.id, deviceId)
     return { user, tokens }
   })
 }
 
-export function logout(db: DB, userId: string, refreshToken?: string, allDevices?: boolean): void {
+export async function logout(db: DB, userId: string, refreshToken?: string, allDevices?: boolean): Promise<void> {
   if (allDevices) {
-    tokensRepo.revokeAllForUser(db, userId)
+    await tokensRepo.revokeAllForUser(db, userId)
     return
   }
   if (refreshToken) {
-    const row = tokensRepo.findByHash(db, sha256(refreshToken))
-    if (row && row.user_id === userId) tokensRepo.revoke(db, row.id)
+    const row = await tokensRepo.findByHash(db, sha256(refreshToken))
+    if (row && row.user_id === userId) await tokensRepo.revoke(db, row.id)
   }
 }
 
-export function revokeDevice(db: DB, userId: string, deviceId: string): void {
-  tokensRepo.revokeForDevice(db, userId, deviceId)
-  devicesRepo.remove(db, userId, deviceId)
+export async function revokeDevice(db: DB, userId: string, deviceId: string): Promise<void> {
+  await tokensRepo.revokeForDevice(db, userId, deviceId)
+  await devicesRepo.remove(db, userId, deviceId)
 }

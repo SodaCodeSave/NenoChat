@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-proflow-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -129,7 +131,7 @@ afterAll(async () => {
   await app.close()
   await new Promise<void>((resolve) => upstream.close(() => resolve()))
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -139,9 +141,9 @@ afterAll(async () => {
 
 describe('主动消息端到端', () => {
   it('扫描后生成一条 AI 消息并写入日志', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, all, run } = await import('../src/db')
     const { scanOnce } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     // 造一条「很久以前的用户消息」，满足空闲条件
     await api('POST', '/messages', {
@@ -150,15 +152,19 @@ describe('主动消息端到端', () => {
       type: 'text',
       content: '今天有点累',
     })
-    db.prepare(
-      `UPDATE messages SET created_at = ? WHERE conversation_id = ? AND client_nonce = ?`,
-    ).run(Date.now() - 12 * 3_600_000, conversationId, 'proflow-user-msg')
+    await run(db, `UPDATE messages SET created_at = ? WHERE conversation_id = ? AND client_nonce = ?`, [
+      Date.now() - 12 * 3_600_000,
+      conversationId,
+      'proflow-user-msg',
+    ])
 
     await scanOnce(db, silentLog)
 
-    const log = db
-      .prepare('SELECT status, slot, message_id, reason FROM ai_proactive_log WHERE conversation_id = ?')
-      .all(conversationId) as Array<{ status: string; slot: number; message_id: string | null; reason: string | null }>
+    const log = await all<{ status: string; slot: number; message_id: string | null; reason: string | null }>(
+      db,
+      'SELECT status, slot, message_id, reason FROM ai_proactive_log WHERE conversation_id = ?',
+      [conversationId],
+    )
     expect(log).toHaveLength(1)
     expect(log[0]!.status).toBe('sent')
     expect(log[0]!.message_id).toBeTruthy()
@@ -174,26 +180,28 @@ describe('主动消息端到端', () => {
   })
 
   it('同一轮再扫一次不会重复发（日上限 1）', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one } = await import('../src/db')
     const { scanOnce } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     await scanOnce(db, silentLog)
 
-    const log = db
-      .prepare('SELECT COUNT(*) AS c FROM ai_proactive_log WHERE conversation_id = ?')
-      .get(conversationId) as { c: number }
+    const log = (await one<{ c: number }>(
+      db,
+      'SELECT COUNT(*) AS c FROM ai_proactive_log WHERE conversation_id = ?',
+      [conversationId],
+    ))!
     expect(log.c).toBe(1)
   })
 
   it('切成跟随全局后，是否发消息由全局开关决定', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one, run } = await import('../src/db')
     const { scanOnce } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
     // 清掉上一轮的配额与冷却，保留角色自己的 enabled=true，验证它不再起作用
-    db.prepare('DELETE FROM ai_proactive_log').run()
-    db.prepare('UPDATE ai_personas SET last_proactive_at = NULL WHERE id = ?').run(personaId)
+    await run(db, 'DELETE FROM ai_proactive_log')
+    await run(db, 'UPDATE ai_personas SET last_proactive_at = NULL WHERE id = ?', [personaId])
 
     const patched = await api<{ persona: { proactiveMode: string } }>(
       'PATCH',
@@ -204,9 +212,7 @@ describe('主动消息端到端', () => {
 
     // 全局默认关着：角色自己开着也不该发
     await scanOnce(db, silentLog)
-    expect(
-      (db.prepare('SELECT COUNT(*) AS c FROM ai_proactive_log').get() as { c: number }).c,
-    ).toBe(0)
+    expect(((await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM ai_proactive_log'))!).c).toBe(0)
 
     await api('PATCH', '/ai/settings', {
       proactiveEnabled: true,
@@ -214,8 +220,6 @@ describe('主动消息端到端', () => {
       maxPerDay: 1,
     })
     await scanOnce(db, silentLog)
-    expect(
-      (db.prepare('SELECT COUNT(*) AS c FROM ai_proactive_log').get() as { c: number }).c,
-    ).toBe(1)
+    expect(((await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM ai_proactive_log'))!).c).toBe(1)
   })
 })

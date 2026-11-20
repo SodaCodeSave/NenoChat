@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS ai_persona_schedules (
   items      TEXT NOT NULL,
   -- ai | manual
   source     TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_aips_persona_day

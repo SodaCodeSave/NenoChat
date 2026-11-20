@@ -31,8 +31,7 @@ import {
 } from '@nenochat/shared'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { DB } from '../db'
-import { dataDir } from '../db'
+import { all, dataDir, one, run, type DB } from '../db'
 import { withTx } from '../db/tx'
 import { allowPrivateAiEndpoint } from '../env'
 import { assertPublicUrl } from '../util/ssrf'
@@ -82,8 +81,9 @@ function toPublicProvider(row: aiRepo.ProviderRow): AiProvider {
   return aiRepo.mapProvider(row, masked)
 }
 
-export function listProviders(db: DB, ownerId: string): AiProvider[] {
-  return aiRepo.listProviders(db, ownerId).map(toPublicProvider)
+export async function listProviders(db: DB, ownerId: string): Promise<AiProvider[]> {
+  const rows = await aiRepo.listProviders(db, ownerId)
+  return rows.map(toPublicProvider)
 }
 
 export interface ProviderPayload {
@@ -105,11 +105,11 @@ export function isModelEnabled(provider: aiRepo.ProviderRow, model: string): boo
   return !entry || entry.enabled
 }
 
-export function createProvider(db: DB, ownerId: string, input: ProviderPayload): AiProvider {
+export async function createProvider(db: DB, ownerId: string, input: ProviderPayload): Promise<AiProvider> {
   const apiKeyEnc = input.apiKey ? encryptSecret(input.apiKey) : null
 
-  const row = withTx(db, () =>
-    aiRepo.createProvider(db, {
+  const row = await withTx(db, async (tx) =>
+    aiRepo.createProvider(tx, {
       ownerId,
       name: input.name,
       baseUrl: input.baseUrl,
@@ -126,8 +126,8 @@ export function createProvider(db: DB, ownerId: string, input: ProviderPayload):
   return toPublicProvider(row)
 }
 
-export function updateProvider(db: DB, ownerId: string, id: string, input: Partial<ProviderPayload>): AiProvider {
-  const current = aiRepo.findProvider(db, id)
+export async function updateProvider(db: DB, ownerId: string, id: string, input: Partial<ProviderPayload>): Promise<AiProvider> {
+  const current = await aiRepo.findProvider(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
   const apiKeyEnc =
@@ -137,8 +137,8 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
         ? encryptSecret(input.apiKey)
         : null
 
-  const row = withTx(db, () =>
-    aiRepo.updateProvider(db, id, {
+  const row = await withTx(db, async (tx) =>
+    aiRepo.updateProvider(tx, id, {
       name: input.name,
       baseUrl: input.baseUrl,
       model: input.model,
@@ -154,10 +154,10 @@ export function updateProvider(db: DB, ownerId: string, id: string, input: Parti
   return toPublicProvider(row)
 }
 
-export function deleteProvider(db: DB, ownerId: string, id: string): void {
-  const current = aiRepo.findProvider(db, id)
+export async function deleteProvider(db: DB, ownerId: string, id: string): Promise<void> {
+  const current = await aiRepo.findProvider(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('服务商不存在')
-  aiRepo.softDeleteProvider(db, id)
+  await aiRepo.softDeleteProvider(db, id)
 }
 
 /** 取服务端托管密钥的明文；没配密钥时返回空串，兼容不需要密钥的本地端点 */
@@ -172,8 +172,9 @@ function toPublicPersona(row: aiRepo.PersonaRow): AiPersona {
   return aiRepo.mapPersona(row)
 }
 
-export function listPersonas(db: DB, ownerId: string): AiPersona[] {
-  return aiRepo.listPersonas(db, ownerId).map(toPublicPersona)
+export async function listPersonas(db: DB, ownerId: string): Promise<AiPersona[]> {
+  const rows = await aiRepo.listPersonas(db, ownerId)
+  return rows.map(toPublicPersona)
 }
 
 export interface PersonaPayload {
@@ -208,17 +209,17 @@ export interface PersonaPayload {
  * - 没有 providerId 时只建会话不建 ai_sessions，等拿到服务商再补
  *   （保留「没配服务商也能先建角色」的既有能力）
  */
-export function ensureAiConversation(
+export async function ensureAiConversation(
   db: DB,
   input: { userId: string; persona: aiRepo.PersonaRow; providerId?: string | null; title?: string | null },
-): { conversationId: string; created: boolean; conversation: Conversation } {
-  const existing = db
-    .prepare(
-      `SELECT * FROM conversations
+): Promise<{ conversationId: string; created: boolean; conversation: Conversation }> {
+  const existing = await one<conversationsRepo.ConversationRow>(
+    db,
+    `SELECT * FROM conversations
        WHERE type = 'ai' AND ai_owner_user_id = ? AND ai_persona_id = ? AND deleted_at IS NULL
        ORDER BY created_at LIMIT 1`,
-    )
-    .get(input.userId, input.persona.id) as conversationsRepo.ConversationRow | undefined
+    [input.userId, input.persona.id],
+  )
 
   if (existing) {
     return {
@@ -228,8 +229,8 @@ export function ensureAiConversation(
     }
   }
 
-  const row = withTx(db, () => {
-    const conv = conversationsRepo.create(db, {
+  const row = await withTx(db, async (tx) => {
+    const conv = await conversationsRepo.create(tx, {
       type: ConversationType.Ai,
       name: input.title ?? input.persona.name,
       avatarUrl: input.persona.avatar_url,
@@ -238,17 +239,17 @@ export function ensureAiConversation(
       aiOwnerUserId: input.userId,
     })
 
-    membersRepo.upsert(db, { conversationId: conv.id, userId: input.userId, role: Role.Owner })
+    await membersRepo.upsert(tx, { conversationId: conv.id, userId: input.userId, role: Role.Owner })
 
     if (input.providerId) {
-      aiRepo.createSession(db, {
+      await aiRepo.createSession(tx, {
         conversationId: conv.id,
         personaId: input.persona.id,
         providerId: input.providerId,
       })
     }
 
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'conversation',
       entityId: conv.id,
       op: 'upsert',
@@ -266,9 +267,9 @@ export function ensureAiConversation(
   }
 }
 
-export function createPersona(db: DB, ownerId: string, input: PersonaPayload): AiPersona {
-  const result = withTx(db, () => {
-    const created = aiRepo.createPersona(db, {
+export async function createPersona(db: DB, ownerId: string, input: PersonaPayload): Promise<AiPersona> {
+  const result = await withTx(db, async (tx) => {
+    const created = await aiRepo.createPersona(tx, {
       ownerId,
       name: input.name,
       systemPrompt: input.systemPrompt,
@@ -289,22 +290,22 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
 
     // 角色同时是一个「用户」：进群、加好友、通讯录都复用它
     const botId = `bot-${created.id}`
-    const bot = usersRepo.createBot(db, {
+    const bot = await usersRepo.createBot(tx, {
       id: botId,
       displayName: created.name,
       avatarUrl: created.avatar_url,
     })
-    aiRepo.setPersonaUserId(db, created.id, botId)
-    const row = aiRepo.findPersona(db, created.id) ?? created
+    await aiRepo.setPersonaUserId(tx, created.id, botId)
+    const row = (await aiRepo.findPersona(tx, created.id)) ?? created
 
     // 通讯录里 AI 和真人一视同仁：建角色即成为好友
     if (row.in_contacts === 1) {
-      const contact = contactsRepo.upsert(db, {
+      const contact = await contactsRepo.upsert(tx, {
         ownerId,
         contactUserId: botId,
         relation: ContactRelation.Friend,
       })
-      writeChange(db, {
+      await writeChange(tx, {
         entity: 'contact',
         entityId: `${ownerId}:${botId}`,
         op: 'upsert',
@@ -325,7 +326,7 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
 
     const mapped = aiRepo.mapPersona(row)
 
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'ai_persona',
       entityId: row.id,
       op: 'upsert',
@@ -335,9 +336,9 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
     })
 
     // 产品行为：建好角色就出现在「消息」与「通讯录」里，不用再点一次「聊天」
-    const providerId = row.provider_id ?? aiRepo.defaultProvider(db, ownerId)?.id ?? null
+    const providerId = row.provider_id ?? (await aiRepo.defaultProvider(tx, ownerId))?.id ?? null
     const ensured = mapped.inContacts
-      ? ensureAiConversation(db, { userId: ownerId, persona: row, providerId })
+      ? await ensureAiConversation(tx, { userId: ownerId, persona: row, providerId })
       : null
 
     return { row, mapped, ensured }
@@ -346,9 +347,9 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
   // 事务提交后再广播
   if (result.ensured) {
     const { conversation, conversationId, created } = result.ensured
-    emitConversationUpdated(db, conversation)
+    await emitConversationUpdated(db, conversation)
     if (created && result.row.greeting) {
-      appendAiSegment(db, conversationId, {
+      await appendAiSegment(db, conversationId, {
         generationId: `greet-${conversationId}`,
         index: 0,
         content: result.row.greeting,
@@ -362,19 +363,21 @@ export function createPersona(db: DB, ownerId: string, input: PersonaPayload): A
 }
 
 /** 角色改名/换头像后，把其所有 AI 会话的快照一起刷掉（会话列表与聊天头部直接读会话字段） */
-function syncPersonaToConversations(db: DB, persona: aiRepo.PersonaRow): Conversation[] {
-  const rows = db
-    .prepare(`SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`)
-    .all(persona.id) as conversationsRepo.ConversationRow[]
+async function syncPersonaToConversations(db: DB, persona: aiRepo.PersonaRow): Promise<Conversation[]> {
+  const rows = await all<conversationsRepo.ConversationRow>(
+    db,
+    `SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`,
+    [persona.id],
+  )
 
   const out: Conversation[] = []
   for (const row of rows) {
-    const updated = conversationsRepo.update(db, row.id, {
+    const updated = await conversationsRepo.update(db, row.id, {
       name: persona.name,
       avatarUrl: persona.avatar_url,
     })
     const mapped = conversationsRepo.mapConversation(updated)
-    writeChange(db, {
+    await writeChange(db, {
       entity: 'conversation',
       entityId: updated.id,
       op: 'upsert',
@@ -387,30 +390,31 @@ function syncPersonaToConversations(db: DB, persona: aiRepo.PersonaRow): Convers
   return out
 }
 
-export function updatePersona(db: DB, ownerId: string, id: string, input: Partial<PersonaPayload>): AiPersona {
-  const current = aiRepo.findPersona(db, id)
+export async function updatePersona(db: DB, ownerId: string, id: string, input: Partial<PersonaPayload>): Promise<AiPersona> {
+  const current = await aiRepo.findPersona(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('角色不存在')
 
-  const result = withTx(db, () => {
-    const row = aiRepo.updatePersona(db, id, input)
-    const conversations = syncPersonaToConversations(db, row)
+  const result = await withTx(db, async (tx) => {
+    const row = await aiRepo.updatePersona(tx, id, input)
+    const conversations = await syncPersonaToConversations(tx, row)
 
     // 群成员列表与通讯录都读 users 表，角色改名/换头像必须同步影子账号
     if (row.user_id) {
-      usersRepo.updateBotProfile(db, row.user_id, {
+      await usersRepo.updateBotProfile(tx, row.user_id, {
         displayName: row.name,
         avatarUrl: row.avatar_url,
       })
 
-      const existing = contactsRepo.find(db, ownerId, row.user_id)
+      const existing = await contactsRepo.find(tx, ownerId, row.user_id)
       if (row.in_contacts === 1) {
         if (!existing) {
-          const contact = contactsRepo.upsert(db, {
+          const contact = await contactsRepo.upsert(tx, {
             ownerId,
             contactUserId: row.user_id,
             relation: ContactRelation.Friend,
           })
-          writeChange(db, {
+          const botUser = await usersRepo.findById(tx, row.user_id)
+          await writeChange(tx, {
             entity: 'contact',
             entityId: `${ownerId}:${row.user_id}`,
             op: 'upsert',
@@ -423,16 +427,14 @@ export function updatePersona(db: DB, ownerId: string, id: string, input: Partia
               requestMessage: null,
               createdAt: contact.created_at,
               updatedAt: contact.updated_at,
-              user: usersRepo.findById(db, row.user_id)
-                ? usersRepo.mapPublicUser(usersRepo.findById(db, row.user_id)!)
-                : null,
+              user: botUser ? usersRepo.mapPublicUser(botUser) : null,
             },
             actorId: ownerId,
           })
         }
       } else if (existing) {
-        contactsRepo.removePair(db, ownerId, row.user_id)
-        writeChange(db, {
+        await contactsRepo.removePair(tx, ownerId, row.user_id)
+        await writeChange(tx, {
           entity: 'contact',
           entityId: `${ownerId}:${row.user_id}`,
           op: 'delete',
@@ -444,14 +446,14 @@ export function updatePersona(db: DB, ownerId: string, id: string, input: Partia
     }
 
     // 从「不在通讯录」改回「在通讯录」时补建会话
-    let ensured: ReturnType<typeof ensureAiConversation> | null = null
+    let ensured: Awaited<ReturnType<typeof ensureAiConversation>> | null = null
     if (row.in_contacts === 1) {
-      const providerId = row.provider_id ?? aiRepo.defaultProvider(db, ownerId)?.id ?? null
-      ensured = ensureAiConversation(db, { userId: ownerId, persona: row, providerId })
+      const providerId = row.provider_id ?? (await aiRepo.defaultProvider(tx, ownerId))?.id ?? null
+      ensured = await ensureAiConversation(tx, { userId: ownerId, persona: row, providerId })
     }
 
     const mapped = aiRepo.mapPersona(row)
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'ai_persona',
       entityId: row.id,
       op: 'upsert',
@@ -463,30 +465,32 @@ export function updatePersona(db: DB, ownerId: string, id: string, input: Partia
     return { mapped, conversations, ensured }
   })
 
-  for (const conversation of result.conversations) emitConversationUpdated(db, conversation)
-  if (result.ensured?.created) emitConversationUpdated(db, result.ensured.conversation)
+  for (const conversation of result.conversations) await emitConversationUpdated(db, conversation)
+  if (result.ensured?.created) await emitConversationUpdated(db, result.ensured.conversation)
 
   return result.mapped
 }
 
-export function deletePersona(db: DB, ownerId: string, id: string): void {
-  const current = aiRepo.findPersona(db, id)
+export async function deletePersona(db: DB, ownerId: string, id: string): Promise<void> {
+  const current = await aiRepo.findPersona(db, id)
   if (!current || current.owner_id !== ownerId) throw err.notFound('角色不存在')
 
-  const result = withTx(db, () => {
-    aiRepo.softDeletePersona(db, id)
+  const result = await withTx(db, async (tx) => {
+    await aiRepo.softDeletePersona(tx, id)
 
-    const rows = db
-      .prepare(`SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`)
-      .all(id) as conversationsRepo.ConversationRow[]
+    const rows = await all<conversationsRepo.ConversationRow>(
+      tx,
+      `SELECT * FROM conversations WHERE type = 'ai' AND ai_persona_id = ? AND deleted_at IS NULL`,
+      [id],
+    )
 
     const out: Conversation[] = []
     for (const row of rows) {
-      conversationsRepo.softDelete(db, row.id)
-      const next = conversationsRepo.findById(db, row.id)
+      await conversationsRepo.softDelete(tx, row.id)
+      const next = await conversationsRepo.findById(tx, row.id)
       if (!next) continue
       const mapped = conversationsRepo.mapConversation(next)
-      writeChange(db, {
+      await writeChange(tx, {
         entity: 'conversation',
         entityId: row.id,
         op: 'delete',
@@ -501,8 +505,8 @@ export function deletePersona(db: DB, ownerId: string, id: string): void {
     const botId = current.user_id
     const leftGroups: string[] = []
     if (botId) {
-      contactsRepo.removePair(db, ownerId, botId)
-      writeChange(db, {
+      await contactsRepo.removePair(tx, ownerId, botId)
+      await writeChange(tx, {
         entity: 'contact',
         entityId: `${ownerId}:${botId}`,
         op: 'delete',
@@ -510,14 +514,16 @@ export function deletePersona(db: DB, ownerId: string, id: string): void {
         payload: { ownerId, contactUserId: botId },
         actorId: ownerId,
       })
-      usersRepo.disableBot(db, botId)
+      await usersRepo.disableBot(tx, botId)
 
-      const memberships = db
-        .prepare('SELECT conversation_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL')
-        .all(botId) as Array<{ conversation_id: string }>
+      const memberships = await all<{ conversation_id: string }>(
+        tx,
+        'SELECT conversation_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL',
+        [botId],
+      )
       for (const membership of memberships) {
-        membersRepo.markLeft(db, membership.conversation_id, botId)
-        writeChange(db, {
+        await membersRepo.markLeft(tx, membership.conversation_id, botId)
+        await writeChange(tx, {
           entity: 'member',
           entityId: botId,
           op: 'delete',
@@ -529,7 +535,7 @@ export function deletePersona(db: DB, ownerId: string, id: string): void {
       }
     }
 
-    writeChange(db, {
+    await writeChange(tx, {
       entity: 'ai_persona',
       entityId: id,
       op: 'delete',
@@ -540,10 +546,10 @@ export function deletePersona(db: DB, ownerId: string, id: string): void {
     return { conversations: out, leftGroups, botId }
   })
 
-  for (const conversation of result.conversations) emitConversationUpdated(db, conversation)
+  for (const conversation of result.conversations) await emitConversationUpdated(db, conversation)
   if (result.botId) {
     for (const conversationId of result.leftGroups) {
-      emitMemberRemoved(db, conversationId, result.botId, [])
+      await emitMemberRemoved(db, conversationId, result.botId, [])
     }
   }
 }
@@ -552,21 +558,21 @@ export function deletePersona(db: DB, ownerId: string, id: string): void {
  * 打开与某个角色的会话：同一角色已有会话时复用，
  * 避免每点一次「聊天」就多出一个空会话。
  */
-export function openConversation(
+export async function openConversation(
   db: DB,
   userId: string,
   input: { personaId: string; providerId?: string; title?: string },
-): Conversation {
-  const persona = aiRepo.findPersona(db, input.personaId)
+): Promise<Conversation> {
+  const persona = await aiRepo.findPersona(db, input.personaId)
   if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
 
-  const providerId = input.providerId ?? persona.provider_id ?? aiRepo.defaultProvider(db, userId)?.id
+  const providerId = input.providerId ?? persona.provider_id ?? (await aiRepo.defaultProvider(db, userId))?.id
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
-  const provider = aiRepo.findProvider(db, providerId)
+  const provider = await aiRepo.findProvider(db, providerId)
   if (!provider || provider.owner_id !== userId) throw err.notFound('服务商不存在')
 
-  const ensured = ensureAiConversation(db, {
+  const ensured = await ensureAiConversation(db, {
     userId,
     persona,
     providerId,
@@ -575,26 +581,26 @@ export function openConversation(
 
   // 复用已有会话时：服务商可能被换过，或之前没有服务商所以还没建 session
   if (!ensured.created) {
-    withTx(db, () => {
-      const session = aiRepo.findSession(db, ensured.conversationId)
+    await withTx(db, async (tx) => {
+      const session = await aiRepo.findSession(tx, ensured.conversationId)
       if (!session) {
-        aiRepo.createSession(db, {
+        await aiRepo.createSession(tx, {
           conversationId: ensured.conversationId,
           personaId: persona.id,
           providerId,
         })
       } else if (session.provider_id !== providerId) {
-        db.prepare('UPDATE ai_sessions SET provider_id = ?, updated_at = ? WHERE conversation_id = ?').run(
-          providerId,
-          Date.now(),
-          ensured.conversationId,
+        await run(
+          tx,
+          'UPDATE ai_sessions SET provider_id = ?, updated_at = ? WHERE conversation_id = ?',
+          [providerId, Date.now(), ensured.conversationId],
         )
       }
     })
   }
 
   if (ensured.created && persona.greeting) {
-    appendAiSegment(db, ensured.conversationId, {
+    await appendAiSegment(db, ensured.conversationId, {
       generationId: `greet-${ensured.conversationId}`,
       index: 0,
       content: persona.greeting,
@@ -624,7 +630,7 @@ function stickerAttachmentRef(sticker: stickersRepo.StickerRow, attachment: atta
  * 落一条 AI 的表情消息。表情可能刚被删掉或文件丢失，
  * 此时返回 null 让调用方只发文字，不要让整条回复消失。
  */
-export function appendStickerMessage(
+export async function appendStickerMessage(
   db: DB,
   input: {
     conversationId: string
@@ -637,10 +643,10 @@ export function appendStickerMessage(
     totalSegments?: number
     proactive?: boolean
   },
-): Message | null {
-  const sticker = stickersRepo.findSticker(db, input.stickerId)
+): Promise<Message | null> {
+  const sticker = await stickersRepo.findSticker(db, input.stickerId)
   if (!sticker || !sticker.attachment_id) return null
-  const attachment = attachmentsRepo.findById(db, sticker.attachment_id)
+  const attachment = await attachmentsRepo.findById(db, sticker.attachment_id)
   if (!attachment) return null
 
   const meta: MessageMeta = {
@@ -675,7 +681,7 @@ export function appendStickerMessage(
  * 分段里若带有效的表情标记，会拆成文字与表情两条消息；
  * 每条分段最多解析一个标记，其余标记按噪音剔除。
  */
-export function appendAiSegment(
+export async function appendAiSegment(
   db: DB,
   conversationId: string,
   input: {
@@ -689,26 +695,26 @@ export function appendAiSegment(
     proactive?: boolean
     connector?: ConnectorActionMeta[]
   },
-): Message {
-  const conv = conversationsRepo.findById(db, conversationId)
+): Promise<Message> {
+  const conv = await conversationsRepo.findById(db, conversationId)
   if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
 
   // 幂等：greeting 与主动消息在某些并发路径下可能被调两次
   if (input.clientNonce) {
-    const dup = messagesRepo.findByNonceInConversation(db, conversationId, input.clientNonce)
+    const dup = await messagesRepo.findByNonceInConversation(db, conversationId, input.clientNonce)
     if (dup) return messagesRepo.mapMessage(dup)
   }
 
-  const session = aiRepo.findSession(db, conversationId)
+  const session = await aiRepo.findSession(db, conversationId)
   const personaId = input.personaId ?? session?.persona_id ?? conv.ai_persona_id ?? undefined
   const ownerId = conv.ai_owner_user_id ?? null
 
   // 表情标记解析：按角色的表情包授权取有效编号（没授权任何表情包时按普通文字处理）
-  const personaRow = personaId ? aiRepo.findPersona(db, personaId) : undefined
+  const personaRow = personaId ? await aiRepo.findPersona(db, personaId) : undefined
   const enabledIds = ownerId
     ? personaRow
-      ? aiEnabledStickerIds(db, personaRow)
-      : new Set(stickersRepo.listAiStickers(db, ownerId).map((row) => row.id))
+      ? await aiEnabledStickerIds(db, personaRow)
+      : new Set((await stickersRepo.listAiStickers(db, ownerId)).map((row) => row.id))
     : new Set<string>()
   const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
   const text = marker?.stickerId ? marker.text : input.content
@@ -737,7 +743,7 @@ export function appendAiSegment(
     proactive: input.proactive,
   })
 
-  const appendText = (content: string, index: number, clientNonce?: string | null): Message =>
+  const appendText = async (content: string, index: number, clientNonce?: string | null): Promise<Message> =>
     appendSystemMessage(db, {
       conversationId,
       senderType: 'ai' as SenderType,
@@ -751,45 +757,45 @@ export function appendAiSegment(
 
   let first: Message
   if (marker?.stickerId && marker.stickerFirst) {
-    const sticker = appendStickerMessage(db, stickerPayload(input.index, input.clientNonce ? `${input.clientNonce}-s` : null))
+    const sticker = await appendStickerMessage(db, stickerPayload(input.index, input.clientNonce ? `${input.clientNonce}-s` : null))
     const textIndex = sticker ? input.index + 1 : input.index
-    first = sticker ?? appendText(text, input.index)
-    if (text.trim()) appendText(text, textIndex)
+    first = sticker ?? (await appendText(text, input.index))
+    if (text.trim()) await appendText(text, textIndex)
   } else if (marker?.stickerId) {
-    const textMessage = text.trim() ? appendText(text, input.index) : null
-    const sticker = appendStickerMessage(
+    const textMessage = text.trim() ? await appendText(text, input.index) : null
+    const sticker = await appendStickerMessage(
       db,
       stickerPayload(textMessage ? input.index + 1 : input.index, input.clientNonce ? `${input.clientNonce}-s` : null),
     )
     // 文字与表情都没落成时退回原文，宁可显示标记也不能丢整条回复
-    first = textMessage ?? sticker ?? appendText(input.content, input.index)
+    first = textMessage ?? sticker ?? (await appendText(input.content, input.index))
   } else {
-    first = appendText(text, input.index)
+    first = await appendText(text, input.index)
   }
 
   if (session) {
-    aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(text))
+    await aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(text))
   }
   return first
 }
 
 /* ------------------------------- 记忆 ------------------------------- */
 
-export function listMemory(
+export async function listMemory(
   db: DB,
   userId: string,
   conversationId: string,
-): { summaries: AiMemorySummary[]; facts: AiMemoryFact[] } {
-  assertOwned(db, userId, conversationId)
+): Promise<{ summaries: AiMemorySummary[]; facts: AiMemoryFact[] }> {
+  await assertOwned(db, userId, conversationId)
   return {
-    summaries: aiRepo.listSummaries(db, conversationId),
-    facts: aiRepo.listFacts(db, conversationId).map(aiRepo.mapFact),
+    summaries: await aiRepo.listSummaries(db, conversationId),
+    facts: (await aiRepo.listFacts(db, conversationId)).map(aiRepo.mapFact),
   }
 }
 
-export function deleteFact(db: DB, userId: string, conversationId: string, factId: string): void {
-  assertOwned(db, userId, conversationId)
-  withTx(db, () => aiRepo.rejectFact(db, conversationId, factId))
+export async function deleteFact(db: DB, userId: string, conversationId: string, factId: string): Promise<void> {
+  await assertOwned(db, userId, conversationId)
+  await withTx(db, async (tx) => aiRepo.rejectFact(tx, conversationId, factId))
 }
 
 export interface MemoryWritePayload {
@@ -803,12 +809,12 @@ export interface MemoryWritePayload {
 }
 
 /** 客户端压缩完成后回传结果，服务端负责落库与滚动链维护 */
-export function writeMemory(db: DB, userId: string, conversationId: string, payload: MemoryWritePayload): void {
-  assertOwned(db, userId, conversationId)
+export async function writeMemory(db: DB, userId: string, conversationId: string, payload: MemoryWritePayload): Promise<void> {
+  await assertOwned(db, userId, conversationId)
 
-  withTx(db, () => {
+  await withTx(db, async (tx) => {
     if (payload.summary) {
-      aiRepo.insertSummary(db, {
+      await aiRepo.insertSummary(tx, {
         conversationId,
         fromSeq: payload.summary.fromSeq,
         toSeq: payload.summary.toSeq,
@@ -816,11 +822,11 @@ export function writeMemory(db: DB, userId: string, conversationId: string, payl
         tokenEstimate: estimateTokens(payload.summary.text),
         model: payload.summary.model ?? null,
       })
-      aiRepo.markCompacted(db, conversationId, payload.summary.toSeq)
+      await aiRepo.markCompacted(tx, conversationId, payload.summary.toSeq)
     }
 
     for (const fact of payload.facts ?? []) {
-      aiRepo.upsertFact(db, {
+      await aiRepo.upsertFact(tx, {
         conversationId,
         subject: fact.subject,
         key: fact.key,
@@ -831,8 +837,8 @@ export function writeMemory(db: DB, userId: string, conversationId: string, payl
   })
 }
 
-function assertOwned(db: DB, userId: string, conversationId: string): void {
-  const conv = conversationsRepo.findById(db, conversationId)
+async function assertOwned(db: DB, userId: string, conversationId: string): Promise<void> {
+  const conv = await conversationsRepo.findById(db, conversationId)
   if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
   if (conv.ai_owner_user_id !== userId) throw err.forbidden('无权访问该 AI 会话')
 }
@@ -891,27 +897,27 @@ async function runGenerationOnServer(
   db: DB,
   input: ServerGenerationInput,
 ): Promise<ServerGenerationResult> {
-  assertOwned(db, input.userId, input.conversationId)
+  await assertOwned(db, input.userId, input.conversationId)
 
-  const conversation = conversationsRepo.findById(db, input.conversationId)
+  const conversation = await conversationsRepo.findById(db, input.conversationId)
   if (!conversation || conversation.type !== 'ai') throw err.notFound('AI 会话不存在')
 
   // 老版本建出来的会话可能没有 ai_sessions 行，这里补建而不是直接报错
-  let session = aiRepo.findSession(db, input.conversationId)
+  let session = await aiRepo.findSession(db, input.conversationId)
   const personaId = session?.persona_id ?? conversation.ai_persona_id
   if (!personaId) throw err.notFound('角色不存在')
 
-  const persona = aiRepo.findPersona(db, personaId)
+  const persona = await aiRepo.findPersona(db, personaId)
   if (!persona) throw err.notFound('角色不存在')
 
   const providerId =
     input.providerId ??
     session?.provider_id ??
     persona.provider_id ??
-    aiRepo.defaultProvider(db, input.userId)?.id
+    (await aiRepo.defaultProvider(db, input.userId))?.id
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
-  const provider = aiRepo.findProvider(db, providerId)
+  const provider = await aiRepo.findProvider(db, providerId)
   if (!provider) throw err.notFound('服务商不存在')
 
   // 关闭的模型不可被选用：角色指定的模型或供应商主模型被停用时直接拒绝这轮回复
@@ -921,19 +927,19 @@ async function runGenerationOnServer(
   }
 
   if (!session) {
-    withTx(db, () =>
-      aiRepo.createSession(db, {
+    await withTx(db, async (tx) =>
+      aiRepo.createSession(tx, {
         conversationId: input.conversationId,
         personaId,
         providerId,
       }),
     )
-    session = aiRepo.findSession(db, input.conversationId)
+    session = await aiRepo.findSession(db, input.conversationId)
   }
   const apiKey = resolveServerApiKey(provider)
 
   // 先落用户消息，保证即使上游失败用户输入也不丢
-  const userMessageId = appendUserMessage(
+  const userMessageId = await appendUserMessage(
     db,
     input.conversationId,
     input.userId,
@@ -942,8 +948,8 @@ async function runGenerationOnServer(
   )
 
   // 用户是在引用某条历史消息后发问时，把被引原文一并交给模型
-  const userRow = messagesRepo.findById(db, userMessageId)
-  const quotedRow = userRow?.reply_to_id ? messagesRepo.findById(db, userRow.reply_to_id) : null
+  const userRow = await messagesRepo.findById(db, userMessageId)
+  const quotedRow = userRow?.reply_to_id ? await messagesRepo.findById(db, userRow.reply_to_id) : null
   const quoted =
     quotedRow && quotedRow.conversation_id === input.conversationId && !quotedRow.deleted_at
       ? quotedRow.content.trim().slice(0, 400)
@@ -951,20 +957,22 @@ async function runGenerationOnServer(
 
   // 当前输入由 buildChatMessages 统一追加一次，这里把它从 recent 里摘掉，
   // 否则模型会看到两遍同样的话（并发插入的 AI 消息也不影响这个判断）
-  const recent = loadRecentMessages(db, input.conversationId, 61).filter(
+  const recent = (await loadRecentMessages(db, input.conversationId, 61)).filter(
     (message) => message.id !== userMessageId,
   ).slice(-60)
-  const facts = aiRepo.listFacts(db, input.conversationId).map(aiRepo.mapFact)
-  const summary = aiRepo.latestSummary(db, input.conversationId)
-  const owner = db.prepare('SELECT display_name FROM users WHERE id = ?').get(input.userId) as
-    | { display_name: string }
-    | undefined
+  const facts = (await aiRepo.listFacts(db, input.conversationId)).map(aiRepo.mapFact)
+  const summary = await aiRepo.latestSummary(db, input.conversationId)
+  const owner = await one<{ display_name: string }>(
+    db,
+    'SELECT display_name FROM users WHERE id = ?',
+    [input.userId],
+  )
 
   // 图片上下文：配了识图模型就先转文字描述，没配就转成 data URL 直传主模型
   const imageInput = await prepareImageInput(db, provider, apiKey, userRow, recent)
 
   // 角色日程：客户端打开会话时会确保已生成；这里只读，不阻塞回复
-  const scheduleRow = scheduleRepo.findSchedule(
+  const scheduleRow = await scheduleRepo.findSchedule(
     db,
     persona.id,
     localDayKey(Date.now(), TZ_OFFSET_MIN),
@@ -1015,21 +1023,21 @@ async function runGenerationOnServer(
     quoted,
     userImages: imageInput.userImages,
     includeImages: imageInput.includeImages,
-    stickers: aiStickerOptionsForPersona(db, persona),
+    stickers: await aiStickerOptionsForPersona(db, persona),
     schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
     connectorContext: connector.context,
     connectorFetchContext: connector.fetchContext,
   })
 
-  const settings = aiRepo.readGlobalSettings(db, input.userId)
+  const settings = await aiRepo.readGlobalSettings(db, input.userId)
   const rule: SegmentRule = {
     enabled: settings.segmentEnabled,
     pattern: settings.segmentPattern,
   }
   const model = persona.model_override ?? provider.model
 
-  const generationId = aiRepo.createGeneration(db, {
+  const generationId = await aiRepo.createGeneration(db, {
     conversationId: input.conversationId,
     userId: input.userId,
     userMessageId: null,
@@ -1062,7 +1070,7 @@ async function runGenerationOnServer(
         },
       })
     } catch (e) {
-      aiRepo.finishGeneration(db, generationId, {
+      await aiRepo.finishGeneration(db, generationId, {
         status: 'error',
         error: e instanceof Error ? e.message : '上游失败',
       })
@@ -1072,8 +1080,8 @@ async function runGenerationOnServer(
 
     const segments = splitSegments(reply, rule)
     if (segments.length === 0) {
-      aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds: [] })
-      emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds: [], model })
+      await aiRepo.finishGeneration(db, generationId, { status: 'done', messageIds: [] })
+      await emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds: [], model })
       return { generationId, segments: 0 }
     }
 
@@ -1084,52 +1092,54 @@ async function runGenerationOnServer(
     segments.forEach((segment, index) => {
       delay += index === 0 ? 0 : segmentDelay(segment)
       setTimeout(() => {
-        try {
-          const message = appendAiSegment(db, input.conversationId, {
-            generationId,
-            index,
-            content: segment,
-            model,
-            totalSegments: segments.length,
-            personaId: persona.id,
-            connector: connector.actions,
-          })
-          deliveredIds.push(message.id)
-          // 每送出一段就把进度落库：终态还没到，进程挂了也不丢已送达的分段
-          aiRepo.trackGenerationMessages(db, generationId, deliveredIds)
-          if (deliveredIds.length === segments.length) {
-            aiRepo.finishGeneration(db, generationId, {
-              status: 'done',
-              messageIds: deliveredIds,
-              promptTokens: result.usage?.promptTokens ?? null,
-              completionTokens: result.usage?.completionTokens ?? null,
-            })
-            // 全部段落都落库了才收「生成中」状态，正文仍靠 message.created 逐条下发
-            emitAiDone(db, {
+        void (async () => {
+          try {
+            const message = await appendAiSegment(db, input.conversationId, {
               generationId,
-              conversationId: input.conversationId,
-              messageIds: deliveredIds,
+              index,
+              content: segment,
               model,
+              totalSegments: segments.length,
+              personaId: persona.id,
+              connector: connector.actions,
             })
+            deliveredIds.push(message.id)
+            // 每送出一段就把进度落库：终态还没到，进程挂了也不丢已送达的分段
+            await aiRepo.trackGenerationMessages(db, generationId, deliveredIds)
+            if (deliveredIds.length === segments.length) {
+              await aiRepo.finishGeneration(db, generationId, {
+                status: 'done',
+                messageIds: deliveredIds,
+                promptTokens: result.usage?.promptTokens ?? null,
+                completionTokens: result.usage?.completionTokens ?? null,
+              })
+              // 全部段落都落库了才收「生成中」状态，正文仍靠 message.created 逐条下发
+              await emitAiDone(db, {
+                generationId,
+                conversationId: input.conversationId,
+                messageIds: deliveredIds,
+                model,
+              })
+            }
+          } catch (e) {
+            // 单段落库失败：生成标记失败但保留已送达的分段 id，不让错误覆盖前面的消息
+            if (!settled) {
+              settled = true
+              const message = e instanceof Error ? e.message : '落库失败'
+              await aiRepo.finishGeneration(db, generationId, {
+                status: 'error',
+                error: message,
+                messageIds: deliveredIds,
+              })
+              await emitAiError(db, {
+                generationId,
+                conversationId: input.conversationId,
+                code: 'UPSTREAM_AI_ERROR',
+                message,
+              })
+            }
           }
-        } catch (e) {
-          // 单段落库失败：生成标记失败但保留已送达的分段 id，不让错误覆盖前面的消息
-          if (!settled) {
-            settled = true
-            const message = e instanceof Error ? e.message : '落库失败'
-            aiRepo.finishGeneration(db, generationId, {
-              status: 'error',
-              error: message,
-              messageIds: deliveredIds,
-            })
-            emitAiError(db, {
-              generationId,
-              conversationId: input.conversationId,
-              code: 'UPSTREAM_AI_ERROR',
-              message,
-            })
-          }
-        }
+        })()
       }, delay)
     })
 
@@ -1142,6 +1152,10 @@ async function runGenerationOnServer(
   let segIndex = 0
   let pending = ''
 
+  // 落库按切出的顺序串行执行，切段只负责排程，结果统一在流结束后等待
+  let appendChain: Promise<void> = Promise.resolve()
+  let appendError: unknown = null
+
   // 逐字增量做节流：把上游的小片段攒 60ms 再推，避免 WS 被刷屏
   let pendingDelta = ''
   let deltaTimer: ReturnType<typeof setTimeout> | null = null
@@ -1149,12 +1163,14 @@ async function runGenerationOnServer(
     if (!pendingDelta) return
     const text = pendingDelta
     pendingDelta = ''
-    emitAiDelta(db, {
-      generationId,
-      conversationId: input.conversationId,
-      index: segIndex,
-      delta: text,
-    })
+    void (async () => {
+      await emitAiDelta(db, {
+        generationId,
+        conversationId: input.conversationId,
+        index: segIndex,
+        delta: text,
+      })
+    })().catch(() => {})
   }
   const emitDelta = (delta: string): void => {
     pendingDelta += delta
@@ -1166,18 +1182,17 @@ async function runGenerationOnServer(
     }
   }
 
-  const appendReady = (segments: string[]): void => {
-    for (const segment of segments) {
-      const message = appendAiSegment(db, input.conversationId, {
+  const appendReady = async (segments: string[], startIndex: number): Promise<void> => {
+    for (let i = 0; i < segments.length; i++) {
+      const message = await appendAiSegment(db, input.conversationId, {
         generationId,
-        index: segIndex,
-        content: segment,
+        index: startIndex + i,
+        content: segments[i]!,
         model,
         personaId: persona.id,
         connector: connector.actions,
       })
       messageIds.push(message.id)
-      segIndex += 1
     }
   }
 
@@ -1191,16 +1206,24 @@ async function runGenerationOnServer(
       deltaTimer = null
     }
     pendingDelta = ''
+    const startIndex = segIndex
+    segIndex += ready.length
     for (let i = 0; i < ready.length; i++) {
-      emitAiSegment(db, {
-        generationId,
-        conversationId: input.conversationId,
-        index: segIndex + i,
-        // 表情标记在落库时才拆成真正的表情消息，实时气泡里不能露出原始标记
-        text: stripStickerMarkers(ready[i]!),
-      })
+      void (async () => {
+        await emitAiSegment(db, {
+          generationId,
+          conversationId: input.conversationId,
+          index: startIndex + i,
+          // 表情标记在落库时才拆成真正的表情消息，实时气泡里不能露出原始标记
+          text: stripStickerMarkers(ready[i]!),
+        })
+      })().catch(() => {})
     }
-    appendReady(ready)
+    appendChain = appendChain
+      .then(() => appendReady(ready, startIndex))
+      .catch((e) => {
+        if (appendError === null) appendError = e
+      })
   }
 
   try {
@@ -1228,17 +1251,19 @@ async function runGenerationOnServer(
     })
     cutPending(true)
     flushDelta()
-    aiRepo.finishGeneration(db, generationId, {
+    await appendChain
+    if (appendError !== null) throw appendError
+    await aiRepo.finishGeneration(db, generationId, {
       status: 'done',
       messageIds,
       promptTokens: usage?.promptTokens ?? null,
       completionTokens: usage?.completionTokens ?? null,
     })
-    emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds, model })
+    await emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds, model })
   } catch (e) {
     const message = e instanceof Error ? e.message : '上游失败'
-    aiRepo.finishGeneration(db, generationId, { status: 'error', error: message })
-    emitAiError(db, {
+    await aiRepo.finishGeneration(db, generationId, { status: 'error', error: message })
+    await emitAiError(db, {
       generationId,
       conversationId: input.conversationId,
       code: 'UPSTREAM_AI_ERROR',
@@ -1252,14 +1277,14 @@ async function runGenerationOnServer(
   return { generationId, segments: Math.max(messageIds.length, 1) }
 }
 
-function appendUserMessage(
+async function appendUserMessage(
   db: DB,
   conversationId: string,
   userId: string,
   content: string,
   clientNonce: string,
-): string {
-  const existing = messagesRepo.findByNonce(db, userId, clientNonce)
+): Promise<string> {
+  const existing = await messagesRepo.findByNonce(db, userId, clientNonce)
   if (existing) return existing.id
 
   /**
@@ -1267,19 +1292,19 @@ function appendUserMessage(
    * 再插一条就会在历史里出现两份。15 秒内同会话、同发送者、同内容视为同一条。
    * 正常客户端会先 findByNonce 命中，走不到这里。
    */
-  const duplicate = db
-    .prepare(
-      `SELECT id FROM messages
+  const duplicate = await one<{ id: string }>(
+    db,
+    `SELECT id FROM messages
        WHERE conversation_id = ? AND sender_id = ? AND sender_type = 'user'
          AND deleted_at IS NULL AND content = ? AND created_at >= ?
        ORDER BY seq DESC LIMIT 1`,
-    )
-    .get(conversationId, userId, content, Date.now() - 15_000) as { id: string } | undefined
+    [conversationId, userId, content, Date.now() - 15_000],
+  )
   if (duplicate) return duplicate.id
 
-  const seq = conversationsRepo.nextSeq(db, conversationId)
+  const seq = await conversationsRepo.nextSeq(db, conversationId)
   const ts = Date.now()
-  const row = messagesRepo.insert(db, {
+  const row = await messagesRepo.insert(db, {
     conversationId,
     senderId: userId,
     senderType: 'user',
@@ -1290,9 +1315,9 @@ function appendUserMessage(
     clientNonce,
     createdAt: ts,
   })
-  conversationsRepo.touchLastMessage(db, conversationId, row.id, ts)
+  await conversationsRepo.touchLastMessage(db, conversationId, row.id, ts)
   const message = messagesRepo.mapMessage(row)
-  writeChange(db, {
+  await writeChange(db, {
     entity: 'message',
     entityId: row.id,
     op: 'upsert',
@@ -1300,12 +1325,12 @@ function appendUserMessage(
     payload: message,
     actorId: userId,
   })
-  emitMessageCreated(db, message, clientNonce)
+  await emitMessageCreated(db, message, clientNonce)
   return row.id
 }
 
-function loadRecentMessages(db: DB, conversationId: string, limit: number): Message[] {
-  const rows = messagesRepo.page(db, { conversationId, limit, before: null, after: null })
+async function loadRecentMessages(db: DB, conversationId: string, limit: number): Promise<Message[]> {
+  const rows = await messagesRepo.page(db, { conversationId, limit, before: null, after: null })
   return rows.reverse().map(messagesRepo.mapMessage)
 }
 
@@ -1334,10 +1359,10 @@ async function describeAttachment(
   attachmentId: string,
 ): Promise<string | null> {
   if (!provider.vision_model) return null
-  const row = attachmentsRepo.findById(db, attachmentId)
+  const row = await attachmentsRepo.findById(db, attachmentId)
   if (!row || !IMAGE_MIME.has(row.mime)) return null
 
-  const cached = aiRepo.findImageDescription(db, row.sha256)
+  const cached = await aiRepo.findImageDescription(db, row.sha256)
   if (cached) return cached
 
   const dataUrl = imageDataUrl(row)
@@ -1372,16 +1397,16 @@ async function describeAttachment(
     .slice(0, 1000)
   if (!description) return null
 
-  aiRepo.saveImageDescription(db, row.sha256, description, provider.vision_model)
+  await aiRepo.saveImageDescription(db, row.sha256, description, provider.vision_model)
   return description
 }
 
 /** 把描述写回消息 meta 的 attachments，其他设备通过同步拿到同一份 */
-function writeAttachmentDescriptions(
+async function writeAttachmentDescriptions(
   db: DB,
   message: Message,
   descriptions: Record<string, string>,
-): void {
+): Promise<void> {
   const attachments = message.meta?.attachments
   if (!attachments) return
   let changed = false
@@ -1393,8 +1418,8 @@ function writeAttachmentDescriptions(
     }
   }
   if (!changed) return
-  db.prepare('UPDATE messages SET meta = ? WHERE id = ?').run(JSON.stringify(message.meta), message.id)
-  writeChange(db, {
+  await run(db, 'UPDATE messages SET meta = ? WHERE id = ?', [JSON.stringify(message.meta), message.id])
+  await writeChange(db, {
     entity: 'message',
     entityId: message.id,
     op: 'upsert',
@@ -1441,7 +1466,7 @@ async function prepareImageInput(
       if (!description) continue
       const ref = message.meta?.attachments?.find((a) => a.id === attachmentId)
       if (ref) ref.description = description
-      writeAttachmentDescriptions(db, message, { [attachmentId]: description })
+      await writeAttachmentDescriptions(db, message, { [attachmentId]: description })
     }
 
     const userImages = imageRefsOf(userMessage).map((attachmentId) => ({
@@ -1455,7 +1480,7 @@ async function prepareImageInput(
   // 没配识图模型：本次图片转 data URL 直传，主模型不支持多模态时会自己报错
   const userImages: TurnImage[] = []
   for (const attachmentId of imageRefsOf(userMessage)) {
-    const row = attachmentsRepo.findById(db, attachmentId)
+    const row = await attachmentsRepo.findById(db, attachmentId)
     const dataUrl = row ? imageDataUrl(row) : null
     if (dataUrl) userImages.push({ dataUrl, description: null })
   }
@@ -1472,20 +1497,20 @@ const STICKER_TAG_PROMPT =
  * 按角色取提示词里的表情清单：角色配了 stickerPackIds 白名单时只在白名单分组里挑，
  * 没配（null）则沿用全部授权分组。群聊与私聊的提示词共用这一个口径。
  */
-export function aiStickerOptionsForPersona(
+export async function aiStickerOptionsForPersona(
   db: DB,
   persona: aiRepo.PersonaRow,
-): Array<{ id: string; tags: string[] }> {
+): Promise<Array<{ id: string; tags: string[] }>> {
   const packFilter = aiRepo.parseStickerPackIds(persona.sticker_pack_ids)
-  return stickersRepo
-    .listAiStickers(db, persona.owner_id, packFilter)
-    .map((row) => ({ id: row.id, tags: row.keywords }))
+  const rows = await stickersRepo.listAiStickers(db, persona.owner_id, packFilter)
+  return rows.map((row) => ({ id: row.id, tags: row.keywords }))
 }
 
 /** 落库校验用的有效表情 id 集合，口径与 aiStickerOptionsForPersona 一致 */
-export function aiEnabledStickerIds(db: DB, persona: aiRepo.PersonaRow): Set<string> {
+export async function aiEnabledStickerIds(db: DB, persona: aiRepo.PersonaRow): Promise<Set<string>> {
   const packFilter = aiRepo.parseStickerPackIds(persona.sticker_pack_ids)
-  return new Set(stickersRepo.listAiStickers(db, persona.owner_id, packFilter).map((row) => row.id))
+  const rows = await stickersRepo.listAiStickers(db, persona.owner_id, packFilter)
+  return new Set(rows.map((row) => row.id))
 }
 
 /** "开心,庆祝、 可爱" 这类上游输出收敛成干净的标签数组 */
@@ -1505,17 +1530,17 @@ function parseStickerTags(raw: string): string[] {
  * 需要服务商配了识图模型。
  */
 export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: string): Promise<string[]> {
-  const sticker = stickersRepo.findSticker(db, stickerId)
+  const sticker = await stickersRepo.findSticker(db, stickerId)
   if (!sticker || !sticker.attachment_id) throw err.notFound('表情不存在')
-  const pack = stickersRepo.findPack(db, sticker.pack_id)
+  const pack = await stickersRepo.findPack(db, sticker.pack_id)
   if (!pack || pack.owner_id !== userId) throw err.forbidden('无权操作该表情')
 
-  const attachment = attachmentsRepo.findById(db, sticker.attachment_id)
+  const attachment = await attachmentsRepo.findById(db, sticker.attachment_id)
   if (!attachment) throw err.notFound('表情文件不存在')
 
-  const provider = aiRepo
-    .listProviders(db, userId)
-    .find((row) => row.vision_model && row.api_key_enc)
+  const provider = (await aiRepo.listProviders(db, userId)).find(
+    (row) => row.vision_model && row.api_key_enc,
+  )
   if (!provider) {
     throw err.validation('没有可用的识图模型：请给服务商配置识图模型')
   }
@@ -1558,7 +1583,7 @@ export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: 
     ? (JSON.parse(sticker.keywords) as unknown[]).filter((k): k is string => typeof k === 'string')
     : []
   const merged = [...new Set([...existing, ...tags])].slice(0, 10)
-  stickersRepo.updateStickerKeywords(db, stickerId, merged)
+  await stickersRepo.updateStickerKeywords(db, stickerId, merged)
   return merged
 }
 
@@ -1619,13 +1644,13 @@ function parseUpstreamUsage(payload: UpstreamUsagePayload): UpstreamUsage | null
 }
 
 /** 解析出的 usage 落库；没有 usage 时什么都不写 */
-function recordUpstreamUsage(
+async function recordUpstreamUsage(
   context: UpstreamRecordContext,
   usage: UpstreamUsage | null,
   model: string,
-): void {
+): Promise<void> {
   if (!usage) return
-  debugRepo.insertUsage(context.db, {
+  await debugRepo.insertUsage(context.db, {
     ownerId: context.ownerId,
     conversationId: context.conversationId ?? null,
     personaId: context.personaId ?? null,
@@ -1694,7 +1719,7 @@ export async function callUpstream(input: {
     if (!content) throw err.upstreamAi('上游没有返回内容')
 
     const usage = parseUpstreamUsage(payload)
-    if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+    if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
     return { content, usage }
   } catch (e) {
     throw wrapUpstreamTransportError(e, '上游请求超时')
@@ -1764,7 +1789,7 @@ export async function callUpstreamStream(input: {
       if (!content) throw err.upstreamAi('上游没有返回内容')
       input.onDelta(content)
       const usage = parseUpstreamUsage(payload)
-      if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+      if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
       return { content, usage }
     }
 
@@ -1810,7 +1835,7 @@ export async function callUpstreamStream(input: {
     }
 
     if (!full.trim()) throw err.upstreamAi('上游没有返回内容')
-    if (input.record) recordUpstreamUsage(input.record, usage, input.model)
+    if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
     return { content: full, usage }
   } catch (e) {
     throw wrapUpstreamTransportError(e, '上游请求超时')
@@ -1913,7 +1938,7 @@ export async function testStoredProvider(
   id: string,
   override?: { baseUrl?: string; model?: string },
 ): Promise<{ ok: boolean; sample: string }> {
-  const row = aiRepo.findProvider(db, id)
+  const row = await aiRepo.findProvider(db, id)
   if (!row || row.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
   let apiKey: string
@@ -2096,16 +2121,16 @@ export async function refreshProviderBalance(
   ownerId: string,
   providerId: string,
 ): Promise<AiProvider> {
-  const row = aiRepo.findProvider(db, providerId)
+  const row = await aiRepo.findProvider(db, providerId)
   if (!row || row.owner_id !== ownerId) throw err.notFound('服务商不存在')
 
   const apiKey = resolveServerApiKey(row)
   if (!apiKey) throw err.validation('该服务商没有配置 API Key')
 
   const hit = await fetchProviderBalance({ baseUrl: row.base_url, apiKey })
-  aiRepo.saveProviderBalance(db, providerId, hit)
+  await aiRepo.saveProviderBalance(db, providerId, hit)
 
-  const updated = aiRepo.findProvider(db, providerId)
+  const updated = await aiRepo.findProvider(db, providerId)
   if (!updated) throw err.notFound('服务商不存在')
   return toPublicProvider(updated)
 }
@@ -2113,48 +2138,48 @@ export async function refreshProviderBalance(
 /* ------------------------------- 调试模式 ------------------------------- */
 
 /** 校验用户确实是该会话的成员，调试数据只给会话内的人看 */
-function assertConversationMember(db: DB, userId: string, conversationId: string): void {
-  const conversation = conversationsRepo.findById(db, conversationId)
+async function assertConversationMember(db: DB, userId: string, conversationId: string): Promise<void> {
+  const conversation = await conversationsRepo.findById(db, conversationId)
   if (!conversation || conversation.deleted_at !== null) throw err.notFound('会话不存在')
-  if (!membersRepo.findActive(db, conversationId, userId)) {
+  if (!(await membersRepo.findActive(db, conversationId, userId))) {
     throw err.forbidden('不在该会话中')
   }
 }
 
 /** 上下文窗口取最近一次调用用的服务商配置；没配置就当 null */
-function resolveContextWindow(
+async function resolveContextWindow(
   db: DB,
   conversationId: string,
   lastProviderId: string | null,
-): number | null {
-  const session = aiRepo.findSession(db, conversationId)
+): Promise<number | null> {
+  const session = await aiRepo.findSession(db, conversationId)
   const providerId = lastProviderId ?? session?.provider_id ?? null
   if (!providerId) return null
-  const provider = aiRepo.findProvider(db, providerId)
+  const provider = await aiRepo.findProvider(db, providerId)
   return provider?.context_window ?? null
 }
 
 /** 会话维度的调试汇总：用量聚合 + 上下文水位 + 压缩进度 */
-export function debugSummary(db: DB, userId: string, conversationId: string): AiDebugSummary {
-  assertConversationMember(db, userId, conversationId)
+export async function debugSummary(db: DB, userId: string, conversationId: string): Promise<AiDebugSummary> {
+  await assertConversationMember(db, userId, conversationId)
 
   // 聚合里带上最近的模型与窗口来源
-  const lastUsage = db
-    .prepare(
-      'SELECT provider_id FROM ai_usage_log WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1',
-    )
-    .get(conversationId) as { provider_id: string | null } | undefined
+  const lastUsage = await one<{ provider_id: string | null }>(
+    db,
+    'SELECT provider_id FROM ai_usage_log WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1',
+    [conversationId],
+  )
 
-  const session = aiRepo.findSession(db, conversationId)
+  const session = await aiRepo.findSession(db, conversationId)
   return debugRepo.debugSummary(db, conversationId, {
-    contextWindow: resolveContextWindow(db, conversationId, lastUsage?.provider_id ?? null),
+    contextWindow: await resolveContextWindow(db, conversationId, lastUsage?.provider_id ?? null),
     lastCompactedSeq: session?.last_compacted_seq ?? null,
     tokenEstimate: session?.token_estimate ?? null,
   })
 }
 
 /** 本机密钥代跑后客户端回传的真实 usage */
-export function reportClientUsage(
+export async function reportClientUsage(
   db: DB,
   userId: string,
   input: {
@@ -2168,13 +2193,13 @@ export function reportClientUsage(
     completionTokens: number
     cachedTokens?: number
   },
-): void {
-  if (input.conversationId) assertConversationMember(db, userId, input.conversationId)
+): Promise<void> {
+  if (input.conversationId) await assertConversationMember(db, userId, input.conversationId)
   if (input.personaId) {
-    const persona = aiRepo.findPersona(db, input.personaId)
+    const persona = await aiRepo.findPersona(db, input.personaId)
     if (!persona || persona.owner_id !== userId) throw err.forbidden('无权使用该角色')
   }
-  debugRepo.insertUsage(db, {
+  await debugRepo.insertUsage(db, {
     ownerId: userId,
     conversationId: input.conversationId ?? null,
     personaId: input.personaId ?? null,
@@ -2189,21 +2214,21 @@ export function reportClientUsage(
 }
 
 /** 按 refId 批量查最近一次 usage（消息内联调试条用），只查自己的记录 */
-export function usageByRefs(
+export async function usageByRefs(
   db: DB,
   userId: string,
   refIds: string[],
-): Record<string, AiUsageEntry> {
+): Promise<Record<string, AiUsageEntry>> {
   return debugRepo.findUsageByRefs(db, userId, refIds.slice(0, 200))
 }
 
 /** 会话最近的群聊决策记录 */
-export function listGroupDecisions(
+export async function listGroupDecisions(
   db: DB,
   userId: string,
   conversationId: string,
   limit: number,
-): AiGroupDecision[] {
-  assertConversationMember(db, userId, conversationId)
+): Promise<AiGroupDecision[]> {
+  await assertConversationMember(db, userId, conversationId)
   return debugRepo.listDecisions(db, conversationId, Math.min(Math.max(limit, 1), 500))
 }

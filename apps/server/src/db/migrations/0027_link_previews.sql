@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS link_previews (
   site_name   TEXT,
   author      TEXT,
   video_id    TEXT,
-  fetched_at  INTEGER NOT NULL
+  fetched_at  BIGINT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_link_previews_fetched

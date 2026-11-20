@@ -47,7 +47,7 @@ export async function handleRequest(
 
       case 'message.send': {
         const input = SendMessageSchema.parse(rawPayload)
-        const result = messageService.send(db, {
+        const result = await messageService.send(db, {
           conversationId: input.conversationId,
           senderId: userId,
           clientNonce: input.clientNonce,
@@ -59,7 +59,7 @@ export async function handleRequest(
         })
         sendResponse(conn, id, true, result)
         if (!result.duplicated && input.type === 'text') {
-          scheduleGroupResponse(db, {
+          void scheduleGroupResponse(db, {
             conversationId: input.conversationId,
             messageId: result.message.id,
             senderId: userId,
@@ -75,7 +75,7 @@ export async function handleRequest(
         const parsed = z
           .object({ messageId: z.string().min(1), content: z.string().min(1).max(8000) })
           .parse(rawPayload)
-        const message = messageService.edit(db, {
+        const message = await messageService.edit(db, {
           messageId: parsed.messageId,
           userId,
           content: parsed.content,
@@ -87,14 +87,14 @@ export async function handleRequest(
 
       case 'message.delete': {
         const parsed = IdSchema.parse(rawPayload)
-        const message = messageService.recall(db, { messageId: parsed.messageId, userId })
+        const message = await messageService.recall(db, { messageId: parsed.messageId, userId })
         sendResponse(conn, id, true, { message })
         return
       }
 
       case 'typing': {
         const parsed = TypingSchema.parse(rawPayload)
-        emitTyping(db, {
+        await emitTyping(db, {
           conversationId: parsed.conversationId,
           userId,
           state: parsed.state,
@@ -106,14 +106,14 @@ export async function handleRequest(
 
       case 'read': {
         const parsed = ReadPayloadSchema.parse(rawPayload)
-        const result = messageService.markRead(db, {
+        const result = await messageService.markRead(db, {
           conversationId: parsed.conversationId,
           userId,
           seq: parsed.messageSeq,
           deviceId: conn.deviceId,
         })
         if (result.advanced) {
-          emitReadReceipt(db, {
+          await emitReadReceipt(db, {
             conversationId: parsed.conversationId,
             userId,
             messageSeq: result.lastReadSeq,
@@ -127,14 +127,14 @@ export async function handleRequest(
 
       case 'presence': {
         const parsed = PresenceSchema.parse(rawPayload)
-        touchPresence(db, userId, parsed.status)
+        await touchPresence(db, userId, parsed.status)
         sendResponse(conn, id, true, { ok: true })
         return
       }
 
       case 'sync.pull': {
         const parsed = SyncPullSchema.parse(rawPayload)
-        const batch = listChanges(db, userId, parsed.since, parsed.limit ?? 500)
+        const batch = await listChanges(db, userId, parsed.since, parsed.limit ?? 500)
         sendResponse(conn, id, true, batch)
         return
       }

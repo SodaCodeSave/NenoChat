@@ -73,7 +73,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
             const decoded = await app.jwt.verify<AccessTokenPayload>(payload.token)
             if (decoded.typ !== 'access') throw new Error('bad token type')
 
-            const user = usersRepo.findById(db, decoded.sub)
+            const user = await usersRepo.findById(db, decoded.sub)
             if (!user || user.status === 'disabled') throw new Error('user unavailable')
 
             clearTimeout(authTimer)
@@ -82,9 +82,9 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
             conn.cursor = Number.isFinite(payload.cursor) ? Math.max(0, payload.cursor) : 0
 
             hub.add(conn)
-            touchPresence(db, decoded.sub, 'online')
+            await touchPresence(db, decoded.sub, 'online')
 
-            const head = maxCursor(db)
+            const head = await maxCursor(db)
             sendEvent(conn, 'auth.ok', {
               user: usersRepo.mapUser(user),
               sessionId: conn.id,
@@ -94,7 +94,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
             })
 
             conn.state = 'catchingUp'
-            completeHandshake(conn, db)
+            void completeHandshake(conn, db)
           } catch {
             sendResponse(conn, frame.id, false, null, {
               code: 'UNAUTHENTICATED',
@@ -118,7 +118,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
       clearTimeout(authTimer)
       hub.remove(conn)
       if (conn.userId && !hub.isOnline(conn.userId)) {
-        touchPresence(db, conn.userId, 'offline')
+        void touchPresence(db, conn.userId, 'offline')
       }
     })
 

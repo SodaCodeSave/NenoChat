@@ -1,5 +1,5 @@
 import type { Device } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, run, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 export interface DeviceRow {
@@ -31,9 +31,10 @@ export interface DeviceUpsert {
   appVersion?: string | undefined
 }
 
-export function upsert(db: DB, userId: string, device: DeviceUpsert): void {
+export async function upsert(db: Executor, userId: string, device: DeviceUpsert): Promise<void> {
   const ts = now()
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO devices (id, user_id, name, platform, app_version, created_at, last_active_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, id) DO UPDATE SET
@@ -41,24 +42,25 @@ export function upsert(db: DB, userId: string, device: DeviceUpsert): void {
        platform = excluded.platform,
        app_version = excluded.app_version,
        last_active_at = excluded.last_active_at`,
-  ).run(device.id, userId, device.name, device.platform, device.appVersion ?? null, ts, ts)
-}
-
-export function list(db: DB, userId: string): DeviceRow[] {
-  return db
-    .prepare('SELECT * FROM devices WHERE user_id = ? ORDER BY last_active_at DESC')
-    .all(userId) as DeviceRow[]
-}
-
-/** 仅刷新活跃时间，不改设备名 */
-export function touch(db: DB, userId: string, deviceId: string): void {
-  db.prepare('UPDATE devices SET last_active_at = ? WHERE user_id = ? AND id = ?').run(
-    now(),
-    userId,
-    deviceId,
+    [device.id, userId, device.name, device.platform, device.appVersion ?? null, ts, ts],
   )
 }
 
-export function remove(db: DB, userId: string, deviceId: string): void {
-  db.prepare('DELETE FROM devices WHERE user_id = ? AND id = ?').run(userId, deviceId)
+export async function list(db: Executor, userId: string): Promise<DeviceRow[]> {
+  return all<DeviceRow>(db, 'SELECT * FROM devices WHERE user_id = ? ORDER BY last_active_at DESC', [
+    userId,
+  ])
+}
+
+/** 仅刷新活跃时间，不改设备名 */
+export async function touch(db: Executor, userId: string, deviceId: string): Promise<void> {
+  await run(db, 'UPDATE devices SET last_active_at = ? WHERE user_id = ? AND id = ?', [
+    now(),
+    userId,
+    deviceId,
+  ])
+}
+
+export async function remove(db: Executor, userId: string, deviceId: string): Promise<void> {
+  await run(db, 'DELETE FROM devices WHERE user_id = ? AND id = ?', [userId, deviceId])
 }

@@ -6,17 +6,17 @@ CREATE TABLE IF NOT EXISTS connectors (
   -- deepseek_search | bilibili
   type             TEXT NOT NULL,
   name             TEXT NOT NULL,
-  enabled          INTEGER NOT NULL DEFAULT 1,
+  enabled          BIGINT NOT NULL DEFAULT 1,
   -- 非敏感配置 JSON，如 baseUrl / count / maxComments
   config           TEXT NOT NULL DEFAULT '{}',
   -- 加密后的敏感配置 JSON，如 { apiKey } / { cookie }
   secret_enc       TEXT,
-  last_test_at     INTEGER,
-  last_test_ok     INTEGER,
+  last_test_at     BIGINT,
+  last_test_ok     BIGINT,
   last_test_message TEXT,
-  created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL,
-  deleted_at       INTEGER
+  created_at       BIGINT NOT NULL,
+  updated_at       BIGINT NOT NULL,
+  deleted_at       BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS ix_connectors_owner

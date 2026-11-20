@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -14,6 +15,7 @@ import {
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-proactive-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
 process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
@@ -66,7 +68,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close()
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -296,16 +298,17 @@ describe('decideProactiveFire 无上限配额', () => {
 
 describe('reserveSlot 配额占位', () => {
   it('同日同会话按 maxPerDay 顺序占位，用尽后返回 null', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one } = await import('../src/db')
     const { reserveSlot } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
-    const userId = (
-      db.prepare('SELECT id FROM users WHERE username = ?').get('proactive_user') as { id: string }
-    ).id
-    const personaId = (
-      db.prepare('SELECT id FROM ai_personas ORDER BY created_at LIMIT 1').get() as { id: string }
-    ).id
+    const userId = (await one<{ id: string }>(db, 'SELECT id FROM users WHERE username = ?', [
+      'proactive_user',
+    ]))!.id
+    const personaId = (await one<{ id: string }>(
+      db,
+      'SELECT id FROM ai_personas ORDER BY created_at LIMIT 1',
+    ))!.id
 
     const args = {
       conversationId,
@@ -316,22 +319,23 @@ describe('reserveSlot 配额占位', () => {
       now: Date.now(),
     }
 
-    expect(reserveSlot(db, args)).toBe(0)
-    expect(reserveSlot(db, args)).toBe(1)
-    expect(reserveSlot(db, args)).toBeNull()
+    expect(await reserveSlot(db, args)).toBe(0)
+    expect(await reserveSlot(db, args)).toBe(1)
+    expect(await reserveSlot(db, args)).toBeNull()
   })
 
   it('maxPerDay 为负数时无上限，slot 一直递增', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one } = await import('../src/db')
     const { reserveSlot } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
-    const userId = (
-      db.prepare('SELECT id FROM users WHERE username = ?').get('proactive_user') as { id: string }
-    ).id
-    const personaId = (
-      db.prepare('SELECT id FROM ai_personas ORDER BY created_at LIMIT 1').get() as { id: string }
-    ).id
+    const userId = (await one<{ id: string }>(db, 'SELECT id FROM users WHERE username = ?', [
+      'proactive_user',
+    ]))!.id
+    const personaId = (await one<{ id: string }>(
+      db,
+      'SELECT id FROM ai_personas ORDER BY created_at LIMIT 1',
+    ))!.id
 
     const args = {
       conversationId,
@@ -343,30 +347,33 @@ describe('reserveSlot 配额占位', () => {
     }
 
     for (let i = 0; i < 5; i++) {
-      expect(reserveSlot(db, args)).toBe(i)
+      expect(await reserveSlot(db, args)).toBe(i)
     }
   })
 
   it('chance 掷骰标记复用 slot，不影响真实消息占位', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one, run } = await import('../src/db')
     const { reserveSlot } = await import('../src/services/proactive-service')
-    const db = getDb() as unknown as import('better-sqlite3').Database
+    const db = getDb()
 
-    const userId = (
-      db.prepare('SELECT id FROM users WHERE username = ?').get('proactive_user') as { id: string }
-    ).id
-    const personaId = (
-      db.prepare('SELECT id FROM ai_personas ORDER BY created_at LIMIT 1').get() as { id: string }
-    ).id
+    const userId = (await one<{ id: string }>(db, 'SELECT id FROM users WHERE username = ?', [
+      'proactive_user',
+    ]))!.id
+    const personaId = (await one<{ id: string }>(
+      db,
+      'SELECT id FROM ai_personas ORDER BY created_at LIMIT 1',
+    ))!.id
 
     const dayKey = '2026-11-18'
     // 先留两条掷骰未中的标记（slot 0）
     for (let i = 0; i < 2; i++) {
-      db.prepare(
+      await run(
+        db,
         `INSERT INTO ai_proactive_log
            (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
          VALUES (?, ?, ?, ?, ?, 0, ?, 'skipped', NULL, 'chance_miss')`,
-      ).run(`miss-${dayKey}-${i}`, conversationId, userId, personaId, dayKey, Date.now())
+        [`miss-${dayKey}-${i}`, conversationId, userId, personaId, dayKey, Date.now()],
+      )
     }
 
     // 真实消息仍然从 slot 0 开始占位，不受标记影响
@@ -378,7 +385,7 @@ describe('reserveSlot 配额占位', () => {
       maxPerDay: 1,
       now: Date.now(),
     }
-    expect(reserveSlot(db, reserveArgs)).toBe(0)
-    expect(reserveSlot(db, reserveArgs)).toBeNull()
+    expect(await reserveSlot(db, reserveArgs)).toBe(0)
+    expect(await reserveSlot(db, reserveArgs)).toBeNull()
   })
 })

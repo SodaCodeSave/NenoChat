@@ -1,5 +1,5 @@
 import { ulid } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, one, run, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 export interface ConnectorRow {
@@ -18,30 +18,28 @@ export interface ConnectorRow {
   deleted_at: number | null
 }
 
-export function listConnectors(db: DB, ownerId: string): ConnectorRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM connectors
-       WHERE owner_id = ? AND deleted_at IS NULL
-       ORDER BY created_at`,
-    )
-    .all(ownerId) as ConnectorRow[]
+export async function listConnectors(db: Executor, ownerId: string): Promise<ConnectorRow[]> {
+  return all<ConnectorRow>(
+    db,
+    `SELECT * FROM connectors
+     WHERE owner_id = ? AND deleted_at IS NULL
+     ORDER BY created_at`,
+    [ownerId],
+  )
 }
 
-export function listEnabledByType(db: DB, ownerId: string, type: string): ConnectorRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM connectors
-       WHERE owner_id = ? AND type = ? AND enabled = 1 AND deleted_at IS NULL
-       ORDER BY created_at`,
-    )
-    .all(ownerId, type) as ConnectorRow[]
+export async function listEnabledByType(db: Executor, ownerId: string, type: string): Promise<ConnectorRow[]> {
+  return all<ConnectorRow>(
+    db,
+    `SELECT * FROM connectors
+     WHERE owner_id = ? AND type = ? AND enabled = 1 AND deleted_at IS NULL
+     ORDER BY created_at`,
+    [ownerId, type],
+  )
 }
 
-export function findConnector(db: DB, id: string): ConnectorRow | undefined {
-  return db
-    .prepare('SELECT * FROM connectors WHERE id = ? AND deleted_at IS NULL')
-    .get(id) as ConnectorRow | undefined
+export async function findConnector(db: Executor, id: string): Promise<ConnectorRow | undefined> {
+  return one<ConnectorRow>(db, 'SELECT * FROM connectors WHERE id = ? AND deleted_at IS NULL', [id])
 }
 
 export interface CreateConnectorInput {
@@ -53,26 +51,28 @@ export interface CreateConnectorInput {
   secretEnc: string | null
 }
 
-export function createConnector(db: DB, input: CreateConnectorInput): ConnectorRow {
+export async function createConnector(db: Executor, input: CreateConnectorInput): Promise<ConnectorRow> {
   const ts = now()
   const id = ulid()
-  db.prepare(
+  const row = await one<ConnectorRow>(
+    db,
     `INSERT INTO connectors
        (id, owner_id, type, name, enabled, config, secret_enc,
         last_test_at, last_test_ok, last_test_message, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
-  ).run(
-    id,
-    input.ownerId,
-    input.type,
-    input.name,
-    input.enabled ? 1 : 0,
-    input.config,
-    input.secretEnc,
-    ts,
-    ts,
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)
+     RETURNING *`,
+    [
+      id,
+      input.ownerId,
+      input.type,
+      input.name,
+      input.enabled ? 1 : 0,
+      input.config,
+      input.secretEnc,
+      ts,
+      ts,
+    ],
   )
-  const row = findConnector(db, id)
   if (!row) throw new Error('创建连接器后回读失败')
   return row
 }
@@ -85,41 +85,45 @@ export interface UpdateConnectorInput {
   secretEnc?: string | null
 }
 
-export function updateConnector(db: DB, id: string, patch: UpdateConnectorInput): ConnectorRow {
-  const current = findConnector(db, id)
+export async function updateConnector(db: Executor, id: string, patch: UpdateConnectorInput): Promise<ConnectorRow> {
+  const current = await findConnector(db, id)
   if (!current) throw new Error('连接器不存在')
 
-  db.prepare(
+  const row = await one<ConnectorRow>(
+    db,
     `UPDATE connectors
      SET name = ?, enabled = ?, config = ?, secret_enc = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    patch.name ?? current.name,
-    patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0,
-    patch.config ?? current.config,
-    patch.secretEnc === undefined ? current.secret_enc : patch.secretEnc,
-    now(),
-    id,
+     WHERE id = ?
+     RETURNING *`,
+    [
+      patch.name ?? current.name,
+      patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0,
+      patch.config ?? current.config,
+      patch.secretEnc === undefined ? current.secret_enc : patch.secretEnc,
+      now(),
+      id,
+    ],
   )
-  const row = findConnector(db, id)
   if (!row) throw new Error('更新连接器后回读失败')
   return row
 }
 
-export function softDeleteConnector(db: DB, id: string): void {
-  db.prepare('UPDATE connectors SET deleted_at = ?, updated_at = ? WHERE id = ?').run(
+export async function softDeleteConnector(db: Executor, id: string): Promise<void> {
+  await run(db, 'UPDATE connectors SET deleted_at = ?, updated_at = ? WHERE id = ?', [
     now(),
     now(),
     id,
-  )
+  ])
 }
 
-export function saveTestResult(
-  db: DB,
+export async function saveTestResult(
+  db: Executor,
   id: string,
   result: { ok: boolean; message: string },
-): void {
-  db.prepare(
+): Promise<void> {
+  await run(
+    db,
     'UPDATE connectors SET last_test_at = ?, last_test_ok = ?, last_test_message = ? WHERE id = ?',
-  ).run(now(), result.ok ? 1 : 0, result.message.slice(0, 200), id)
+    [now(), result.ok ? 1 : 0, result.message.slice(0, 200), id],
+  )
 }

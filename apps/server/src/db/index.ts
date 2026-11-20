@@ -1,72 +1,95 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import Database from 'better-sqlite3'
+import { Pool, PoolClient, types } from 'pg'
 import { env } from '../env'
 import { runMigrations } from './migrate'
 
-export type DB = Database.Database
-export type Statement = Database.Statement
+export type Executor = Pool | PoolClient
 
-let instance: DB | null = null
+/** 兼容别名：历史代码里的 DB 即 Executor（连接池或事务内客户端） */
+export type DB = Executor
 
-const stmtCache = new WeakMap<DB, Map<string, Statement>>()
+// pg 默认把 BIGINT（int8, oid 20）解析成字符串，这里改回 number；
+// 时间戳、seq、计数器等 BIGINT 列的数值都在安全整数范围内
+types.setTypeParser(20, (v) => Number(v))
 
-/**
- * 预编译语句缓存：同一条 SQL 只解析编译一次。
- * 热路径上的查询频繁重复同构 SQL，直接复用语句对象可省去每次 prepare 的解析开销。
- */
-export function stmt(db: DB, sql: string): Statement {
-  let cache = stmtCache.get(db)
-  if (!cache) {
-    cache = new Map()
-    stmtCache.set(db, cache)
-  }
-  let prepared = cache.get(sql)
-  if (!prepared) {
-    prepared = db.prepare(sql)
-    cache.set(sql, prepared)
-  }
-  return prepared
-}
+let instance: Pool | null = null
 
-function ensureDataDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true })
-}
-
-/**
- * 打开（或复用）服务端主库连接。
- * better-sqlite3 是同步 API，配合 WAL 后单连接足以承载自建服务器的并发量，
- * 同时让「发消息」这种多表写入能在一个事务里同步写完，不会出现 seq 空洞。
- */
-export function getDb(): DB {
+/** 打开（或复用）服务端连接池 */
+export function getDb(): Pool {
   if (instance) return instance
 
-  ensureDataDir(env.DATA_DIR)
-  const file = path.isAbsolute(env.DATA_DIR) ? env.DATA_DIR : path.resolve(process.cwd(), env.DATA_DIR)
-  const dbPath = path.join(file, 'nenochat.db')
-
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-  db.pragma('synchronous = NORMAL')
-  db.pragma('foreign_keys = ON')
-  db.pragma('busy_timeout = 5000')
-  db.pragma('temp_store = MEMORY')
-  db.pragma('mmap_size = 268435456')
-  // 页缓存调大到 64MB（负值表示以 KB 计），减少大库下的磁盘读
-  db.pragma('cache_size = -65536')
-
-  runMigrations(db)
-  instance = db
-  return db
+  instance = new Pool({
+    // 建池时才取值：测试文件可能在 src 模块静态 import 之后才写入 DATABASE_URL
+    connectionString: process.env.DATABASE_URL ?? env.DATABASE_URL,
+    max: 10,
+    idleTimeoutMillis: 30_000,
+  })
+  return instance
 }
 
-export function closeDb(): void {
-  instance?.close()
+export async function closeDb(): Promise<void> {
+  if (!instance) return
+  const pool = instance
   instance = null
+  migrationsPromise = null
+  await pool.end()
+}
+
+let migrationsPromise: Promise<void> | null = null
+
+/** 打开连接池并执行迁移；幂等，启动流程调用一次即可 */
+export async function initDb(): Promise<Pool> {
+  const pool = getDb()
+  if (!migrationsPromise) {
+    migrationsPromise = runMigrations(pool)
+  }
+  await migrationsPromise
+  return pool
 }
 
 export function dataDir(): string {
-  const dir = path.isAbsolute(env.DATA_DIR) ? env.DATA_DIR : path.resolve(process.cwd(), env.DATA_DIR)
-  ensureDataDir(dir)
+  // 取值延迟到调用时刻：测试文件可能在 src 模块静态 import 之后才写入 DATA_DIR
+  const dir = path.isAbsolute(process.env.DATA_DIR ?? env.DATA_DIR)
+    ? (process.env.DATA_DIR ?? env.DATA_DIR)
+    : path.resolve(process.cwd(), process.env.DATA_DIR ?? env.DATA_DIR)
+  fs.mkdirSync(dir, { recursive: true })
   return dir
+}
+
+const pgSqlCache = new Map<string, string>()
+
+/** SQLite 风格的 ? 占位符转成 PG 的 $n，转换结果缓存避免重复替换 */
+function toPgSql(sql: string): string {
+  let converted = pgSqlCache.get(sql)
+  if (converted === undefined) {
+    let index = 0
+    converted = sql.replace(/\?/g, () => `$${++index}`)
+    pgSqlCache.set(sql, converted)
+  }
+  return converted
+}
+
+export function all<T = Record<string, unknown>>(
+  db: Executor,
+  sql: string,
+  params: unknown[] = [],
+): Promise<T[]> {
+  return db.query(toPgSql(sql), params).then((r) => r.rows as T[])
+}
+
+export function one<T = Record<string, unknown>>(
+  db: Executor,
+  sql: string,
+  params: unknown[] = [],
+): Promise<T | undefined> {
+  return db.query(toPgSql(sql), params).then((r) => r.rows[0] as T | undefined)
+}
+
+export interface RunResult {
+  changes: number
+}
+
+export function run(db: Executor, sql: string, params: unknown[] = []): Promise<RunResult> {
+  return db.query(toPgSql(sql), params).then((r) => ({ changes: r.rowCount ?? 0 }))
 }

@@ -2,6 +2,7 @@ import { Cron } from 'croner'
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import { PROACTIVE_DEFAULTS, buildProactivePrompt, splitSegments, ulid, type ProactiveConfig } from '@nenochat/shared'
 import type { DB } from '../db'
+import { all, one, run } from '../db'
 import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
@@ -107,31 +108,31 @@ function resolveConfig(row: CandidateRow): ProactiveConfig {
 }
 
 /** 一条 SQL 把所有候选与其判定所需的计数带出来，避免每个角色查五次 */
-function listCandidates(db: DB, dayKey: string): CandidateRow[] {
-  return db
-    .prepare(
-      `SELECT p.id                AS persona_id,
-              p.owner_id          AS owner_id,
-              p.proactive_config  AS proactive_config,
-              p.proactive_enabled AS proactive_enabled,
-              p.proactive_mode    AS proactive_mode,
-              g.proactive_config  AS global_config,
-              g.proactive_enabled AS global_enabled,
-              c.id                AS conversation_id,
-              c.created_at        AS conversation_created_at,
-              (SELECT MAX(m.created_at) FROM messages m
-                WHERE m.conversation_id = c.id
-                  AND m.sender_id = p.owner_id
-                  AND m.deleted_at IS NULL)                              AS last_user_message_at,
-              (SELECT MAX(l.fired_at) FROM ai_proactive_log l
-                WHERE l.conversation_id = c.id
-                  AND l.status IN ('sent', 'dispatched'))                 AS last_proactive_at,
-              (SELECT MAX(l.fired_at) FROM ai_proactive_log l
-                WHERE l.conversation_id = c.id)                            AS last_log_at,
-              (SELECT COUNT(*) FROM ai_proactive_log l2
-                WHERE l2.conversation_id = c.id
-                  AND l2.day_key = ?
-                  AND l2.status IN ('pending', 'dispatched', 'sent'))      AS sent_today
+async function listCandidates(db: DB, dayKey: string): Promise<CandidateRow[]> {
+  return all<CandidateRow>(
+    db,
+    `SELECT p.id                AS persona_id,
+            p.owner_id          AS owner_id,
+            p.proactive_config  AS proactive_config,
+            p.proactive_enabled AS proactive_enabled,
+            p.proactive_mode    AS proactive_mode,
+            g.proactive_config  AS global_config,
+            g.proactive_enabled AS global_enabled,
+            c.id                AS conversation_id,
+            c.created_at        AS conversation_created_at,
+            (SELECT MAX(m.created_at) FROM messages m
+              WHERE m.conversation_id = c.id
+                AND m.sender_id = p.owner_id
+                AND m.deleted_at IS NULL)                              AS last_user_message_at,
+            (SELECT MAX(l.fired_at) FROM ai_proactive_log l
+              WHERE l.conversation_id = c.id
+                AND l.status IN ('sent', 'dispatched'))                 AS last_proactive_at,
+            (SELECT MAX(l.fired_at) FROM ai_proactive_log l
+              WHERE l.conversation_id = c.id)                            AS last_log_at,
+            (SELECT COUNT(*) FROM ai_proactive_log l2
+              WHERE l2.conversation_id = c.id
+                AND l2.day_key = ?
+                AND l2.status IN ('pending', 'dispatched', 'sent'))      AS sent_today
        FROM ai_personas p
        JOIN conversations c
          ON c.type = 'ai' AND c.ai_persona_id = p.id AND c.deleted_at IS NULL
@@ -142,15 +143,15 @@ function listCandidates(db: DB, dayKey: string): CandidateRow[] {
            (p.proactive_mode = 'custom' AND p.proactive_enabled = 1)
            OR (p.proactive_mode <> 'custom' AND g.proactive_enabled = 1)
          )`,
-    )
-    .all(dayKey) as CandidateRow[]
+    [dayKey],
+  )
 }
 
 /**
  * 先占位再生成：唯一索引 (conversation_id, day_key, slot) 保证
  * 多实例同时扫描时只有一个能抢到这一格。
  */
-export function reserveSlot(
+export async function reserveSlot(
   db: DB,
   input: {
     conversationId: string
@@ -160,26 +161,29 @@ export function reserveSlot(
     maxPerDay: number
     now: number
   },
-): number | null {
-  return withTx(db, () => {
-    const used = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM ai_proactive_log
+): Promise<number | null> {
+  return withTx(db, async (tx) => {
+    const usedRow = await one<{ c: number }>(
+      tx,
+      `SELECT COUNT(*) AS c FROM ai_proactive_log
          WHERE conversation_id = ? AND day_key = ?
            AND status IN ('pending', 'dispatched', 'sent')`,
-      )
-      .get(input.conversationId, input.dayKey) as { c: number }
+      [input.conversationId, input.dayKey],
+    )
+    const used = usedRow?.c ?? 0
 
     // maxPerDay < 0 表示无上限，只受唯一索引约束
-    if (input.maxPerDay >= 0 && used.c >= input.maxPerDay) return null
-    const slot = used.c
+    if (input.maxPerDay >= 0 && used >= input.maxPerDay) return null
+    const slot = used
 
     try {
-      db.prepare(
+      await run(
+        tx,
         `INSERT INTO ai_proactive_log
            (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL)`,
-      ).run(ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, slot, input.now)
+        [ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, slot, input.now],
+      )
       return slot
     } catch {
       // 唯一索引冲突：另一个实例已经抢到同一格
@@ -188,7 +192,7 @@ export function reserveSlot(
   })
 }
 
-function finishSlot(
+async function finishSlot(
   db: DB,
   input: {
     conversationId: string
@@ -198,17 +202,19 @@ function finishSlot(
     messageId?: string | null
     reason?: string | null
   },
-): void {
-  db.prepare(
+): Promise<void> {
+  await run(
+    db,
     `UPDATE ai_proactive_log SET status = ?, message_id = ?, reason = ?
-     WHERE conversation_id = ? AND day_key = ? AND slot = ?`,
-  ).run(
-    input.status,
-    input.messageId ?? null,
-    input.reason ?? null,
-    input.conversationId,
-    input.dayKey,
-    input.slot,
+       WHERE conversation_id = ? AND day_key = ? AND slot = ?`,
+    [
+      input.status,
+      input.messageId ?? null,
+      input.reason ?? null,
+      input.conversationId,
+      input.dayKey,
+      input.slot,
+    ],
   )
 }
 
@@ -216,16 +222,18 @@ function finishSlot(
  * chance 模式掷骰未中：留一条 skipped 标记推进掷骰间隔，不占每日配额。
  * 标记只保留两天，太旧的在扫描时清掉。
  */
-function recordChanceMiss(
+async function recordChanceMiss(
   db: DB,
   input: { conversationId: string; userId: string; personaId: string; dayKey: string; now: number },
-): void {
+): Promise<void> {
   try {
-    db.prepare(
+    await run(
+      db,
       `INSERT INTO ai_proactive_log
          (id, conversation_id, user_id, persona_id, day_key, slot, fired_at, status, message_id, reason)
        VALUES (?, ?, ?, ?, ?, 0, ?, 'skipped', NULL, 'chance_miss')`,
-    ).run(ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, input.now)
+      [ulid(), input.conversationId, input.userId, input.personaId, input.dayKey, input.now],
+    )
   } catch {
     // 并发下另一个实例已经标记过本轮，忽略
   }
@@ -241,7 +249,7 @@ async function fireOnServer(
   log: FastifyBaseLogger,
 ): Promise<void> {
   const config = resolveConfig(candidate)
-  const slot = reserveSlot(db, {
+  const slot = await reserveSlot(db, {
     conversationId: candidate.conversation_id,
     userId: candidate.owner_id,
     personaId: persona.id,
@@ -251,10 +259,10 @@ async function fireOnServer(
   })
   if (slot === null) return
 
-  const session = aiRepo.findSession(db, candidate.conversation_id)
-  const provider = session ? aiRepo.findProvider(db, session.provider_id) : undefined
+  const session = await aiRepo.findSession(db, candidate.conversation_id)
+  const provider = session ? await aiRepo.findProvider(db, session.provider_id) : undefined
   if (!provider) {
-    finishSlot(db, {
+    await finishSlot(db, {
       conversationId: candidate.conversation_id,
       dayKey,
       slot,
@@ -266,7 +274,7 @@ async function fireOnServer(
 
   // 关闭的模型不可被选用：不消耗当天额度，跳过本轮主动消息
   if (!isModelEnabled(provider, persona.model_override ?? provider.model)) {
-    finishSlot(db, {
+    await finishSlot(db, {
       conversationId: candidate.conversation_id,
       dayKey,
       slot,
@@ -279,16 +287,16 @@ async function fireOnServer(
   const mapped = aiRepo.mapPersona(persona)
   const schedule = await scheduleService.ensureScheduleQuietly(db, persona)
   let weatherContext: string | null = null
-  const weather = enabledConnectorOfType(db, candidate.owner_id, 'heweather')
+  const weather = await enabledConnectorOfType(db, candidate.owner_id, 'heweather')
   if (weather) {
     try {
-      const config = JSON.parse(weather.config || '{}') as Record<string, unknown>
-      if (config.weatherOnUserMessage) weatherContext = await fetchHeweather(weather)
+      const weatherConfig = JSON.parse(weather.config || '{}') as Record<string, unknown>
+      if (weatherConfig.weatherOnUserMessage) weatherContext = await fetchHeweather(weather)
     } catch { /* weather is optional context */ }
   }
   const messages = buildProactivePrompt({
     persona: mapped,
-    memoryDigest: buildMemoryDigest(db, candidate.conversation_id),
+    memoryDigest: await buildMemoryDigest(db, candidate.conversation_id),
     idleHours: decision.idleHours,
     localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
     schedule,
@@ -321,7 +329,7 @@ async function fireOnServer(
       .trim()
   } catch (e) {
     log.warn({ err: e, personaId: persona.id }, '主动消息生成失败')
-    finishSlot(db, {
+    await finishSlot(db, {
       conversationId: candidate.conversation_id,
       dayKey,
       slot,
@@ -332,13 +340,13 @@ async function fireOnServer(
   }
 
   // 主动搭话最多两条，多了像刷屏
-  const settings = aiRepo.readGlobalSettings(db, candidate.owner_id)
+  const settings = await aiRepo.readGlobalSettings(db, candidate.owner_id)
   const segments = splitSegments(reply, {
     enabled: settings.segmentEnabled,
     pattern: settings.segmentPattern,
   }).slice(0, 2)
   if (segments.length === 0) {
-    finishSlot(db, {
+    await finishSlot(db, {
       conversationId: candidate.conversation_id,
       dayKey,
       slot,
@@ -351,7 +359,7 @@ async function fireOnServer(
   const generationId = `proactive-${candidate.conversation_id}-${dayKey}-${slot}`
   const messageIds: string[] = []
   for (let index = 0; index < segments.length; index++) {
-    const message = appendAiSegment(db, candidate.conversation_id, {
+    const message = await appendAiSegment(db, candidate.conversation_id, {
       generationId,
       index,
       content: segments[index]!,
@@ -364,8 +372,8 @@ async function fireOnServer(
     messageIds.push(message.id)
   }
 
-  db.prepare('UPDATE ai_personas SET last_proactive_at = ? WHERE id = ?').run(Date.now(), persona.id)
-  finishSlot(db, {
+  await run(db, 'UPDATE ai_personas SET last_proactive_at = ? WHERE id = ?', [Date.now(), persona.id])
+  await finishSlot(db, {
     conversationId: candidate.conversation_id,
     dayKey,
     slot,
@@ -380,22 +388,26 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
   const dayKey = localDayKey(now, TZ_OFFSET_MIN)
 
   // 上次进程崩溃留下的 pending 会一直占着配额，先释放
-  db.prepare(
+  await run(
+    db,
     `UPDATE ai_proactive_log SET status = 'failed', reason = 'stale_pending'
-     WHERE status = 'pending' AND fired_at < ?`,
-  ).run(now - STALE_PENDING_MS)
+       WHERE status = 'pending' AND fired_at < ?`,
+    [now - STALE_PENDING_MS],
+  )
 
   // 掷骰标记只用来推进间隔，两天前的可以直接清掉
-  db.prepare(
+  await run(
+    db,
     `DELETE FROM ai_proactive_log
-     WHERE status = 'skipped' AND reason = 'chance_miss' AND fired_at < ?`,
-  ).run(now - 2 * 24 * 60 * 60_000)
+       WHERE status = 'skipped' AND reason = 'chance_miss' AND fired_at < ?`,
+    [now - 2 * 24 * 60 * 60_000],
+  )
 
-  const candidates = listCandidates(db, dayKey)
+  const candidates = await listCandidates(db, dayKey)
   if (candidates.length === 0) return
 
   for (const candidate of candidates) {
-    const persona = aiRepo.findPersona(db, candidate.persona_id)
+    const persona = await aiRepo.findPersona(db, candidate.persona_id)
     if (!persona) continue
 
     const config = resolveConfig(candidate)
@@ -417,7 +429,7 @@ export async function scanOnce(db: DB, log: FastifyBaseLogger): Promise<void> {
     if (!decision.fire) {
       // 掷骰未中也要留痕，否则下一轮扫描会立刻重掷，概率语义就变了
       if (decision.reason === 'chance_miss') {
-        recordChanceMiss(db, {
+        await recordChanceMiss(db, {
           conversationId: candidate.conversation_id,
           userId: candidate.owner_id,
           personaId: candidate.persona_id,
@@ -462,18 +474,18 @@ export function startProactiveScheduler(app: FastifyInstance, db: DB): () => voi
 }
 
 /** 供测试直接调用：不经过定时器判断当前角色是否该发 */
-export function evaluateCandidate(
+export async function evaluateCandidate(
   db: DB,
   conversationId: string,
   now = Date.now(),
-): { decision: ProactiveDecision; persona: aiRepo.PersonaRow | null } | null {
-  const conversation = conversationsRepo.findById(db, conversationId)
+): Promise<{ decision: ProactiveDecision; persona: aiRepo.PersonaRow | null } | null> {
+  const conversation = await conversationsRepo.findById(db, conversationId)
   if (!conversation?.ai_persona_id) return null
-  const persona = aiRepo.findPersona(db, conversation.ai_persona_id)
+  const persona = await aiRepo.findPersona(db, conversation.ai_persona_id)
   if (!persona) return null
 
   const dayKey = localDayKey(now, TZ_OFFSET_MIN)
-  const row = listCandidates(db, dayKey).find((c) => c.conversation_id === conversationId)
+  const row = (await listCandidates(db, dayKey)).find((c) => c.conversation_id === conversationId)
   if (!row) return null
 
   const config = resolveConfig(row)

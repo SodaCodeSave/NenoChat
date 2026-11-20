@@ -39,7 +39,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
         throw err.tooLarge(`文件不能超过 ${Math.round(MAX_UPLOAD_FILE_BYTES / 1048576)}MB`)
       }
 
-      const attachment = saveUpload(db, {
+      const attachment = await saveUpload(db, {
         userId,
         buffer,
         filename: part.filename ?? 'file',

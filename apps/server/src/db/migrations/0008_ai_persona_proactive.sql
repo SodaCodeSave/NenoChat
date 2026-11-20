@@ -1,12 +1,10 @@
 -- 角色扩展：兴趣标签、角色卡、通讯录可见性、主动消息节流
--- SQLite 的 ADD COLUMN 不能加 UNIQUE/PRIMARY KEY，NOT NULL 必须带常量默认值
-
 ALTER TABLE ai_personas ADD COLUMN interests TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE ai_personas ADD COLUMN card TEXT;
 ALTER TABLE ai_personas ADD COLUMN card_url TEXT;
 ALTER TABLE ai_personas ADD COLUMN card_filename TEXT;
-ALTER TABLE ai_personas ADD COLUMN in_contacts INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE ai_personas ADD COLUMN last_proactive_at INTEGER;
+ALTER TABLE ai_personas ADD COLUMN in_contacts BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE ai_personas ADD COLUMN last_proactive_at BIGINT;
 
 CREATE INDEX IF NOT EXISTS ix_aipers_contacts
   ON ai_personas(owner_id, in_contacts, deleted_at);
@@ -22,8 +20,8 @@ CREATE TABLE ai_proactive_log (
   -- 服务端时区下的 YYYY-MM-DD，用于「每日上限」与跨实例防重
   day_key         TEXT NOT NULL,
   -- 当日第几条（0 基），配合唯一索引实现多实例互斥
-  slot            INTEGER NOT NULL,
-  fired_at        INTEGER NOT NULL,
+  slot            BIGINT NOT NULL,
+  fired_at        BIGINT NOT NULL,
   -- pending（已占位待生成）| dispatched（已派发给客户端）| sent | failed | skipped
   status          TEXT NOT NULL,
   message_id      TEXT,

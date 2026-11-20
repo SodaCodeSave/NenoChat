@@ -52,70 +52,13 @@ WHERE id IN (SELECT DISTINCT conversation_id FROM channel_reseq);
 
 DROP TABLE channel_reseq;
 
--- messages.channel_id 带外键，SQLite 不允许直接 DROP COLUMN，只能重建表。
--- 回执表通过外键挂在 messages 上：先备份并摘掉，避免重建 messages 时被级联清空。
-CREATE TEMP TABLE message_receipts_backup AS SELECT * FROM message_receipts;
-DROP TABLE message_receipts;
-
+-- messages.channel_id 列与依赖它的索引一并删除，消息表主体无需重建
 DROP INDEX IF EXISTS ix_msg_channel_seq;
-DROP INDEX IF EXISTS ux_msg_nonce;
-DROP INDEX IF EXISTS ix_msg_conv_seq;
-DROP INDEX IF EXISTS ix_msg_generation;
-
-CREATE TABLE messages_next (
-  id               TEXT PRIMARY KEY,
-  conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  sender_id        TEXT REFERENCES users(id),
-  sender_type      TEXT NOT NULL DEFAULT 'user',
-  type             TEXT NOT NULL DEFAULT 'text',
-  content          TEXT NOT NULL DEFAULT '',
-  meta             TEXT,
-  reply_to_id      TEXT,
-  seq              INTEGER NOT NULL,
-  client_nonce     TEXT,
-  ai_generation_id TEXT,
-  ai_index         INTEGER,
-  pinned_at        INTEGER,
-  edited_at        INTEGER,
-  deleted_at       INTEGER,
-  deleted_by       TEXT,
-  created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL,
-  updated_by_device TEXT,
-  UNIQUE (conversation_id, seq)
-);
-
-INSERT INTO messages_next
-  (id, conversation_id, sender_id, sender_type, type, content, meta, reply_to_id, seq,
-   client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at, deleted_by,
-   created_at, updated_at, updated_by_device)
-SELECT id, conversation_id, sender_id, sender_type, type, content, meta, reply_to_id, seq,
-       client_nonce, ai_generation_id, ai_index, pinned_at, edited_at, deleted_at, deleted_by,
-       created_at, updated_at, updated_by_device
-FROM messages;
-
-DROP TABLE messages;
-ALTER TABLE messages_next RENAME TO messages;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ux_msg_nonce ON messages(sender_id, client_nonce)
-  WHERE client_nonce IS NOT NULL;
-CREATE INDEX IF NOT EXISTS ix_msg_conv_seq ON messages(conversation_id, seq DESC);
-CREATE INDEX IF NOT EXISTS ix_msg_generation ON messages(ai_generation_id)
-  WHERE ai_generation_id IS NOT NULL;
-
-CREATE TABLE message_receipts (
-  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  state      TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (message_id, user_id)
-);
-INSERT INTO message_receipts SELECT * FROM message_receipts_backup;
-DROP TABLE message_receipts_backup;
+ALTER TABLE messages DROP COLUMN IF EXISTS channel_id;
 
 -- 群聊 AI 的日志与决策记录不再按频道归属
-ALTER TABLE ai_group_log DROP COLUMN channel_id;
-ALTER TABLE ai_group_decision DROP COLUMN channel_id;
+ALTER TABLE ai_group_log DROP COLUMN IF EXISTS channel_id;
+ALTER TABLE ai_group_decision DROP COLUMN IF EXISTS channel_id;
 
 -- 频道本身与它的增量同步记录一并清理
 DROP TABLE IF EXISTS channels;

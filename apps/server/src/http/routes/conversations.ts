@@ -20,7 +20,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/conversations', async (request) => {
     const userId = await requireUserId(request)
-    return { conversations: conversationService.list(db, userId) }
+    return { conversations: await conversationService.list(db, userId) }
   })
 
   app.post('/conversations', async (request) => {
@@ -29,13 +29,13 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
     if (input.type === ConversationType.Direct) {
       if (!input.targetUserId) throw err.validation('私聊需要指定对方用户')
-      const conversation = conversationService.openDirect(db, userId, input.targetUserId)
+      const conversation = await conversationService.openDirect(db, userId, input.targetUserId)
       return { conversation }
     }
 
     if (input.type === ConversationType.Group) {
       if (!input.name) throw err.validation('群聊需要名称')
-      const result = conversationService.createGroup(db, userId, {
+      const result = await conversationService.createGroup(db, userId, {
         name: input.name,
         memberIds: input.memberIds,
         avatarUrl: input.avatarUrl ?? null,
@@ -48,25 +48,25 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>('/conversations/:id', async (request) => {
     const userId = await requireUserId(request)
-    return conversationService.detail(db, request.params.id, userId)
+    return await conversationService.detail(db, request.params.id, userId)
   })
 
   app.patch<{ Params: { id: string } }>('/conversations/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(UpdateConversationSchema, request.body)
-    return { conversation: conversationService.update(db, request.params.id, userId, input) }
+    return { conversation: await conversationService.update(db, request.params.id, userId, input) }
   })
 
   app.post<{ Params: { id: string } }>('/conversations/:id/pin', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(PinConversationSchema, request.body)
-    return { member: conversationService.setPin(db, request.params.id, userId, input.pinned) }
+    return { member: await conversationService.setPin(db, request.params.id, userId, input.pinned) }
   })
 
   app.post<{ Params: { id: string } }>('/conversations/:id/members', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(AddMembersSchema, request.body)
-    return { members: conversationService.addMembers(db, request.params.id, userId, input.userIds) }
+    return { members: await conversationService.addMembers(db, request.params.id, userId, input.userIds) }
   })
 
   app.patch<{ Params: { id: string; userId: string } }>(
@@ -74,7 +74,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const actorId = await requireUserId(request)
       const patch = parse(UpdateMemberSchema, request.body)
-      const member = conversationService.updateMember(
+      const member = await conversationService.updateMember(
         db,
         request.params.id,
         actorId,
@@ -89,7 +89,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     '/conversations/:id/members/:userId',
     async (request) => {
       const actorId = await requireUserId(request)
-      conversationService.removeMember(db, request.params.id, actorId, request.params.userId)
+      await conversationService.removeMember(db, request.params.id, actorId, request.params.userId)
       return { ok: true }
     },
   )
@@ -97,19 +97,19 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
   /** 单侧删除私聊会话，对端历史不受影响 */
   app.delete<{ Params: { id: string } }>('/conversations/:id/for-me', async (request) => {
     const userId = await requireUserId(request)
-    conversationService.deleteConversationForUser(db, request.params.id, userId)
+    await conversationService.deleteConversationForUser(db, request.params.id, userId)
     return { ok: true }
   })
 
   app.delete<{ Params: { id: string } }>('/conversations/:id', async (request) => {
     const userId = await requireUserId(request)
-    conversationService.dissolveGroup(db, request.params.id, userId)
+    await conversationService.dissolveGroup(db, request.params.id, userId)
     return { ok: true }
   })
 
   app.post<{ Params: { id: string } }>('/conversations/:id/transfer', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(TransferOwnerSchema, request.body)
-    return conversationService.transferOwner(db, request.params.id, userId, input.userId)
+    return await conversationService.transferOwner(db, request.params.id, userId, input.userId)
   })
 }

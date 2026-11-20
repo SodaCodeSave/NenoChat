@@ -21,24 +21,24 @@ export async function stickerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/stickers/packs', async (request) => {
     const userId = await requireUserId(request)
-    return { packs: stickerService.listPacks(db, userId) }
+    return { packs: await stickerService.listPacks(db, userId) }
   })
 
   app.post('/stickers/packs', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(CreateStickerPackSchema, request.body)
-    return { pack: stickerService.createPack(db, userId, input.name) }
+    return { pack: await stickerService.createPack(db, userId, input.name) }
   })
 
   app.patch<{ Params: { id: string } }>('/stickers/packs/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(UpdateStickerPackSchema, request.body)
-    return { pack: stickerService.updatePack(db, userId, request.params.id, input) }
+    return { pack: await stickerService.updatePack(db, userId, request.params.id, input) }
   })
 
   app.delete<{ Params: { id: string } }>('/stickers/packs/:id', async (request) => {
     const userId = await requireUserId(request)
-    stickerService.deletePack(db, userId, request.params.id)
+    await stickerService.deletePack(db, userId, request.params.id)
     return { ok: true }
   })
 
@@ -46,7 +46,7 @@ export async function stickerRoutes(app: FastifyInstance): Promise<void> {
     const userId = await requireUserId(request)
     const input = parse(CreateStickerSchema, request.body)
     return {
-      sticker: stickerService.addSticker(db, userId, {
+      sticker: await stickerService.addSticker(db, userId, {
         packId: input.packId,
         attachmentId: input.attachmentId,
         keywords: input.keywords,
@@ -58,12 +58,12 @@ export async function stickerRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string } }>('/stickers/:id', async (request) => {
     const userId = await requireUserId(request)
     const input = parse(UpdateStickerKeywordsSchema, request.body)
-    return { sticker: stickerService.updateStickerKeywords(db, userId, request.params.id, input.keywords) }
+    return { sticker: await stickerService.updateStickerKeywords(db, userId, request.params.id, input.keywords) }
   })
 
   app.delete<{ Params: { id: string } }>('/stickers/:id', async (request) => {
     const userId = await requireUserId(request)
-    stickerService.deleteSticker(db, userId, request.params.id)
+    await stickerService.deleteSticker(db, userId, request.params.id)
     return { ok: true }
   })
 
@@ -91,6 +91,6 @@ export async function stickerRoutes(app: FastifyInstance): Promise<void> {
     }
     if (buffer.length === 0) throw err.validation('上传的压缩包为空')
 
-    return stickerService.importAstrbotPack(db, userId, buffer)
+    return await stickerService.importAstrbotPack(db, userId, buffer)
   })
 }

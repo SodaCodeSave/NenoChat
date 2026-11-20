@@ -28,8 +28,8 @@ function mapContact(row: contactsRepo.ContactRow, user: PublicUser | null): Cont
   }
 }
 
-function publicUserOf(db: DB, userId: string): PublicUser | null {
-  const row = usersRepo.findById(db, userId)
+async function publicUserOf(db: DB, userId: string): Promise<PublicUser | null> {
+  const row = await usersRepo.findById(db, userId)
   return row ? usersRepo.mapPublicUser(row) : null
 }
 
@@ -40,16 +40,13 @@ export interface ContactListView {
 }
 
 /** 通讯录统一列表：真人与 AI 角色都在这里，不按来源分组 */
-export function list(db: DB, ownerId: string): ContactListView {
-  const rows = contactsRepo.list(db, ownerId)
-  const users = new Map(
-    usersRepo
-      .listByIds(
-        db,
-        rows.map((row) => row.contact_user_id),
-      )
-      .map((user) => [user.id, usersRepo.mapPublicUser(user)]),
+export async function list(db: DB, ownerId: string): Promise<ContactListView> {
+  const rows = await contactsRepo.list(db, ownerId)
+  const userRows = await usersRepo.listByIds(
+    db,
+    rows.map((row) => row.contact_user_id),
   )
+  const users = new Map(userRows.map((user) => [user.id, usersRepo.mapPublicUser(user)]))
 
   const mapped = rows
     .filter((row) => users.has(row.contact_user_id))
@@ -65,19 +62,19 @@ export function list(db: DB, ownerId: string): ContactListView {
   }
 }
 
-function writeContactChange(
+async function writeContactChange(
   db: DB,
   ownerId: string,
   row: contactsRepo.ContactRow | null,
   contactUserId: string,
   op: 'upsert' | 'delete',
   actorId: string,
-): Contact {
+): Promise<Contact> {
   const payload =
     op === 'delete' || !row
       ? { ownerId, contactUserId }
-      : mapContact(row, publicUserOf(db, contactUserId))
-  writeChange(db, {
+      : mapContact(row, await publicUserOf(db, contactUserId))
+  await writeChange(db, {
     entity: 'contact',
     entityId: `${ownerId}:${contactUserId}`,
     op,
@@ -89,178 +86,182 @@ function writeContactChange(
 }
 
 /** 双方直接成为好友：用于接受申请、主人的 AI 角色进通讯录 */
-function linkFriends(db: DB, a: string, b: string, actorId: string): { mine: Contact; theirs: Contact } {
-  const mine = contactsRepo.upsert(db, {
+async function linkFriends(db: DB, a: string, b: string, actorId: string): Promise<{ mine: Contact; theirs: Contact }> {
+  const mine = await contactsRepo.upsert(db, {
     ownerId: a,
     contactUserId: b,
     relation: ContactRelation.Friend,
   })
-  const theirs = contactsRepo.upsert(db, {
+  const theirs = await contactsRepo.upsert(db, {
     ownerId: b,
     contactUserId: a,
     relation: ContactRelation.Friend,
   })
   return {
-    mine: writeContactChange(db, a, mine, b, 'upsert', actorId),
-    theirs: writeContactChange(db, b, theirs, a, 'upsert', actorId),
+    mine: await writeContactChange(db, a, mine, b, 'upsert', actorId),
+    theirs: await writeContactChange(db, b, theirs, a, 'upsert', actorId),
   }
 }
 
 /** 把自己的 AI 角色放进通讯录（角色创建时也会调用） */
-export function addOwnPersona(db: DB, ownerId: string, personaId: string): Contact {
-  const persona = aiRepo.findPersona(db, personaId)
+export async function addOwnPersona(db: DB, ownerId: string, personaId: string): Promise<Contact> {
+  const persona = await aiRepo.findPersona(db, personaId)
   if (!persona || persona.owner_id !== ownerId) throw err.notFound('角色不存在')
   if (!persona.user_id) throw err.validation('该角色还没有绑定账号')
 
-  const result = withTx(db, () => {
-    const linked = linkFriends(db, ownerId, persona.user_id!, ownerId)
-    aiRepo.updatePersona(db, persona.id, { inContacts: true })
+  const result = await withTx(db, async (tx) => {
+    const linked = await linkFriends(tx, ownerId, persona.user_id!, ownerId)
+    await aiRepo.updatePersona(tx, persona.id, { inContacts: true })
     return linked.mine
   })
 
-  emitContactUpdated(ownerId, result)
+  await emitContactUpdated(ownerId, result)
   return result
 }
 
-export function sendRequest(
+export async function sendRequest(
   db: DB,
   ownerId: string,
   targetUserId: string,
   message?: string,
-): Contact {
+): Promise<Contact> {
   if (ownerId === targetUserId) throw err.validation('不能添加自己')
 
-  const target = usersRepo.findById(db, targetUserId)
+  const target = await usersRepo.findById(db, targetUserId)
   if (!target) throw err.notFound('用户不存在')
 
   // 自己的 AI 角色不需要申请，直接进通讯录
   if (target.is_bot === 1) {
-    const persona = aiRepo.findPersonaByUserId(db, targetUserId)
+    const persona = await aiRepo.findPersonaByUserId(db, targetUserId)
     if (!persona || persona.owner_id !== ownerId) {
       throw err.forbidden('只能添加自己的 AI 角色')
     }
     return addOwnPersona(db, ownerId, persona.id)
   }
 
-  const mine = contactsRepo.find(db, ownerId, targetUserId)
+  const mine = await contactsRepo.find(db, ownerId, targetUserId)
   if (mine?.relation === ContactRelation.Friend) throw err.validation('你们已经是好友')
   if (mine?.relation === ContactRelation.Blocked) throw err.forbidden('你已拉黑对方')
 
   // 对方已经申请过：直接视为同意，省一次往返
-  const theirs = contactsRepo.find(db, targetUserId, ownerId)
+  const theirs = await contactsRepo.find(db, targetUserId, ownerId)
   if (theirs?.relation === ContactRelation.PendingOut) {
-    return accept(db, ownerId, targetUserId).contact
+    return (await accept(db, ownerId, targetUserId)).contact
   }
 
-  const result = withTx(db, () => {
-    const outgoing = contactsRepo.upsert(db, {
+  const result = await withTx(db, async (tx) => {
+    const outgoing = await contactsRepo.upsert(tx, {
       ownerId,
       contactUserId: targetUserId,
       relation: ContactRelation.PendingOut,
       requestMessage: message ?? null,
     })
-    const incoming = contactsRepo.upsert(db, {
+    const incoming = await contactsRepo.upsert(tx, {
       ownerId: targetUserId,
       contactUserId: ownerId,
       relation: ContactRelation.PendingIn,
       requestMessage: message ?? null,
     })
-    writeContactChange(db, ownerId, outgoing, targetUserId, 'upsert', ownerId)
-    writeContactChange(db, targetUserId, incoming, ownerId, 'upsert', ownerId)
+    await writeContactChange(tx, ownerId, outgoing, targetUserId, 'upsert', ownerId)
+    await writeContactChange(tx, targetUserId, incoming, ownerId, 'upsert', ownerId)
     return outgoing
   })
 
-  const contact = mapContact(result, publicUserOf(db, targetUserId))
-  emitContactUpdated(ownerId, contact)
-  emitContactUpdated(targetUserId, mapContact(contactsRepo.find(db, targetUserId, ownerId)!, publicUserOf(db, ownerId)))
+  const contact = mapContact(result, await publicUserOf(db, targetUserId))
+  await emitContactUpdated(ownerId, contact)
+  const counterpart = await contactsRepo.find(db, targetUserId, ownerId)
+  await emitContactUpdated(
+    targetUserId,
+    mapContact(counterpart!, await publicUserOf(db, ownerId)),
+  )
   return contact
 }
 
-export function accept(
+export async function accept(
   db: DB,
   ownerId: string,
   requesterId: string,
-): { contact: Contact; requester: Contact } {
-  const incoming = contactsRepo.find(db, ownerId, requesterId)
+): Promise<{ contact: Contact; requester: Contact }> {
+  const incoming = await contactsRepo.find(db, ownerId, requesterId)
   if (!incoming || incoming.relation !== ContactRelation.PendingIn) {
     throw err.notFound('没有待处理的好友申请')
   }
 
-  const result = withTx(db, () => linkFriends(db, ownerId, requesterId, ownerId))
+  const result = await withTx(db, async (tx) => linkFriends(tx, ownerId, requesterId, ownerId))
 
-  emitContactUpdated(ownerId, result.mine)
-  emitContactUpdated(requesterId, result.theirs)
+  await emitContactUpdated(ownerId, result.mine)
+  await emitContactUpdated(requesterId, result.theirs)
   return { contact: result.mine, requester: result.theirs }
 }
 
-export function decline(db: DB, ownerId: string, requesterId: string): void {
-  const incoming = contactsRepo.find(db, ownerId, requesterId)
+export async function decline(db: DB, ownerId: string, requesterId: string): Promise<void> {
+  const incoming = await contactsRepo.find(db, ownerId, requesterId)
   if (!incoming || incoming.relation !== ContactRelation.PendingIn) {
     throw err.notFound('没有待处理的好友申请')
   }
 
-  withTx(db, () => {
-    contactsRepo.removePair(db, ownerId, requesterId)
-    writeContactChange(db, ownerId, null, requesterId, 'delete', ownerId)
-    writeContactChange(db, requesterId, null, ownerId, 'delete', ownerId)
+  await withTx(db, async (tx) => {
+    await contactsRepo.removePair(tx, ownerId, requesterId)
+    await writeContactChange(tx, ownerId, null, requesterId, 'delete', ownerId)
+    await writeContactChange(tx, requesterId, null, ownerId, 'delete', ownerId)
   })
 
-  emitContactUpdated(ownerId, { ownerId, contactUserId: requesterId } as Contact)
-  emitContactUpdated(requesterId, { ownerId: requesterId, contactUserId: ownerId } as Contact)
+  await emitContactUpdated(ownerId, { ownerId, contactUserId: requesterId } as Contact)
+  await emitContactUpdated(requesterId, { ownerId: requesterId, contactUserId: ownerId } as Contact)
 }
 
-export function removeFriend(db: DB, ownerId: string, contactUserId: string): void {
-  const mine = contactsRepo.find(db, ownerId, contactUserId)
+export async function removeFriend(db: DB, ownerId: string, contactUserId: string): Promise<void> {
+  const mine = await contactsRepo.find(db, ownerId, contactUserId)
   if (!mine) throw err.notFound('联系人不存在')
 
   const cleanups: ConversationCleanup[] = []
 
-  withTx(db, () => {
-    contactsRepo.removePair(db, ownerId, contactUserId)
-    writeContactChange(db, ownerId, null, contactUserId, 'delete', ownerId)
-    writeContactChange(db, contactUserId, null, ownerId, 'delete', ownerId)
+  await withTx(db, async (tx) => {
+    await contactsRepo.removePair(tx, ownerId, contactUserId)
+    await writeContactChange(tx, ownerId, null, contactUserId, 'delete', ownerId)
+    await writeContactChange(tx, contactUserId, null, ownerId, 'delete', ownerId)
 
-    const direct = conversationsRepo.findActiveDirectWithUser(db, ownerId, contactUserId)
+    const direct = await conversationsRepo.findActiveDirectWithUser(tx, ownerId, contactUserId)
     if (direct) {
-      const cleanup = conversationService.cleanupForUser(db, direct.id, ownerId)
+      const cleanup = await conversationService.cleanupForUser(tx, direct.id, ownerId)
       if (cleanup) cleanups.push(cleanup)
     }
 
-    const persona = aiRepo.findPersonaByUserId(db, contactUserId)
+    const persona = await aiRepo.findPersonaByUserId(tx, contactUserId)
     if (persona && persona.owner_id === ownerId) {
-      aiRepo.updatePersona(db, persona.id, { inContacts: false })
-      const aiConversation = conversationsRepo.findAiByOwnerAndPersona(db, ownerId, persona.id)
+      await aiRepo.updatePersona(tx, persona.id, { inContacts: false })
+      const aiConversation = await conversationsRepo.findAiByOwnerAndPersona(tx, ownerId, persona.id)
       if (aiConversation) {
-        const cleanup = conversationService.cleanupForUser(db, aiConversation.id, ownerId)
+        const cleanup = await conversationService.cleanupForUser(tx, aiConversation.id, ownerId)
         if (cleanup) cleanups.push(cleanup)
       }
     }
   })
 
   for (const cleanup of cleanups) {
-    conversationService.emitConversationCleanup(db, cleanup)
+    await conversationService.emitConversationCleanup(db, cleanup)
   }
-  emitContactUpdated(ownerId, { ownerId, contactUserId } as Contact)
-  emitContactUpdated(contactUserId, { ownerId: contactUserId, contactUserId: ownerId } as Contact)
+  await emitContactUpdated(ownerId, { ownerId, contactUserId } as Contact)
+  await emitContactUpdated(contactUserId, { ownerId: contactUserId, contactUserId: ownerId } as Contact)
 }
 
-export function setAlias(db: DB, ownerId: string, contactUserId: string, alias: string | null): Contact {
-  const current = contactsRepo.find(db, ownerId, contactUserId)
+export async function setAlias(db: DB, ownerId: string, contactUserId: string, alias: string | null): Promise<Contact> {
+  const current = await contactsRepo.find(db, ownerId, contactUserId)
   if (!current) throw err.notFound('联系人不存在')
 
-  const row = withTx(db, () => {
-    const next = contactsRepo.upsert(db, {
+  const row = await withTx(db, async (tx) => {
+    const next = await contactsRepo.upsert(tx, {
       ownerId,
       contactUserId,
       relation: current.relation as Contact['relation'],
       alias: alias && alias.length > 0 ? alias : null,
       requestMessage: current.request_message,
     })
-    writeContactChange(db, ownerId, next, contactUserId, 'upsert', ownerId)
+    await writeContactChange(tx, ownerId, next, contactUserId, 'upsert', ownerId)
     return next
   })
 
-  const contact = mapContact(row, publicUserOf(db, contactUserId))
-  emitContactUpdated(ownerId, contact)
+  const contact = mapContact(row, await publicUserOf(db, contactUserId))
+  await emitContactUpdated(ownerId, contact)
   return contact
 }

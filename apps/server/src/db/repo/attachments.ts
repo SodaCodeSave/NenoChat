@@ -1,5 +1,5 @@
 import { ulid, type Attachment } from '@nenochat/shared'
-import type { DB } from '../index'
+import { one, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 export interface AttachmentRow {
@@ -49,24 +49,22 @@ export function mapAttachment(row: AttachmentRow): Attachment {
 }
 
 /** 同一用户重复上传同一张图时直接复用，既省磁盘也省一次写 */
-export function findById(db: DB, id: string): AttachmentRow | undefined {
-  return db
-    .prepare('SELECT * FROM attachments WHERE id = ? AND deleted_at IS NULL')
-    .get(id) as AttachmentRow | undefined
+export async function findById(db: Executor, id: string): Promise<AttachmentRow | undefined> {
+  return one<AttachmentRow>(db, 'SELECT * FROM attachments WHERE id = ? AND deleted_at IS NULL', [id])
 }
 
-export function findBySha(db: DB, ownerId: string, sha256: string): AttachmentRow | undefined {
-  return db
-    .prepare(
-      `SELECT * FROM attachments
-       WHERE owner_id = ? AND sha256 = ? AND deleted_at IS NULL
-       ORDER BY created_at LIMIT 1`,
-    )
-    .get(ownerId, sha256) as AttachmentRow | undefined
+export async function findBySha(db: Executor, ownerId: string, sha256: string): Promise<AttachmentRow | undefined> {
+  return one<AttachmentRow>(
+    db,
+    `SELECT * FROM attachments
+     WHERE owner_id = ? AND sha256 = ? AND deleted_at IS NULL
+     ORDER BY created_at LIMIT 1`,
+    [ownerId, sha256],
+  )
 }
 
-export function create(
-  db: DB,
+export async function create(
+  db: Executor,
   input: {
     ownerId: string
     kind: string
@@ -77,25 +75,30 @@ export function create(
     storageKey: string
     createdAt?: number
   },
-): AttachmentRow {
+): Promise<AttachmentRow> {
   const id = ulid()
   const ts = input.createdAt ?? now()
-  db.prepare(
+  // RETURNING 一次拿到落库后的完整行，省去额外的回读查询
+  const row = await one<AttachmentRow>(
+    db,
     `INSERT INTO attachments
        (id, owner_id, conversation_id, message_id, kind, filename, mime, size, width, height,
         sha256, storage_key, thumb_key, created_at, updated_at, deleted_at)
-     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, NULL)`,
-  ).run(
-    id,
-    input.ownerId,
-    input.kind,
-    input.filename,
-    input.mime,
-    input.size,
-    input.sha256,
-    input.storageKey,
-    ts,
-    ts,
+     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, NULL)
+     RETURNING *`,
+    [
+      id,
+      input.ownerId,
+      input.kind,
+      input.filename,
+      input.mime,
+      input.size,
+      input.sha256,
+      input.storageKey,
+      ts,
+      ts,
+    ],
   )
-  return db.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as AttachmentRow
+  if (!row) throw new Error('创建附件后回读失败')
+  return row
 }

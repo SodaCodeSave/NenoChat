@@ -1,5 +1,6 @@
 import { Cron } from 'croner'
-import type { DB } from '../db'
+import type { Executor } from '../db'
+import { run } from '../db'
 import { prune } from './sync-service'
 
 /**
@@ -32,66 +33,70 @@ export interface HousekeepingResult {
 }
 
 /** 跑一轮全部清理任务，返回各项删除的行数 */
-export function runHousekeeping(db: DB): HousekeepingResult {
+export async function runHousekeeping(db: Executor): Promise<HousekeepingResult> {
   const ts = Date.now()
 
   // 变更日志复用同步服务里的裁剪逻辑，created_at 为毫秒时间戳
-  const prunedChanges = prune(db, ts - HOUSEKEEPING_DEFAULTS.changeLogRetentionMs)
-
-  // TRUNCATE 模式把 WAL 文件截断归零，避免长期运行下 WAL 持续膨胀拖慢读取
-  db.pragma('wal_checkpoint(TRUNCATE)')
+  const prunedChanges = await prune(db, ts - HOUSEKEEPING_DEFAULTS.changeLogRetentionMs)
 
   // expires_at = 0 是「永不过期」的哨兵值，见 db/repo/refresh-tokens.ts
-  const deletedTokens = db
-    .prepare(
+  const deletedTokens = (
+    await run(
+      db,
       `DELETE FROM refresh_tokens
        WHERE (revoked_at IS NOT NULL AND revoked_at < ?)
           OR (expires_at > 0 AND expires_at < ?)`,
+      [ts - HOUSEKEEPING_DEFAULTS.revokedTokenRetentionMs, ts],
     )
-    .run(ts - HOUSEKEEPING_DEFAULTS.revokedTokenRetentionMs, ts).changes
+  ).changes
 
-  const deletedDecisions = db
-    .prepare('DELETE FROM ai_group_decision WHERE created_at < ?')
-    .run(ts - HOUSEKEEPING_DEFAULTS.groupDecisionRetentionMs).changes
+  const deletedDecisions = (
+    await run(db, 'DELETE FROM ai_group_decision WHERE created_at < ?', [
+      ts - HOUSEKEEPING_DEFAULTS.groupDecisionRetentionMs,
+    ])
+  ).changes
 
   // 只标记生成中/排队中的残留；started_at 是毫秒时间戳，error 与 finished_at 列见 0004_ai.sql
-  const sweptGenerations = db
-    .prepare(
+  const sweptGenerations = (
+    await run(
+      db,
       `UPDATE ai_generations
        SET status = 'error', error = ?, finished_at = ?
        WHERE status IN ('streaming', 'pending') AND started_at < ?`,
+      ['生成中断：服务重启或超时', ts, ts - HOUSEKEEPING_DEFAULTS.staleGenerationMs],
     )
-    .run('生成中断：服务重启或超时', ts, ts - HOUSEKEEPING_DEFAULTS.staleGenerationMs).changes
+  ).changes
 
   return { prunedChanges, deletedTokens, deletedDecisions, sweptGenerations }
 }
 
 /** 启动例行清理，返回停止函数，随 Fastify 关闭一起清理。测试环境不启动。 */
-export function startHousekeepingCron(db: DB): () => void {
+export function startHousekeepingCron(db: Executor): () => void {
   if (process.env.NODE_ENV === 'test') return () => {}
 
-  const run = (): void => {
-    try {
-      const result = runHousekeeping(db)
-      if (
-        result.prunedChanges + result.deletedTokens + result.deletedDecisions + result.sweptGenerations >
-        0
-      ) {
-        console.log(
-          `[housekeeping] 清理变更日志 ${result.prunedChanges} 条、令牌 ${result.deletedTokens} 个、` +
-            `群决策 ${result.deletedDecisions} 条、卡死生成 ${result.sweptGenerations} 条`,
-        )
-      }
-    } catch (e) {
-      console.error('[housekeeping] 清理失败', e)
-    }
+  const runOnce = (): void => {
+    void runHousekeeping(db)
+      .then((result) => {
+        if (
+          result.prunedChanges + result.deletedTokens + result.deletedDecisions + result.sweptGenerations >
+          0
+        ) {
+          console.log(
+            `[housekeeping] 清理变更日志 ${result.prunedChanges} 条、令牌 ${result.deletedTokens} 个、` +
+              `群决策 ${result.deletedDecisions} 条、卡死生成 ${result.sweptGenerations} 条`,
+          )
+        }
+      })
+      .catch((e) => {
+        console.error('[housekeeping] 清理失败', e)
+      })
   }
 
   // protect: 上一轮没跑完就跳过这一轮，避免长耗时清理叠加
-  const job = new Cron(HOUSEKEEPING_DEFAULTS.intervalCron, { protect: true }, run)
+  const job = new Cron(HOUSEKEEPING_DEFAULTS.intervalCron, { protect: true }, runOnce)
 
   // 刚启动时不必等满 6 小时，先跑一轮兜底
-  const kickoff = setTimeout(run, HOUSEKEEPING_DEFAULTS.kickoffDelayMs)
+  const kickoff = setTimeout(runOnce, HOUSEKEEPING_DEFAULTS.kickoffDelayMs)
 
   return () => {
     job.stop()

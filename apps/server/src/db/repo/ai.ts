@@ -11,7 +11,7 @@ import type {
   ReplyStyle,
 } from '@nenochat/shared'
 import { GROUP_AI_DEFAULTS, MOMENT_AI_DEFAULTS, PROACTIVE_DEFAULTS, SEGMENT_REPLY_DEFAULTS, ulid } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, one, run, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 /* ------------------------------- 服务商 ------------------------------- */
@@ -79,16 +79,16 @@ export function mapProvider(row: ProviderRow, apiKeyMasked: string | null = null
   }
 }
 
-export function listProviders(db: DB, ownerId: string): ProviderRow[] {
-  return db
-    .prepare('SELECT * FROM ai_providers WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at')
-    .all(ownerId) as ProviderRow[]
+export async function listProviders(db: Executor, ownerId: string): Promise<ProviderRow[]> {
+  return all<ProviderRow>(
+    db,
+    'SELECT * FROM ai_providers WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at',
+    [ownerId],
+  )
 }
 
-export function findProvider(db: DB, id: string): ProviderRow | undefined {
-  return db.prepare('SELECT * FROM ai_providers WHERE id = ? AND deleted_at IS NULL').get(id) as
-    | ProviderRow
-    | undefined
+export async function findProvider(db: Executor, id: string): Promise<ProviderRow | undefined> {
+  return one<ProviderRow>(db, 'SELECT * FROM ai_providers WHERE id = ? AND deleted_at IS NULL', [id])
 }
 
 export interface CreateProviderInput {
@@ -105,112 +105,127 @@ export interface CreateProviderInput {
   isDefault?: boolean
 }
 
-export function createProvider(db: DB, input: CreateProviderInput): ProviderRow {
+export async function createProvider(db: Executor, input: CreateProviderInput): Promise<ProviderRow> {
   const ts = now()
   const id = ulid()
-  db.prepare(
+  // RETURNING 一次拿到落库后的完整行，省去额外的回读查询
+  const row = await one<ProviderRow>(
+    db,
     `INSERT INTO ai_providers
        (id, owner_id, name, base_url, api_key_enc, key_location, model, vision_model, context_window,
         models_json, temperature, max_tokens, extra_headers, is_default, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`,
-  ).run(
-    id,
-    input.ownerId,
-    input.name,
-    input.baseUrl,
-    input.apiKeyEnc,
-    'server',
-    input.model,
-    input.visionModel ?? null,
-    input.contextWindow ?? null,
-    input.models?.length ? JSON.stringify(input.models) : null,
-    input.temperature ?? 0.8,
-    input.maxTokens ?? 2048,
-    input.isDefault ? 1 : 0,
-    ts,
-    ts,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
+     RETURNING *`,
+    [
+      id,
+      input.ownerId,
+      input.name,
+      input.baseUrl,
+      input.apiKeyEnc,
+      'server',
+      input.model,
+      input.visionModel ?? null,
+      input.contextWindow ?? null,
+      input.models?.length ? JSON.stringify(input.models) : null,
+      input.temperature ?? 0.8,
+      input.maxTokens ?? 2048,
+      input.isDefault ? 1 : 0,
+      ts,
+      ts,
+    ],
   )
-  const row = findProvider(db, id)
   if (!row) throw new Error('创建服务商后回读失败')
   return row
 }
 
-export function updateProvider(db: DB, id: string, patch: Partial<CreateProviderInput> & { apiKeyEnc?: string | null; name?: string; baseUrl?: string; model?: string }): ProviderRow {
-  const current = findProvider(db, id)
+export async function updateProvider(
+  db: Executor,
+  id: string,
+  patch: Partial<CreateProviderInput> & { apiKeyEnc?: string | null; name?: string; baseUrl?: string; model?: string },
+): Promise<ProviderRow> {
+  const current = await findProvider(db, id)
   if (!current) throw new Error('服务商不存在')
 
-  db.prepare(
+  const row = await one<ProviderRow>(
+    db,
     `UPDATE ai_providers
      SET name = ?, base_url = ?, api_key_enc = ?, key_location = ?, model = ?, vision_model = ?,
          context_window = ?, models_json = ?, temperature = ?, max_tokens = ?, is_default = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    patch.name ?? current.name,
-    patch.baseUrl ?? current.base_url,
-    patch.apiKeyEnc === undefined ? current.api_key_enc : patch.apiKeyEnc,
-    'server',
-    patch.model ?? current.model,
-    patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
-    patch.contextWindow === undefined ? current.context_window : patch.contextWindow,
-    // undefined = 不改动；数组（含空数组）= 整体替换，空数组即清空列表
-    patch.models === undefined ? current.models_json : patch.models?.length ? JSON.stringify(patch.models) : null,
-    patch.temperature ?? current.temperature,
-    patch.maxTokens ?? current.max_tokens,
-    patch.isDefault === undefined ? current.is_default : patch.isDefault ? 1 : 0,
-    now(),
-    id,
+     WHERE id = ?
+     RETURNING *`,
+    [
+      patch.name ?? current.name,
+      patch.baseUrl ?? current.base_url,
+      patch.apiKeyEnc === undefined ? current.api_key_enc : patch.apiKeyEnc,
+      'server',
+      patch.model ?? current.model,
+      patch.visionModel === undefined ? current.vision_model : patch.visionModel || null,
+      patch.contextWindow === undefined ? current.context_window : patch.contextWindow,
+      // undefined = 不改动；数组（含空数组）= 整体替换，空数组即清空列表
+      patch.models === undefined ? current.models_json : patch.models?.length ? JSON.stringify(patch.models) : null,
+      patch.temperature ?? current.temperature,
+      patch.maxTokens ?? current.max_tokens,
+      patch.isDefault === undefined ? current.is_default : patch.isDefault ? 1 : 0,
+      now(),
+      id,
+    ],
   )
-  const row = findProvider(db, id)
   if (!row) throw new Error('更新服务商后回读失败')
   return row
 }
 
-export function softDeleteProvider(db: DB, id: string): void {
-  db.prepare('UPDATE ai_providers SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), id)
+export async function softDeleteProvider(db: Executor, id: string): Promise<void> {
+  await run(db, 'UPDATE ai_providers SET deleted_at = ?, updated_at = ? WHERE id = ?', [now(), now(), id])
 }
 
 /** 只写余额缓存，不碰 updated_at，避免触发同步 */
-export function saveProviderBalance(
-  db: DB,
+export async function saveProviderBalance(
+  db: Executor,
   id: string,
   balance: { amount: string; currency: string } | null,
-): void {
-  db.prepare(
+): Promise<void> {
+  await run(
+    db,
     'UPDATE ai_providers SET balance = ?, balance_currency = ?, balance_checked_at = ? WHERE id = ?',
-  ).run(balance?.amount ?? null, balance?.currency ?? null, now(), id)
+    [balance?.amount ?? null, balance?.currency ?? null, now(), id],
+  )
 }
 
 /* ----------------------------- 图片描述缓存 ----------------------------- */
 
 /** 同一张图（sha256 相同）只识图一次，命中直接返回缓存的描述 */
-export function findImageDescription(db: DB, sha256: string): string | null {
-  const row = db
-    .prepare('SELECT description FROM ai_image_descriptions WHERE sha256 = ?')
-    .get(sha256) as { description: string } | undefined
+export async function findImageDescription(db: Executor, sha256: string): Promise<string | null> {
+  const row = await one<{ description: string }>(
+    db,
+    'SELECT description FROM ai_image_descriptions WHERE sha256 = ?',
+    [sha256],
+  )
   return row?.description ?? null
 }
 
-export function saveImageDescription(
-  db: DB,
+export async function saveImageDescription(
+  db: Executor,
   sha256: string,
   description: string,
   model: string | null,
-): void {
+): Promise<void> {
   const ts = now()
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_image_descriptions (sha256, description, model, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(sha256) DO UPDATE SET description = excluded.description, updated_at = excluded.updated_at`,
-  ).run(sha256, description, model, ts, ts)
+    [sha256, description, model, ts, ts],
+  )
 }
 
-export function defaultProvider(db: DB, ownerId: string): ProviderRow | undefined {
-  return db
-    .prepare(
-      `SELECT * FROM ai_providers WHERE owner_id = ? AND deleted_at IS NULL
-       ORDER BY is_default DESC, created_at LIMIT 1`,
-    )
-    .get(ownerId) as ProviderRow | undefined
+export async function defaultProvider(db: Executor, ownerId: string): Promise<ProviderRow | undefined> {
+  return one<ProviderRow>(
+    db,
+    `SELECT * FROM ai_providers WHERE owner_id = ? AND deleted_at IS NULL
+     ORDER BY is_default DESC, created_at LIMIT 1`,
+    [ownerId],
+  )
 }
 
 /* -------------------------------- 人设 -------------------------------- */
@@ -325,16 +340,16 @@ export function mapPersona(row: PersonaRow): AiPersona {
   }
 }
 
-export function listPersonas(db: DB, ownerId: string): PersonaRow[] {
-  return db
-    .prepare('SELECT * FROM ai_personas WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at')
-    .all(ownerId) as PersonaRow[]
+export async function listPersonas(db: Executor, ownerId: string): Promise<PersonaRow[]> {
+  return all<PersonaRow>(
+    db,
+    'SELECT * FROM ai_personas WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at',
+    [ownerId],
+  )
 }
 
-export function findPersona(db: DB, id: string): PersonaRow | undefined {
-  return db.prepare('SELECT * FROM ai_personas WHERE id = ? AND deleted_at IS NULL').get(id) as
-    | PersonaRow
-    | undefined
+export async function findPersona(db: Executor, id: string): Promise<PersonaRow | undefined> {
+  return one<PersonaRow>(db, 'SELECT * FROM ai_personas WHERE id = ? AND deleted_at IS NULL', [id])
 }
 
 export interface CreatePersonaInput {
@@ -357,7 +372,7 @@ export interface CreatePersonaInput {
   proactiveMode?: ProactiveMode
 }
 
-export function createPersona(db: DB, input: CreatePersonaInput): PersonaRow {
+export async function createPersona(db: Executor, input: CreatePersonaInput): Promise<PersonaRow> {
   const ts = now()
   const id = ulid()
   const proactive: ProactiveConfig = {
@@ -374,37 +389,39 @@ export function createPersona(db: DB, input: CreatePersonaInput): PersonaRow {
   // 显式开了主动消息却没说是哪种模式，按「没打算跟随全局」处理
   const mode: ProactiveMode = input.proactiveMode ?? (proactive.enabled ? 'custom' : 'global')
 
-  db.prepare(
+  const row = await one<PersonaRow>(
+    db,
     `INSERT INTO ai_personas
        (id, owner_id, name, avatar_url, system_prompt, greeting, interests, card, card_url,
         card_filename, in_contacts, provider_id, model_override, temperature, reply_style,
         sticker_pack_ids, proactive_enabled, proactive_config, proactive_mode,
         last_proactive_at, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
-  ).run(
-    id,
-    input.ownerId,
-    input.name,
-    input.avatarUrl ?? null,
-    input.systemPrompt,
-    input.greeting ?? null,
-    JSON.stringify(input.interests ?? []),
-    input.card ?? null,
-    input.cardUrl ?? null,
-    input.cardFilename ?? null,
-    input.inContacts === false ? 0 : 1,
-    input.providerId ?? null,
-    input.modelOverride ?? null,
-    input.temperature ?? null,
-    input.replyStyle ?? 'chatty',
-    input.stickerPackIds?.length ? JSON.stringify(input.stickerPackIds) : null,
-    proactive.enabled ? 1 : 0,
-    JSON.stringify(proactive),
-    mode,
-    ts,
-    ts,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+     RETURNING *`,
+    [
+      id,
+      input.ownerId,
+      input.name,
+      input.avatarUrl ?? null,
+      input.systemPrompt,
+      input.greeting ?? null,
+      JSON.stringify(input.interests ?? []),
+      input.card ?? null,
+      input.cardUrl ?? null,
+      input.cardFilename ?? null,
+      input.inContacts === false ? 0 : 1,
+      input.providerId ?? null,
+      input.modelOverride ?? null,
+      input.temperature ?? null,
+      input.replyStyle ?? 'chatty',
+      input.stickerPackIds?.length ? JSON.stringify(input.stickerPackIds) : null,
+      proactive.enabled ? 1 : 0,
+      JSON.stringify(proactive),
+      mode,
+      ts,
+      ts,
+    ],
   )
-  const row = findPersona(db, id)
   if (!row) throw new Error('创建角色后回读失败')
   return row
 }
@@ -428,8 +445,8 @@ export interface UpdatePersonaInput {
   proactiveMode?: ProactiveMode
 }
 
-export function updatePersona(db: DB, id: string, patch: UpdatePersonaInput): PersonaRow {
-  const current = findPersona(db, id)
+export async function updatePersona(db: Executor, id: string, patch: UpdatePersonaInput): Promise<PersonaRow> {
+  const current = await findPersona(db, id)
   if (!current) throw new Error('角色不存在')
 
   const nextProactive: ProactiveConfig = {
@@ -445,58 +462,58 @@ export function updatePersona(db: DB, id: string, patch: UpdatePersonaInput): Pe
         ? 'custom'
         : 'global')
 
-  db.prepare(
+  const row = await one<PersonaRow>(
+    db,
     `UPDATE ai_personas
      SET name = ?, avatar_url = ?, system_prompt = ?, greeting = ?, interests = ?, card = ?,
          card_url = ?, card_filename = ?, in_contacts = ?, provider_id = ?,
          model_override = ?, temperature = ?, reply_style = ?, sticker_pack_ids = ?,
          proactive_enabled = ?, proactive_config = ?, proactive_mode = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(
-    patch.name ?? current.name,
-    patch.avatarUrl === undefined ? current.avatar_url : patch.avatarUrl,
-    patch.systemPrompt ?? current.system_prompt,
-    patch.greeting === undefined ? current.greeting : patch.greeting,
-    patch.interests === undefined ? current.interests : JSON.stringify(patch.interests),
-    patch.card === undefined ? current.card : patch.card,
-    patch.cardUrl === undefined ? current.card_url : patch.cardUrl,
-    patch.cardFilename === undefined ? current.card_filename : patch.cardFilename,
-    patch.inContacts === undefined ? current.in_contacts : patch.inContacts ? 1 : 0,
-    patch.providerId === undefined ? current.provider_id : patch.providerId,
-    patch.modelOverride === undefined ? current.model_override : patch.modelOverride,
-    patch.temperature === undefined ? current.temperature : patch.temperature,
-    patch.replyStyle ?? current.reply_style,
-    // 空数组与 undefined 语义不同：undefined = 不改，[] / null = 清空白名单回到跟随全局
-    patch.stickerPackIds === undefined
-      ? current.sticker_pack_ids
-      : patch.stickerPackIds?.length
-        ? JSON.stringify(patch.stickerPackIds)
-        : null,
-    nextProactive.enabled ? 1 : 0,
-    JSON.stringify(nextProactive),
-    nextMode,
-    now(),
-    id,
+     WHERE id = ?
+     RETURNING *`,
+    [
+      patch.name ?? current.name,
+      patch.avatarUrl === undefined ? current.avatar_url : patch.avatarUrl,
+      patch.systemPrompt ?? current.system_prompt,
+      patch.greeting === undefined ? current.greeting : patch.greeting,
+      patch.interests === undefined ? current.interests : JSON.stringify(patch.interests),
+      patch.card === undefined ? current.card : patch.card,
+      patch.cardUrl === undefined ? current.card_url : patch.cardUrl,
+      patch.cardFilename === undefined ? current.card_filename : patch.cardFilename,
+      patch.inContacts === undefined ? current.in_contacts : patch.inContacts ? 1 : 0,
+      patch.providerId === undefined ? current.provider_id : patch.providerId,
+      patch.modelOverride === undefined ? current.model_override : patch.modelOverride,
+      patch.temperature === undefined ? current.temperature : patch.temperature,
+      patch.replyStyle ?? current.reply_style,
+      // 空数组与 undefined 语义不同：undefined = 不改，[] / null = 清空白名单回到跟随全局
+      patch.stickerPackIds === undefined
+        ? current.sticker_pack_ids
+        : patch.stickerPackIds?.length
+          ? JSON.stringify(patch.stickerPackIds)
+          : null,
+      nextProactive.enabled ? 1 : 0,
+      JSON.stringify(nextProactive),
+      nextMode,
+      now(),
+      id,
+    ],
   )
-  const row = findPersona(db, id)
   if (!row) throw new Error('更新角色后回读失败')
   return row
 }
 
-export function softDeletePersona(db: DB, id: string): void {
-  db.prepare('UPDATE ai_personas SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), id)
+export async function softDeletePersona(db: Executor, id: string): Promise<void> {
+  await run(db, 'UPDATE ai_personas SET deleted_at = ?, updated_at = ? WHERE id = ?', [now(), now(), id])
 }
 
 /** 建角色时先插 persona 再补影子账号，两边 id 一一对应 */
-export function setPersonaUserId(db: DB, id: string, userId: string): void {
-  db.prepare('UPDATE ai_personas SET user_id = ?, updated_at = ? WHERE id = ?').run(userId, now(), id)
+export async function setPersonaUserId(db: Executor, id: string, userId: string): Promise<void> {
+  await run(db, 'UPDATE ai_personas SET user_id = ?, updated_at = ? WHERE id = ?', [userId, now(), id])
 }
 
 /** 按影子账号反查角色：群成员里哪些是 AI 靠它判断 */
-export function findPersonaByUserId(db: DB, userId: string): PersonaRow | undefined {
-  return db
-    .prepare('SELECT * FROM ai_personas WHERE user_id = ? AND deleted_at IS NULL')
-    .get(userId) as PersonaRow | undefined
+export async function findPersonaByUserId(db: Executor, userId: string): Promise<PersonaRow | undefined> {
+  return one<PersonaRow>(db, 'SELECT * FROM ai_personas WHERE user_id = ? AND deleted_at IS NULL', [userId])
 }
 
 /* ---------------------------- 自动互动全局设置 ---------------------------- */
@@ -522,18 +539,16 @@ export interface GlobalSettingsRow {
   updated_at: number
 }
 
-export function findGlobalSettings(db: DB, userId: string): GlobalSettingsRow | undefined {
-  return db.prepare('SELECT * FROM ai_global_settings WHERE user_id = ?').get(userId) as
-    | GlobalSettingsRow
-    | undefined
+export async function findGlobalSettings(db: Executor, userId: string): Promise<GlobalSettingsRow | undefined> {
+  return one<GlobalSettingsRow>(db, 'SELECT * FROM ai_global_settings WHERE user_id = ?', [userId])
 }
 
 /**
  * 读设置：没有记录时返回默认值而不是 undefined，
  * 调用方（调度器、设置页）都不需要再写一套兜底。
  */
-export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
-  const row = findGlobalSettings(db, userId)
+export async function readGlobalSettings(db: Executor, userId: string): Promise<AiGlobalSettings> {
+  const row = await findGlobalSettings(db, userId)
   const fallback: AiGlobalSettings = {
     proactiveEnabled: false,
     minIdleHours: PROACTIVE_DEFAULTS.minIdleHours,
@@ -599,16 +614,17 @@ export function readGlobalSettings(db: DB, userId: string): AiGlobalSettings {
   }
 }
 
-export function writeGlobalSettings(
-  db: DB,
+export async function writeGlobalSettings(
+  db: Executor,
   userId: string,
   patch: Partial<Omit<AiGlobalSettings, 'updatedAt'>>,
-): AiGlobalSettings {
-  const current = readGlobalSettings(db, userId)
+): Promise<AiGlobalSettings> {
+  const current = await readGlobalSettings(db, userId)
   const next = { ...current, ...patch }
   const ts = now()
 
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_global_settings
        (user_id, proactive_enabled, proactive_config, moments_enabled, moments_posts_per_day,
         moments_comments_per_day, moments_likes_per_day, group_enabled, group_replies_per_day,
@@ -633,46 +649,47 @@ export function writeGlobalSettings(
        stream_enabled = excluded.stream_enabled,
        debug_mode = excluded.debug_mode,
        updated_at = excluded.updated_at`,
-  ).run(
-    userId,
-    next.proactiveEnabled ? 1 : 0,
-    JSON.stringify({
-      minIdleHours: next.minIdleHours,
-      maxPerDay: next.maxPerDay,
-      triggerMode: next.triggerMode,
-      chanceUnit: next.chanceUnit,
-      chanceProbability: next.chanceProbability,
-      chanceCooldownMinutes: next.chanceCooldownMinutes,
-      windowStart: next.windowStart ?? undefined,
-      windowEnd: next.windowEnd ?? undefined,
-    }),
-    next.momentsEnabled ? 1 : 0,
-    next.momentsPostsPerDay,
-    next.momentsCommentsPerDay,
-    next.momentsLikesPerDay,
-    next.groupEnabled ? 1 : 0,
-    next.groupRepliesPerDay,
-    next.groupRepliesPerMessage,
-    next.groupReplyProbability ?? null,
-    next.groupReplyCooldownMinutes ?? null,
-    next.groupAutonomyPerDay,
-    next.segmentEnabled ? 1 : 0,
-    next.segmentPattern,
-    next.streamEnabled ? 1 : 0,
-    next.debugMode ? 1 : 0,
-    ts,
+    [
+      userId,
+      next.proactiveEnabled ? 1 : 0,
+      JSON.stringify({
+        minIdleHours: next.minIdleHours,
+        maxPerDay: next.maxPerDay,
+        triggerMode: next.triggerMode,
+        chanceUnit: next.chanceUnit,
+        chanceProbability: next.chanceProbability,
+        chanceCooldownMinutes: next.chanceCooldownMinutes,
+        windowStart: next.windowStart ?? undefined,
+        windowEnd: next.windowEnd ?? undefined,
+      }),
+      next.momentsEnabled ? 1 : 0,
+      next.momentsPostsPerDay,
+      next.momentsCommentsPerDay,
+      next.momentsLikesPerDay,
+      next.groupEnabled ? 1 : 0,
+      next.groupRepliesPerDay,
+      next.groupRepliesPerMessage,
+      next.groupReplyProbability ?? null,
+      next.groupReplyCooldownMinutes ?? null,
+      next.groupAutonomyPerDay,
+      next.segmentEnabled ? 1 : 0,
+      next.segmentPattern,
+      next.streamEnabled ? 1 : 0,
+      next.debugMode ? 1 : 0,
+      ts,
+    ],
   )
 
   return { ...next, updatedAt: ts }
 }
 
 /** 打开了动态互动的用户，供调度器逐个扫描 */
-export function listUsersWithMomentsEnabled(db: DB): string[] {
-  return (
-    db.prepare('SELECT user_id FROM ai_global_settings WHERE moments_enabled = 1').all() as Array<{
-      user_id: string
-    }>
-  ).map((row) => row.user_id)
+export async function listUsersWithMomentsEnabled(db: Executor): Promise<string[]> {
+  const rows = await all<{ user_id: string }>(
+    db,
+    'SELECT user_id FROM ai_global_settings WHERE moments_enabled = 1',
+  )
+  return rows.map((row) => row.user_id)
 }
 
 /* ------------------------------ 会话扩展 ------------------------------ */
@@ -689,10 +706,8 @@ export interface SessionRow {
   updated_at: number
 }
 
-export function findSession(db: DB, conversationId: string): SessionRow | undefined {
-  return db.prepare('SELECT * FROM ai_sessions WHERE conversation_id = ?').get(conversationId) as
-    | SessionRow
-    | undefined
+export async function findSession(db: Executor, conversationId: string): Promise<SessionRow | undefined> {
+  return one<SessionRow>(db, 'SELECT * FROM ai_sessions WHERE conversation_id = ?', [conversationId])
 }
 
 export function mapSession(row: SessionRow): AiSession {
@@ -709,38 +724,44 @@ export function mapSession(row: SessionRow): AiSession {
   }
 }
 
-export function createSession(
-  db: DB,
+export async function createSession(
+  db: Executor,
   input: { conversationId: string; personaId: string; providerId: string },
-): SessionRow {
+): Promise<SessionRow> {
   const ts = now()
-  db.prepare(
+  const row = await one<SessionRow>(
+    db,
     `INSERT INTO ai_sessions
        (conversation_id, persona_id, provider_id, memory_enabled, last_compacted_seq,
         messages_since_compact, token_estimate, created_at, updated_at)
-     VALUES (?, ?, ?, 1, 0, 0, 0, ?, ?)`,
-  ).run(input.conversationId, input.personaId, input.providerId, ts, ts)
-  const row = findSession(db, input.conversationId)
+     VALUES (?, ?, ?, 1, 0, 0, 0, ?, ?)
+     RETURNING *`,
+    [input.conversationId, input.personaId, input.providerId, ts, ts],
+  )
   if (!row) throw new Error('创建 AI 会话扩展失败')
   return row
 }
 
-export function bumpSessionProgress(db: DB, conversationId: string, messageCount: number, tokens: number): void {
-  db.prepare(
+export async function bumpSessionProgress(db: Executor, conversationId: string, messageCount: number, tokens: number): Promise<void> {
+  await run(
+    db,
     `UPDATE ai_sessions
      SET messages_since_compact = messages_since_compact + ?,
          token_estimate = token_estimate + ?,
          updated_at = ?
      WHERE conversation_id = ?`,
-  ).run(messageCount, tokens, now(), conversationId)
+    [messageCount, tokens, now(), conversationId],
+  )
 }
 
-export function markCompacted(db: DB, conversationId: string, upToSeq: number): void {
-  db.prepare(
+export async function markCompacted(db: Executor, conversationId: string, upToSeq: number): Promise<void> {
+  await run(
+    db,
     `UPDATE ai_sessions
      SET last_compacted_seq = ?, messages_since_compact = 0, updated_at = ?
      WHERE conversation_id = ?`,
-  ).run(upToSeq, now(), conversationId)
+    [upToSeq, now(), conversationId],
+  )
 }
 
 /* -------------------------------- 记忆 -------------------------------- */
@@ -772,57 +793,59 @@ export function mapSummary(row: SummaryRow) {
 }
 
 /** 只返回未被替代的摘要（滚动链的头部） */
-export function listSummaries(db: DB, conversationId: string) {
-  const rows = db
-    .prepare(
-      `SELECT * FROM ai_memory_summaries
-       WHERE conversation_id = ? AND superseded_by IS NULL
-       ORDER BY to_seq DESC LIMIT 10`,
-    )
-    .all(conversationId) as SummaryRow[]
+export async function listSummaries(db: Executor, conversationId: string) {
+  const rows = await all<SummaryRow>(
+    db,
+    `SELECT * FROM ai_memory_summaries
+     WHERE conversation_id = ? AND superseded_by IS NULL
+     ORDER BY to_seq DESC LIMIT 10`,
+    [conversationId],
+  )
   return rows.map(mapSummary)
 }
 
-export function latestSummary(db: DB, conversationId: string) {
-  const rows = db
-    .prepare(
-      `SELECT * FROM ai_memory_summaries
-       WHERE conversation_id = ? AND superseded_by IS NULL
-       ORDER BY to_seq DESC LIMIT 1`,
-    )
-    .all(conversationId) as SummaryRow[]
-  const row = rows[0]
+export async function latestSummary(db: Executor, conversationId: string) {
+  const row = await one<SummaryRow>(
+    db,
+    `SELECT * FROM ai_memory_summaries
+     WHERE conversation_id = ? AND superseded_by IS NULL
+     ORDER BY to_seq DESC LIMIT 1`,
+    [conversationId],
+  )
   return row ? mapSummary(row) : null
 }
 
-export function insertSummary(
-  db: DB,
+export async function insertSummary(
+  db: Executor,
   input: { conversationId: string; fromSeq: number; toSeq: number; summary: string; tokenEstimate: number; model?: string | null },
-): string {
+): Promise<string> {
   const id = ulid()
-  const superseded = db
-    .prepare(
-      'SELECT id FROM ai_memory_summaries WHERE conversation_id = ? AND superseded_by IS NULL',
-    )
-    .all(input.conversationId) as Array<{ id: string }>
+  const superseded = await all<{ id: string }>(
+    db,
+    'SELECT id FROM ai_memory_summaries WHERE conversation_id = ? AND superseded_by IS NULL',
+    [input.conversationId],
+  )
 
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_memory_summaries
        (id, conversation_id, from_seq, to_seq, summary, token_estimate, model, superseded_by, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-  ).run(
-    id,
-    input.conversationId,
-    input.fromSeq,
-    input.toSeq,
-    input.summary,
-    input.tokenEstimate,
-    input.model ?? null,
-    now(),
+    [
+      id,
+      input.conversationId,
+      input.fromSeq,
+      input.toSeq,
+      input.summary,
+      input.tokenEstimate,
+      input.model ?? null,
+      now(),
+    ],
   )
 
-  const update = db.prepare('UPDATE ai_memory_summaries SET superseded_by = ? WHERE id = ?')
-  for (const row of superseded) update.run(id, row.id)
+  for (const row of superseded) {
+    await run(db, 'UPDATE ai_memory_summaries SET superseded_by = ? WHERE id = ?', [id, row.id])
+  }
 
   return id
 }
@@ -857,22 +880,22 @@ export function mapFact(row: FactRow): AiMemoryFact {
   }
 }
 
-export function listFacts(db: DB, conversationId: string): FactRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM ai_memory_facts
-       WHERE conversation_id = ? AND status = 'active'
-       ORDER BY subject, key`,
-    )
-    .all(conversationId) as FactRow[]
+export async function listFacts(db: Executor, conversationId: string): Promise<FactRow[]> {
+  return all<FactRow>(
+    db,
+    `SELECT * FROM ai_memory_facts
+     WHERE conversation_id = ? AND status = 'active'
+     ORDER BY subject, key`,
+    [conversationId],
+  )
 }
 
 /**
  * 写入事实：同 (subject, key) 已有 active 值时，
  * 把旧值标记为 superseded 再插入新值，形成可追溯的覆盖链。
  */
-export function upsertFact(
-  db: DB,
+export async function upsertFact(
+  db: Executor,
   input: {
     conversationId: string
     subject: string
@@ -881,63 +904,67 @@ export function upsertFact(
     confidence: number
     sourceMessageId?: string | null
   },
-): string {
-  const existing = db
-    .prepare(
-      `SELECT * FROM ai_memory_facts
-       WHERE conversation_id = ? AND subject = ? AND key = ? AND status = 'active'`,
-    )
-    .get(input.conversationId, input.subject, input.key) as FactRow | undefined
+): Promise<string> {
+  const existing = await one<FactRow>(
+    db,
+    `SELECT * FROM ai_memory_facts
+     WHERE conversation_id = ? AND subject = ? AND key = ? AND status = 'active'`,
+    [input.conversationId, input.subject, input.key],
+  )
 
   const id = ulid()
   const ts = now()
 
   if (existing && existing.value === input.value) {
-    db.prepare('UPDATE ai_memory_facts SET confidence = ?, updated_at = ? WHERE id = ?').run(
+    await run(db, 'UPDATE ai_memory_facts SET confidence = ?, updated_at = ? WHERE id = ?', [
       Math.max(existing.confidence, input.confidence),
       ts,
       existing.id,
-    )
+    ])
     return existing.id
   }
 
   if (existing) {
-    db.prepare("UPDATE ai_memory_facts SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?").run(
-      id,
-      ts,
-      existing.id,
+    await run(
+      db,
+      "UPDATE ai_memory_facts SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?",
+      [id, ts, existing.id],
     )
   }
 
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_memory_facts
        (id, conversation_id, subject, key, value, confidence, source_message_id, status,
         superseded_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)`,
-  ).run(
-    id,
-    input.conversationId,
-    input.subject,
-    input.key,
-    input.value,
-    input.confidence,
-    input.sourceMessageId ?? null,
-    ts,
-    ts,
+    [
+      id,
+      input.conversationId,
+      input.subject,
+      input.key,
+      input.value,
+      input.confidence,
+      input.sourceMessageId ?? null,
+      ts,
+      ts,
+    ],
   )
   return id
 }
 
-export function rejectFact(db: DB, conversationId: string, factId: string): void {
-  db.prepare(
+export async function rejectFact(db: Executor, conversationId: string, factId: string): Promise<void> {
+  await run(
+    db,
     "UPDATE ai_memory_facts SET status = 'rejected', updated_at = ? WHERE conversation_id = ? AND id = ?",
-  ).run(now(), conversationId, factId)
+    [now(), conversationId, factId],
+  )
 }
 
 /* ------------------------------ 生成记录 ------------------------------ */
 
-export function createGeneration(
-  db: DB,
+export async function createGeneration(
+  db: Executor,
   input: {
     conversationId: string
     userId: string
@@ -947,29 +974,31 @@ export function createGeneration(
     runLocation: 'local' | 'server'
     model: string
   },
-): string {
+): Promise<string> {
   const id = ulid()
-  db.prepare(
+  await run(
+    db,
     `INSERT INTO ai_generations
        (id, conversation_id, user_id, user_message_id, provider_id, persona_id, run_location,
         model, status, error, prompt_tokens, completion_tokens, message_ids, started_at, finished_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'streaming', NULL, NULL, NULL, NULL, ?, NULL)`,
-  ).run(
-    id,
-    input.conversationId,
-    input.userId,
-    input.userMessageId,
-    input.providerId,
-    input.personaId,
-    input.runLocation,
-    input.model,
-    now(),
+    [
+      id,
+      input.conversationId,
+      input.userId,
+      input.userMessageId,
+      input.providerId,
+      input.personaId,
+      input.runLocation,
+      input.model,
+      now(),
+    ],
   )
   return id
 }
 
-export function finishGeneration(
-  db: DB,
+export async function finishGeneration(
+  db: Executor,
   id: string,
   patch: {
     status: 'done' | 'error' | 'cancelled'
@@ -978,26 +1007,28 @@ export function finishGeneration(
     promptTokens?: number | null
     completionTokens?: number | null
   },
-): void {
-  db.prepare(
+): Promise<void> {
+  await run(
+    db,
     `UPDATE ai_generations
      SET status = ?, error = ?, message_ids = ?, prompt_tokens = ?, completion_tokens = ?, finished_at = ?
      WHERE id = ?`,
-  ).run(
-    patch.status,
-    patch.error ?? null,
-    patch.messageIds ? JSON.stringify(patch.messageIds) : null,
-    patch.promptTokens ?? null,
-    patch.completionTokens ?? null,
-    now(),
-    id,
+    [
+      patch.status,
+      patch.error ?? null,
+      patch.messageIds ? JSON.stringify(patch.messageIds) : null,
+      patch.promptTokens ?? null,
+      patch.completionTokens ?? null,
+      now(),
+      id,
+    ],
   )
 }
 
 /** 延迟投递途中把已送达的分段先写进 message_ids：终态还没到，进程挂了也不丢进度 */
-export function trackGenerationMessages(db: DB, id: string, messageIds: string[]): void {
-  db.prepare('UPDATE ai_generations SET message_ids = ? WHERE id = ?').run(
+export async function trackGenerationMessages(db: Executor, id: string, messageIds: string[]): Promise<void> {
+  await run(db, 'UPDATE ai_generations SET message_ids = ? WHERE id = ?', [
     JSON.stringify(messageIds),
     id,
-  )
+  ])
 }

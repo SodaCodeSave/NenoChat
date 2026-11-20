@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,7 @@ const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-local-'))
 const LOCAL_TOKEN = 'local-handshake-token-0123456789abcdef'
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.REGISTRATION_MODE = 'closed'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'

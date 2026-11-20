@@ -1,5 +1,5 @@
 import { ulid, type AttachmentRef, type Post, type PostComment, type PublicUser } from '@nenochat/shared'
-import type { DB } from '../index'
+import { all, one, run, type DB } from '../index'
 import { now } from '../../util/clock'
 
 export interface PostRow {
@@ -78,15 +78,17 @@ export interface PersonaBrief {
 }
 
 /** 批量取角色署名信息，避免每条动态单独查一次 */
-export function personasOf(db: DB, ids: Array<string | null>): Map<string, PersonaBrief> {
+export async function personasOf(db: DB, ids: Array<string | null>): Promise<Map<string, PersonaBrief>> {
   const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))]
   const map = new Map<string, PersonaBrief>()
   if (unique.length === 0) return map
 
   const placeholders = unique.map(() => '?').join(',')
-  const rows = db
-    .prepare(`SELECT id, name, avatar_url FROM ai_personas WHERE id IN (${placeholders})`)
-    .all(...unique) as PersonaBrief[]
+  const rows = await all<PersonaBrief>(
+    db,
+    `SELECT id, name, avatar_url FROM ai_personas WHERE id IN (${placeholders})`,
+    unique,
+  )
   for (const row of rows) map.set(row.id, row)
   return map
 }
@@ -121,20 +123,20 @@ function attachmentRef(row: AttachmentJoinRow): AttachmentRef {
   }
 }
 
-function attachmentsOf(db: DB, postIds: string[]): Map<string, AttachmentRef[]> {
+async function attachmentsOf(db: DB, postIds: string[]): Promise<Map<string, AttachmentRef[]>> {
   const map = new Map<string, AttachmentRef[]>()
   if (postIds.length === 0) return map
   const placeholders = postIds.map(() => '?').join(',')
-  const rows = db
-    .prepare(
-      `SELECT pa.post_id,
-              a.id, a.kind, a.filename, a.mime, a.size, a.width, a.height, a.storage_key, a.thumb_key
-       FROM post_attachments pa
-       JOIN attachments a ON a.id = pa.attachment_id AND a.deleted_at IS NULL
-       WHERE pa.post_id IN (${placeholders})
-       ORDER BY pa.position ASC`,
-    )
-    .all(...postIds) as AttachmentJoinRow[]
+  const rows = await all<AttachmentJoinRow>(
+    db,
+    `SELECT pa.post_id,
+            a.id, a.kind, a.filename, a.mime, a.size, a.width, a.height, a.storage_key, a.thumb_key
+     FROM post_attachments pa
+     JOIN attachments a ON a.id = pa.attachment_id AND a.deleted_at IS NULL
+     WHERE pa.post_id IN (${placeholders})
+     ORDER BY pa.position ASC`,
+    postIds,
+  )
 
   for (const row of rows) {
     const list = map.get(row.post_id) ?? []
@@ -167,57 +169,55 @@ export function mapPost(
 }
 
 /** 信息流：全服广场，按发布时间倒序，游标为上一页最后一条的 createdAt */
-export function listFeed(db: DB, userId: string, before: number | null, limit: number): Post[] {
-  const rows = (
-    before === null
-      ? db
-          .prepare(
-            `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
-                    EXISTS(SELECT 1 FROM post_likes l
-                            WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
-             FROM posts p JOIN users u ON u.id = p.author_id
-             WHERE p.deleted_at IS NULL
-             ORDER BY p.created_at DESC, p.id DESC
-             LIMIT ?`,
-          )
-          .all(userId, limit)
-      : db
-          .prepare(
-            `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
-                    EXISTS(SELECT 1 FROM post_likes l
-                            WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
-             FROM posts p JOIN users u ON u.id = p.author_id
-             WHERE p.deleted_at IS NULL AND p.created_at < ?
-             ORDER BY p.created_at DESC, p.id DESC
-             LIMIT ?`,
-          )
-          .all(userId, before, limit)
-  ) as PostListRow[]
+export async function listFeed(db: DB, userId: string, before: number | null, limit: number): Promise<Post[]> {
+  const rows = before === null
+    ? await all<PostListRow>(
+        db,
+        `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
+                EXISTS(SELECT 1 FROM post_likes l
+                        WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
+         FROM posts p JOIN users u ON u.id = p.author_id
+         WHERE p.deleted_at IS NULL
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT ?`,
+        [userId, limit],
+      )
+    : await all<PostListRow>(
+        db,
+        `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
+                EXISTS(SELECT 1 FROM post_likes l
+                        WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
+         FROM posts p JOIN users u ON u.id = p.author_id
+         WHERE p.deleted_at IS NULL AND p.created_at < ?
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT ?`,
+        [userId, before, limit],
+      )
 
-  const attachments = attachmentsOf(db, rows.map((r) => r.id))
-  const personas = personasOf(db, rows.map((r) => r.persona_id))
+  const attachments = await attachmentsOf(db, rows.map((r) => r.id))
+  const personas = await personasOf(db, rows.map((r) => r.persona_id))
   return rows.map((row) =>
     mapPost(row, attachments.get(row.id) ?? [], row.persona_id ? personas.get(row.persona_id) : undefined),
   )
 }
 
-export function findById(db: DB, id: string, userId: string): PostListRow | undefined {
-  return db
-    .prepare(
-      `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
-              EXISTS(SELECT 1 FROM post_likes l
-                      WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
-       FROM posts p JOIN users u ON u.id = p.author_id
-       WHERE p.id = ? AND p.deleted_at IS NULL`,
-    )
-    .get(userId, id) as PostListRow | undefined
+export function findById(db: DB, id: string, userId: string): Promise<PostListRow | undefined> {
+  return one<PostListRow>(
+    db,
+    `SELECT p.*, u.username, u.display_name, u.avatar_url, u.bio,
+            EXISTS(SELECT 1 FROM post_likes l
+                    WHERE l.post_id = p.id AND l.user_id = ? AND l.persona_id = '') AS liked
+     FROM posts p JOIN users u ON u.id = p.author_id
+     WHERE p.id = ? AND p.deleted_at IS NULL`,
+    [userId, id],
+  )
 }
 
-export function loadOne(db: DB, id: string, userId: string): Post | null {
-  const row = findById(db, id, userId)
+export async function loadOne(db: DB, id: string, userId: string): Promise<Post | null> {
+  const row = await findById(db, id, userId)
   if (!row) return null
-  const attachments = attachmentsOf(db, [id])
-  const persona = row.persona_id ? personasOf(db, [row.persona_id]).get(row.persona_id) : undefined
+  const attachments = await attachmentsOf(db, [id])
+  const persona = row.persona_id ? (await personasOf(db, [row.persona_id])).get(row.persona_id) : undefined
   return mapPost(row, attachments.get(id) ?? [], persona)
 }
 
@@ -229,80 +229,101 @@ export interface CreatePostRowInput {
   attachmentIds: string[]
 }
 
-export function create(db: DB, input: CreatePostRowInput): PostRow {
+export async function create(db: DB, input: CreatePostRowInput): Promise<PostRow> {
   const id = ulid()
   const ts = now()
 
-  db.prepare(
+  const row = await one<PostRow>(
+    db,
     `INSERT INTO posts (id, author_id, persona_id, content, visibility, like_count, comment_count,
                         created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
-  ).run(id, input.authorId, input.personaId ?? null, input.content, input.visibility, ts, ts)
+     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)
+     RETURNING *`,
+    [id, input.authorId, input.personaId ?? null, input.content, input.visibility, ts, ts],
+  )
+  if (!row) throw new Error('创建动态后回读失败')
 
-  const link = db.prepare('INSERT INTO post_attachments (post_id, attachment_id, position) VALUES (?, ?, ?)')
-  input.attachmentIds.forEach((attachmentId, index) => link.run(id, attachmentId, index))
+  for (const [index, attachmentId] of input.attachmentIds.entries()) {
+    await run(db, 'INSERT INTO post_attachments (post_id, attachment_id, position) VALUES (?, ?, ?)', [
+      id,
+      attachmentId,
+      index,
+    ])
+  }
 
-  return db.prepare('SELECT * FROM posts WHERE id = ?').get(id) as PostRow
+  return row
 }
 
-export function softDelete(db: DB, id: string, at: number): void {
-  db.prepare('UPDATE posts SET deleted_at = ?, updated_at = ? WHERE id = ?').run(at, at, id)
+export async function softDelete(db: DB, id: string, at: number): Promise<void> {
+  await run(db, 'UPDATE posts SET deleted_at = ?, updated_at = ? WHERE id = ?', [at, at, id])
 }
 
 /** 点赞是幂等切换：传入目标状态而不是「反转」，多端并发点两次不会打架 */
-export function setLike(db: DB, postId: string, userId: string, liked: boolean): number {
+export async function setLike(db: DB, postId: string, userId: string, liked: boolean): Promise<number> {
   const ts = now()
   // 只动用户本人的点赞，不碰自己角色点过的那几行
   const changed = liked
-    ? db
-        .prepare(
-          "INSERT OR IGNORE INTO post_likes (post_id, user_id, persona_id, created_at) VALUES (?, ?, '', ?)",
+    ? (
+        await run(
+          db,
+          "INSERT INTO post_likes (post_id, user_id, persona_id, created_at) VALUES (?, ?, '', ?) ON CONFLICT DO NOTHING",
+          [postId, userId, ts],
         )
-        .run(postId, userId, ts).changes
-    : db
-        .prepare("DELETE FROM post_likes WHERE post_id = ? AND user_id = ? AND persona_id = ''")
-        .run(postId, userId).changes
+      ).changes
+    : (
+        await run(db, "DELETE FROM post_likes WHERE post_id = ? AND user_id = ? AND persona_id = ''", [
+          postId,
+          userId,
+        ])
+      ).changes
 
   if (changed > 0) {
-    db.prepare(
+    await run(
+      db,
       'UPDATE posts SET like_count = (SELECT COUNT(*) FROM post_likes WHERE post_id = ?), updated_at = ? WHERE id = ?',
-    ).run(postId, ts, postId)
+      [postId, ts, postId],
+    )
   }
 
-  const row = db.prepare('SELECT like_count FROM posts WHERE id = ?').get(postId) as { like_count: number }
-  return row.like_count
+  const row = await one<{ like_count: number }>(db, 'SELECT like_count FROM posts WHERE id = ?', [postId])
+  return row?.like_count ?? 0
 }
 
 /** 角色点赞：只增不减，同一角色同一条动态由 ai_moment_actions 保证只点一次 */
-export function addPersonaLike(db: DB, postId: string, userId: string, personaId: string): number {
+export async function addPersonaLike(db: DB, postId: string, userId: string, personaId: string): Promise<number> {
   const ts = now()
-  const changed = db
-    .prepare(
-      'INSERT OR IGNORE INTO post_likes (post_id, user_id, persona_id, created_at) VALUES (?, ?, ?, ?)',
-    )
-    .run(postId, userId, personaId, ts).changes
+  const changed = (
+    await run(db, 'INSERT INTO post_likes (post_id, user_id, persona_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING', [
+      postId,
+      userId,
+      personaId,
+      ts,
+    ])
+  ).changes
 
   if (changed > 0) {
-    db.prepare(
+    await run(
+      db,
       'UPDATE posts SET like_count = (SELECT COUNT(*) FROM post_likes WHERE post_id = ?), updated_at = ? WHERE id = ?',
-    ).run(postId, ts, postId)
+      [postId, ts, postId],
+    )
   }
 
-  const row = db.prepare('SELECT like_count FROM posts WHERE id = ?').get(postId) as { like_count: number }
-  return row.like_count
+  const row = await one<{ like_count: number }>(db, 'SELECT like_count FROM posts WHERE id = ?', [postId])
+  return row?.like_count ?? 0
 }
 
-export function listComments(db: DB, postId: string): PostComment[] {
-  const rows = db
-    .prepare(
-      `SELECT c.*, u.username, u.display_name, u.avatar_url, u.bio
-       FROM post_comments c JOIN users u ON u.id = c.author_id
-       WHERE c.post_id = ? AND c.deleted_at IS NULL
-       ORDER BY c.created_at ASC`,
-    )
-    .all(postId) as CommentListRow[]
+export async function listComments(db: DB, postId: string): Promise<PostComment[]> {
+  const rows = await all<CommentListRow>(
+    db,
+    `SELECT c.*, u.username, u.display_name, u.avatar_url, u.bio
+     FROM post_comments c JOIN users u ON u.id = c.author_id
+     WHERE c.post_id = ? AND c.deleted_at IS NULL
+     ORDER BY c.created_at ASC`,
+    [postId],
+  )
 
-  const personas = personasOf(db, rows.map((row) => row.persona_id))
+  const personas = await personasOf(db, rows.map((row) => row.persona_id))
   return rows.map((row) => ({
     id: row.id,
     postId: row.post_id,
@@ -317,7 +338,7 @@ export function listComments(db: DB, postId: string): PostComment[] {
   }))
 }
 
-export function createComment(
+export async function createComment(
   db: DB,
   input: {
     postId: string
@@ -326,44 +347,50 @@ export function createComment(
     content: string
     replyToCommentId?: string | null
   },
-): CommentRow {
+): Promise<CommentRow> {
   const id = ulid()
   const ts = now()
-  db.prepare(
+  const row = await one<CommentRow>(
+    db,
     `INSERT INTO post_comments
        (id, post_id, author_id, persona_id, content, reply_to_comment_id, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-  ).run(
-    id,
-    input.postId,
-    input.authorId,
-    input.personaId ?? null,
-    input.content,
-    input.replyToCommentId ?? null,
-    ts,
-    ts,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+     RETURNING *`,
+    [
+      id,
+      input.postId,
+      input.authorId,
+      input.personaId ?? null,
+      input.content,
+      input.replyToCommentId ?? null,
+      ts,
+      ts,
+    ],
+  )
+  if (!row) throw new Error('创建评论后回读失败')
+
+  await run(
+    db,
+    'UPDATE posts SET comment_count = (SELECT COUNT(*) FROM post_comments WHERE post_id = ? AND deleted_at IS NULL), updated_at = ? WHERE id = ?',
+    [input.postId, ts, input.postId],
   )
 
-  db.prepare(
-    'UPDATE posts SET comment_count = (SELECT COUNT(*) FROM post_comments WHERE post_id = ? AND deleted_at IS NULL), updated_at = ? WHERE id = ?',
-  ).run(input.postId, ts, input.postId)
-
-  return db.prepare('SELECT * FROM post_comments WHERE id = ?').get(id) as CommentRow
+  return row
 }
 
-export function findComment(db: DB, id: string): CommentRow | undefined {
-  return db
-    .prepare('SELECT * FROM post_comments WHERE id = ? AND deleted_at IS NULL')
-    .get(id) as CommentRow | undefined
+export function findComment(db: DB, id: string): Promise<CommentRow | undefined> {
+  return one<CommentRow>(db, 'SELECT * FROM post_comments WHERE id = ? AND deleted_at IS NULL', [id])
 }
 
-export function softDeleteComment(db: DB, id: string, at: number): void {
-  const row = findComment(db, id)
+export async function softDeleteComment(db: DB, id: string, at: number): Promise<void> {
+  const row = await findComment(db, id)
   if (!row) return
-  db.prepare('UPDATE post_comments SET deleted_at = ?, updated_at = ? WHERE id = ?').run(at, at, id)
-  db.prepare(
+  await run(db, 'UPDATE post_comments SET deleted_at = ?, updated_at = ? WHERE id = ?', [at, at, id])
+  await run(
+    db,
     'UPDATE posts SET comment_count = (SELECT COUNT(*) FROM post_comments WHERE post_id = ? AND deleted_at IS NULL) WHERE id = ?',
-  ).run(row.post_id, row.post_id)
+    [row.post_id, row.post_id],
+  )
 }
 
 /* ---------------------------- 角色浏览动态用 ---------------------------- */
@@ -383,18 +410,18 @@ export interface AiPostCandidate {
  * 角色「刷」得到的动态：只要最近发布的，太旧的翻出来评论会显得莫名其妙。
  * 作者名已经处理好角色署名的覆盖，提示词里直接用。
  */
-export function listRecentForAi(db: DB, sinceTs: number, limit: number): AiPostCandidate[] {
-  return db
-    .prepare(
-      `SELECT p.id, p.author_id, p.persona_id, p.content, p.comment_count, p.created_at,
-              COALESCE(ap.name, u.display_name) AS author_name,
-              (SELECT COUNT(*) FROM post_attachments pa WHERE pa.post_id = p.id) AS image_count
-       FROM posts p
-       JOIN users u ON u.id = p.author_id
-       LEFT JOIN ai_personas ap ON ap.id = p.persona_id
-       WHERE p.deleted_at IS NULL AND p.created_at >= ?
-       ORDER BY p.created_at DESC
-       LIMIT ?`,
-    )
-    .all(sinceTs, limit) as AiPostCandidate[]
+export function listRecentForAi(db: DB, sinceTs: number, limit: number): Promise<AiPostCandidate[]> {
+  return all<AiPostCandidate>(
+    db,
+    `SELECT p.id, p.author_id, p.persona_id, p.content, p.comment_count, p.created_at,
+            COALESCE(ap.name, u.display_name) AS author_name,
+            (SELECT COUNT(*) FROM post_attachments pa WHERE pa.post_id = p.id) AS image_count
+     FROM posts p
+     JOIN users u ON u.id = p.author_id
+     LEFT JOIN ai_personas ap ON ap.id = p.persona_id
+     WHERE p.deleted_at IS NULL AND p.created_at >= ?
+     ORDER BY p.created_at DESC
+     LIMIT ?`,
+    [sinceTs, limit],
+  )
 }

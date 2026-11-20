@@ -1,4 +1,4 @@
-import type { DB } from '../index'
+import { one, type Executor } from '../index'
 import { now } from '../../util/clock'
 
 export interface BilibiliSummaryRow {
@@ -11,18 +11,20 @@ export interface BilibiliSummaryRow {
   updated_at: number
 }
 
-export function findSummary(
-  db: DB,
+export async function findSummary(
+  db: Executor,
   ownerId: string,
   videoId: string,
-): BilibiliSummaryRow | undefined {
-  return db
-    .prepare('SELECT * FROM bilibili_video_summaries WHERE owner_id = ? AND video_id = ?')
-    .get(ownerId, videoId) as BilibiliSummaryRow | undefined
+): Promise<BilibiliSummaryRow | undefined> {
+  return one<BilibiliSummaryRow>(
+    db,
+    'SELECT * FROM bilibili_video_summaries WHERE owner_id = ? AND video_id = ?',
+    [ownerId, videoId],
+  )
 }
 
-export function saveSummary(
-  db: DB,
+export async function saveSummary(
+  db: Executor,
   input: {
     ownerId: string
     videoId: string
@@ -30,9 +32,10 @@ export function saveSummary(
     summary: string
     model?: string | null
   },
-): BilibiliSummaryRow {
+): Promise<BilibiliSummaryRow> {
   const ts = now()
-  db.prepare(
+  const row = await one<BilibiliSummaryRow>(
+    db,
     `INSERT INTO bilibili_video_summaries
        (owner_id, video_id, title, summary, model, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -40,17 +43,18 @@ export function saveSummary(
        title = excluded.title,
        summary = excluded.summary,
        model = excluded.model,
-       updated_at = excluded.updated_at`,
-  ).run(
-    input.ownerId,
-    input.videoId,
-    input.title ?? null,
-    input.summary,
-    input.model ?? null,
-    ts,
-    ts,
+       updated_at = excluded.updated_at
+     RETURNING *`,
+    [
+      input.ownerId,
+      input.videoId,
+      input.title ?? null,
+      input.summary,
+      input.model ?? null,
+      ts,
+      ts,
+    ],
   )
-  const row = findSummary(db, input.ownerId, input.videoId)
   if (!row) throw new Error('保存视频总结后回读失败')
   return row
 }

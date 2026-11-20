@@ -6,7 +6,8 @@ import {
   type SearchMessageHit,
   type SearchResponse,
 } from '@nenochat/shared'
-import type { DB } from '../db'
+import type { Executor } from '../db'
+import { all } from '../db'
 import * as messagesRepo from '../db/repo/messages'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as usersRepo from '../db/repo/users'
@@ -17,95 +18,85 @@ interface MessageHitRow extends messagesRepo.MessageRow {
   sender_name: string | null
 }
 
-/** FTS5 的查询串需要整体加引号，否则 - " * 等字符会被当成语法 */
-function ftsQuery(keyword: string): string {
-  return `"${keyword.replace(/"/g, '""')}"`
-}
-
 function searchMessages(
-  db: DB,
+  db: Executor,
   userId: string,
   keyword: string,
   limit: number,
   conversationId?: string,
-): SearchMessageHit[] {
+): Promise<SearchMessageHit[]> {
   const membership = `JOIN conversation_members cm
        ON cm.conversation_id = m.conversation_id AND cm.user_id = ? AND cm.left_at IS NULL`
 
   const select = `SELECT m.*, c.name AS conversation_name, c.type AS conversation_type,
                          u.display_name AS sender_name
-                  FROM %FROM%
+                  FROM messages m
                   JOIN conversations c ON c.id = m.conversation_id
                   LEFT JOIN users u ON u.id = m.sender_id
                   ${membership}
-                  WHERE %WHERE%`
+                  WHERE m.content ILIKE ? AND m.deleted_at IS NULL AND c.deleted_at IS NULL${scopeFilter(conversationId)}`
 
-  const scopeFilter = conversationId ? ' AND m.conversation_id = ?' : ''
   const scopeParams = conversationId ? [conversationId] : []
 
-  const rows = (() => {
-    // trigram 分词要求 ≥3 个字符，短查询直接走 LIKE（小服务器数据量下足够）
-    if ([...keyword].length >= SEARCH_FTS_MIN_CHARS) {
-      const sql = select
-        .replace('%FROM%', 'message_fts f JOIN messages m ON m.id = f.message_id')
-        .replace(
-          '%WHERE%',
-          `message_fts MATCH ? AND m.deleted_at IS NULL AND c.deleted_at IS NULL${scopeFilter}`,
-        )
-      return db
-        .prepare(`${sql} ORDER BY m.created_at DESC LIMIT ?`)
-        .all(userId, ftsQuery(keyword), ...scopeParams, limit) as MessageHitRow[]
-    }
-
-    // 短词回退 LIKE 是全内容扫描，只允许限定会话使用；全局短词直接返回空，
-    // 避免小词（如单字）在大库上无索引扫全表
-    if (!conversationId) return []
-
+  const rows = (async () => {
     const like = `%${keyword.replace(/[%_]/g, '')}%`
-    const sql = select
-      .replace('%FROM%', 'messages m')
-      .replace(
-        '%WHERE%',
-        `m.content LIKE ? AND m.deleted_at IS NULL AND c.deleted_at IS NULL${scopeFilter}`,
-      )
-    return db
-      .prepare(`${sql} ORDER BY m.created_at DESC LIMIT ?`)
-      .all(userId, like, ...scopeParams, limit) as MessageHitRow[]
+
+    // 全库短词搜索会退化成无索引扫描，只允许限定会话使用；
+    // 常规长度（≥3 字符）走 pg_trgm GIN 索引加速的 ILIKE
+    if ([...keyword].length < SEARCH_FTS_MIN_CHARS && !conversationId) return [] as MessageHitRow[]
+
+    return all<MessageHitRow>(
+      db,
+      `${select} ORDER BY m.created_at DESC LIMIT ?`,
+      [userId, like, ...scopeParams, limit],
+    )
   })()
 
-  return rows.map((row) => ({
-    message: messagesRepo.mapMessage(row),
-    conversationId: row.conversation_id,
-    conversationName: row.conversation_name,
-    conversationType: row.conversation_type,
-    senderName: row.sender_name,
-  }))
+  return rows.then((rs) =>
+    rs.map((row) => ({
+      message: messagesRepo.mapMessage(row),
+      conversationId: row.conversation_id,
+      conversationName: row.conversation_name,
+      conversationType: row.conversation_type,
+      senderName: row.sender_name,
+    })),
+  )
 }
 
-function searchUsers(db: DB, userId: string, keyword: string, limit: number): PublicUser[] {
-  return usersRepo.search(db, keyword, userId, limit).map(usersRepo.mapPublicUser)
+function scopeFilter(conversationId?: string): string {
+  return conversationId ? ' AND m.conversation_id = ?' : ''
 }
 
-function searchConversations(db: DB, userId: string, keyword: string, limit: number): Conversation[] {
+async function searchUsers(db: Executor, userId: string, keyword: string, limit: number): Promise<PublicUser[]> {
+  const rows = await usersRepo.search(db, keyword, userId, limit)
+  return rows.map(usersRepo.mapPublicUser)
+}
+
+async function searchConversations(
+  db: Executor,
+  userId: string,
+  keyword: string,
+  limit: number,
+): Promise<Conversation[]> {
   const like = `%${keyword.replace(/[%_]/g, '')}%`
-  const rows = db
-    .prepare(
-      `SELECT c.* FROM conversations c
+  const rows = await all<conversationsRepo.ConversationRow>(
+    db,
+    `SELECT c.* FROM conversations c
        JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ? AND cm.left_at IS NULL
-       WHERE c.deleted_at IS NULL AND c.name IS NOT NULL AND c.name LIKE ?
+       WHERE c.deleted_at IS NULL AND c.name IS NOT NULL AND c.name ILIKE ?
        ORDER BY c.updated_at DESC
        LIMIT ?`,
-    )
-    .all(userId, like, limit) as conversationsRepo.ConversationRow[]
+    [userId, like, limit],
+  )
 
   return rows.map(conversationsRepo.mapConversation)
 }
 
-export function search(
-  db: DB,
+export async function search(
+  db: Executor,
   userId: string,
   query: { q: string; scope: 'all' | 'messages' | 'users' | 'conversations'; conversationId?: string; limit: number },
-): SearchResponse {
+): Promise<SearchResponse> {
   const keyword = query.q.trim()
   const limit = query.limit
   const wantMessages = query.scope === 'all' || query.scope === 'messages'
@@ -115,9 +106,9 @@ export function search(
   return {
     query: keyword,
     messages: wantMessages
-      ? searchMessages(db, userId, keyword, limit, query.conversationId)
+      ? await searchMessages(db, userId, keyword, limit, query.conversationId)
       : [],
-    users: wantUsers ? searchUsers(db, userId, keyword, limit) : [],
-    conversations: wantConversations ? searchConversations(db, userId, keyword, limit) : [],
+    users: wantUsers ? await searchUsers(db, userId, keyword, limit) : [],
+    conversations: wantConversations ? await searchConversations(db, userId, keyword, limit) : [],
   }
 }

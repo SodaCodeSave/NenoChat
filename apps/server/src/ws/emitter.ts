@@ -14,8 +14,9 @@ import { now } from '../util/clock'
 import { hub } from './hub'
 
 /** 会话成员的 userId 列表，广播的唯一收件人来源 */
-export function memberIds(db: DB, conversationId: string): string[] {
-  return membersRepo.listActive(db, conversationId).map((m) => m.user_id)
+export async function memberIds(db: DB, conversationId: string): Promise<string[]> {
+  const members = await membersRepo.listActive(db, conversationId)
+  return members.map((m) => m.user_id)
 }
 
 /** typing / 已读回执这类高频事件的成员名单短缓存：5 秒内复用一次查询结果 */
@@ -26,65 +27,65 @@ const memberIdsCache = new Map<string, { ids: string[]; expiresAt: number }>()
  * 仅限 typing / 已读回执扇出使用的缓存版本；成员变化最多延迟 5 秒生效。
  * 消息广播等权限关键路径必须继续走 memberIds 实时查询，不走这里。
  */
-function memberIdsCached(db: DB, conversationId: string): string[] {
+async function memberIdsCached(db: DB, conversationId: string): Promise<string[]> {
   const cached = memberIdsCache.get(conversationId)
   const ts = now()
   if (cached && cached.expiresAt > ts) return cached.ids
-  const ids = memberIds(db, conversationId)
+  const ids = await memberIds(db, conversationId)
   memberIdsCache.set(conversationId, { ids, expiresAt: ts + MEMBER_IDS_TTL_MS })
   return ids
 }
 
-export function emitMessageCreated(db: DB, message: Message, tempId: string | null): void {
-  hub().sendToUsers(memberIds(db, message.conversationId), 'message.created', {
+export async function emitMessageCreated(db: DB, message: Message, tempId: string | null): Promise<void> {
+  hub().sendToUsers(await memberIds(db, message.conversationId), 'message.created', {
     message,
     conversationId: message.conversationId,
     tempId,
   })
 }
 
-export function emitMessageUpdated(db: DB, message: Message): void {
-  hub().sendToUsers(memberIds(db, message.conversationId), 'message.updated', { message })
+export async function emitMessageUpdated(db: DB, message: Message): Promise<void> {
+  hub().sendToUsers(await memberIds(db, message.conversationId), 'message.updated', { message })
 }
 
-export function emitConversationUpdated(db: DB, conversation: Conversation, me: Member | null = null): void {
-  hub().sendToUsers(memberIds(db, conversation.id), 'conversation.updated', {
+export async function emitConversationUpdated(db: DB, conversation: Conversation, me: Member | null = null): Promise<void> {
+  hub().sendToUsers(await memberIds(db, conversation.id), 'conversation.updated', {
     conversation,
     me,
   })
 }
 
-export function emitMemberUpserted(db: DB, conversationId: string, member: Member, user?: User): void {
-  hub().sendToUsers(memberIds(db, conversationId), 'conversation.member.upserted', {
+export async function emitMemberUpserted(db: DB, conversationId: string, member: Member, user?: User): Promise<void> {
+  hub().sendToUsers(await memberIds(db, conversationId), 'conversation.member.upserted', {
     conversationId,
     member,
     user,
   })
 }
 
-export function emitMemberRemoved(
+export async function emitMemberRemoved(
   db: DB,
   conversationId: string,
   userId: string,
   extraRecipients: string[] = [],
-): void {
-  const recipients = new Set([...memberIds(db, conversationId), userId, ...extraRecipients])
+): Promise<void> {
+  const recipients = new Set([...(await memberIds(db, conversationId)), userId, ...extraRecipients])
   hub().sendToUsers([...recipients], 'conversation.member.removed', { conversationId, userId })
 }
 
-export function emitTyping(
+export async function emitTyping(
   db: DB,
   input: { conversationId: string; userId: string; state: 'start' | 'stop'; expiresAt: number },
-): void {
+): Promise<void> {
   // typing 频率极高，成员名单走短缓存；名单只决定发给谁，不涉及权限判定
   hub().sendToUsers(
-    memberIdsCached(db, input.conversationId),
+    await memberIdsCached(db, input.conversationId),
     'typing',
     input,
   )
 }
 
-export function emitReadReceipt(
+export async function emitReadReceipt(
   db: DB,
   input: {
     conversationId: string
@@ -93,8 +94,8 @@ export function emitReadReceipt(
     state: 'delivered' | 'read'
     at: number
   },
-): void {
-  hub().sendToUsers(memberIdsCached(db, input.conversationId), 'receipt.updated', input)
+): Promise<void> {
+  hub().sendToUsers(await memberIdsCached(db, input.conversationId), 'receipt.updated', input)
 }
 
 export function emitPostCreated(userIds: string[], post: Post): void {
@@ -123,32 +124,32 @@ export function emitContactUpdated(userId: string, contact: Contact): void {
 type AiGenerationId = string
 type AiConversationId = string
 
-export function emitAiDelta(
+export async function emitAiDelta(
   db: DB,
   payload: { generationId: AiGenerationId; conversationId: AiConversationId; index: number; delta: string },
-): void {
-  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.delta', payload)
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.delta', payload)
 }
 
-export function emitAiSegment(
+export async function emitAiSegment(
   db: DB,
   payload: { generationId: AiGenerationId; conversationId: AiConversationId; index: number; text: string },
-): void {
-  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.segment', payload)
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.segment', payload)
 }
 
-export function emitAiConnectorStatus(
+export async function emitAiConnectorStatus(
   db: DB,
   payload: {
     conversationId: AiConversationId
     kind: ConnectorActionMeta['kind']
     phase: 'start' | 'done'
   },
-): void {
-  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.connector.status', payload)
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.connector.status', payload)
 }
 
-export function emitAiDone(
+export async function emitAiDone(
   db: DB,
   payload: {
     generationId: AiGenerationId
@@ -156,11 +157,11 @@ export function emitAiDone(
     messageIds: string[]
     model?: string
   },
-): void {
-  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.done', payload)
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.done', payload)
 }
 
-export function emitAiError(
+export async function emitAiError(
   db: DB,
   payload: {
     generationId: AiGenerationId
@@ -168,6 +169,6 @@ export function emitAiError(
     code: string
     message: string
   },
-): void {
-  hub().sendToUsers(memberIds(db, payload.conversationId), 'ai.error', payload)
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.error', payload)
 }

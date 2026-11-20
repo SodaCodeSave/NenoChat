@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { DB } from '../db'
-import { dataDir } from '../db'
+import { all, dataDir, run } from '../db'
 
 /**
  * 服务端附件回收。
@@ -131,20 +131,22 @@ async function yieldEventLoop(): Promise<void> {
 
 /**
  * 汇总数据库里所有仍然被引用的 storage_key。
- * 消息 meta 逐行 JSON.parse 很重，按 rowid 分批取、批间让出事件循环；
- * 不用 stmt.iterate() 跨 await 复用——迭代器挂着时连接处于 busy，并发请求会报错。
+ * 消息 meta 逐行 JSON.parse 很重，按 ctid 分批取、批间让出事件循环，
+ * 大结果集不一次性进内存，也不长期占用单条查询。
  */
 export async function collectReferencedKeys(db: DB): Promise<Set<string>> {
   const keys = new Set<string>()
 
   // 消息附件：attachments 行本身没有 message_id，只能以 meta 里的 URL 为准
-  const metaStmt = db
-    .prepare(
-      "SELECT rowid AS rid, meta FROM messages WHERE rowid > ? AND meta LIKE '%\"attachments\"%' ORDER BY rowid LIMIT ?",
-    )
-  let cursor = 0
+  let cursor = '(0,0)'
   for (;;) {
-    const rows = metaStmt.all(cursor, DB_SCAN_CHUNK) as Array<{ rid: number; meta: string | null }>
+    const rows = await all<{ rid: string; meta: string | null }>(
+      db,
+      `SELECT ctid AS rid, meta FROM messages
+         WHERE ctid > ? AND meta LIKE '%"attachments"%'
+         ORDER BY ctid LIMIT ?`,
+      [cursor, DB_SCAN_CHUNK],
+    )
     if (rows.length === 0) break
     cursor = rows[rows.length - 1]!.rid
     for (const row of rows) {
@@ -155,32 +157,31 @@ export async function collectReferencedKeys(db: DB): Promise<Set<string>> {
   }
 
   // 头像与角色卡直接存 URL
-  const avatarRows = db
-    .prepare("SELECT avatar_url AS url FROM users WHERE avatar_url LIKE '/files/%'")
-    .all() as Array<{ url: string | null }>
+  const avatarRows = await all<{ url: string | null }>(
+    db,
+    "SELECT avatar_url AS url FROM users WHERE avatar_url LIKE '/files/%'",
+  )
   for (const row of avatarRows) addKey(keys, row.url)
 
-  const personaRows = db
-    .prepare(
-      `SELECT avatar_url AS avatar, card_url AS card FROM ai_personas
+  const personaRows = await all<{ avatar: string | null; card: string | null }>(
+    db,
+    `SELECT avatar_url AS avatar, card_url AS card FROM ai_personas
        WHERE avatar_url LIKE '/files/%' OR card_url LIKE '/files/%'`,
-    )
-    .all() as Array<{ avatar: string | null; card: string | null }>
+  )
   for (const row of personaRows) {
     addKey(keys, row.avatar)
     addKey(keys, row.card)
   }
 
   // 动态与表情通过 attachment_id 引用
-  const linkedRows = db
-    .prepare(
-      `SELECT a.storage_key AS key, a.thumb_key AS thumb FROM attachments a
+  const linkedRows = await all<{ key: string | null; thumb: string | null }>(
+    db,
+    `SELECT a.storage_key AS key, a.thumb_key AS thumb FROM attachments a
        WHERE a.id IN (
          SELECT attachment_id FROM post_attachments
          UNION SELECT attachment_id FROM stickers WHERE attachment_id IS NOT NULL
        )`,
-    )
-    .all() as Array<{ key: string | null; thumb: string | null }>
+  )
   for (const row of linkedRows) {
     if (row.key) keys.add(row.key)
     if (row.thumb) keys.add(row.thumb)
@@ -241,27 +242,29 @@ export async function reclaimAttachments(
   let removedRows = 0
 
   // 只删「确实没人引用」的附件行；创建时间在宽限期内的一律保留。
-  // 附件行可能很多，按 rowid 分批取、批间让出事件循环；删除不影响 keyset 推进。
-  const rowStmt = db.prepare(
-    'SELECT rowid AS rid, id, storage_key, thumb_key, created_at FROM attachments WHERE rowid > ? AND deleted_at IS NULL ORDER BY rowid LIMIT ?',
-  )
-  const deleteRow = db.prepare('DELETE FROM attachments WHERE id = ?')
-  let cursor = 0
+  // 附件行可能很多，按 ctid 分批取、批间让出事件循环；删除不影响 keyset 推进。
+  let cursor = '(0,0)'
   for (;;) {
-    const rows = rowStmt.all(cursor, DB_SCAN_CHUNK) as Array<{
-      rid: number
+    const rows = await all<{
+      rid: string
       id: string
       storage_key: string
       thumb_key: string | null
       created_at: number
-    }>
+    }>(
+      db,
+      `SELECT ctid AS rid, id, storage_key, thumb_key, created_at FROM attachments
+         WHERE ctid > ? AND deleted_at IS NULL
+         ORDER BY ctid LIMIT ?`,
+      [cursor, DB_SCAN_CHUNK],
+    )
     if (rows.length === 0) break
     cursor = rows[rows.length - 1]!.rid
     for (const row of rows) {
       if (referenced.has(row.storage_key)) continue
       if (row.thumb_key && referenced.has(row.thumb_key)) continue
       if (now - row.created_at < minAgeMs) continue
-      deleteRow.run(row.id)
+      await run(db, 'DELETE FROM attachments WHERE id = ?', [row.id])
       removedRows += 1
     }
     if (rows.length < DB_SCAN_CHUNK) break
@@ -270,10 +273,10 @@ export async function reclaimAttachments(
 
   // 删除附件行之后重新收集，共享同一 storage_key 的行仍能保护文件
   const surviving = new Set<string>()
-  const survivors = db.prepare('SELECT storage_key, thumb_key FROM attachments').all() as Array<{
-    storage_key: string | null
-    thumb_key: string | null
-  }>
+  const survivors = await all<{ storage_key: string | null; thumb_key: string | null }>(
+    db,
+    'SELECT storage_key, thumb_key FROM attachments',
+  )
   for (const row of survivors) {
     if (row.storage_key) surviving.add(row.storage_key)
     if (row.thumb_key) surviving.add(row.thumb_key)

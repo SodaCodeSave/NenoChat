@@ -56,17 +56,17 @@ function pick<T>(items: T[], random: () => number): T | undefined {
 }
 
 /** 角色的服务商：优先自己指定的，否则退回默认服务商 */
-function resolveProvider(db: DB, persona: aiRepo.PersonaRow): aiRepo.ProviderRow | undefined {
+async function resolveProvider(db: DB, persona: aiRepo.PersonaRow): Promise<aiRepo.ProviderRow | undefined> {
   if (persona.provider_id) {
-    const provider = aiRepo.findProvider(db, persona.provider_id)
+    const provider = await aiRepo.findProvider(db, persona.provider_id)
     if (provider) return provider
   }
   return aiRepo.defaultProvider(db, persona.owner_id)
 }
 
 /** 记忆摘要放在角色的专属会话里；还没开过会话就当没有记忆 */
-function buildPersonaMemoryDigest(db: DB, personaId: string): string {
-  const conversation = conversationsRepo.findByPersonaId(db, personaId)
+async function buildPersonaMemoryDigest(db: DB, personaId: string): Promise<string> {
+  const conversation = await conversationsRepo.findByPersonaId(db, personaId)
   if (!conversation) return ''
   return buildMemoryDigest(db, conversation.id)
 }
@@ -92,16 +92,16 @@ function broadcastLike(postId: string, personaId: string, likeCount: number): vo
 }
 
 /** 点赞不需要模型，服务端可以直接做，因此不受密钥存放位置影响 */
-function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.AiPostCandidate[]): void {
+async function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.AiPostCandidate[]): Promise<void> {
   const { userId, persona, settings, dayKey, random } = ctx
   if (settings.momentsLikesPerDay <= 0) return
-  if (momentRepo.countToday(db, persona.id, 'like', dayKey) >= settings.momentsLikesPerDay) return
+  if ((await momentRepo.countToday(db, persona.id, 'like', dayKey)) >= settings.momentsLikesPerDay) return
   if (random() >= LIKE_CHANCE) return
 
   const target = pick(candidates, random)
   if (!target) return
 
-  const reserved = momentRepo.recordAction(db, {
+  const reserved = await momentRepo.recordAction(db, {
     personaId: persona.id,
     userId,
     kind: 'like',
@@ -111,7 +111,7 @@ function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.AiPost
   })
   if (!reserved) return
 
-  const likeCount = postsRepo.addPersonaLike(db, target.id, userId, persona.id)
+  const likeCount = await postsRepo.addPersonaLike(db, target.id, userId, persona.id)
   broadcastLike(target.id, persona.id, likeCount)
 }
 
@@ -126,7 +126,7 @@ async function commentOnPost(
   // 关闭的模型不可被选用：不动用量额度，直接跳过
   if (provider && !isModelEnabled(provider, persona.model_override ?? provider.model)) return
 
-  const reserved = momentRepo.recordAction(db, {
+  const reserved = await momentRepo.recordAction(db, {
     personaId: persona.id,
     userId,
     kind: 'comment',
@@ -137,7 +137,8 @@ async function commentOnPost(
   if (!reserved) return
 
   const mapped = aiRepo.mapPersona(persona)
-  const comments = postsRepo.listComments(db, target.id).map((comment) => ({
+  const commentRows = await postsRepo.listComments(db, target.id)
+  const comments = commentRows.map((comment) => ({
     author: comment.author?.displayName ?? '某人',
     content: comment.content,
     isMine: comment.personaId === persona.id,
@@ -174,7 +175,7 @@ async function commentOnPost(
       .trim()
 
     if (isSkipReply(reply)) {
-      momentRepo.markStatus(db, {
+      await momentRepo.markStatus(db, {
         personaId: persona.id,
         kind: 'comment',
         postId: target.id,
@@ -185,13 +186,13 @@ async function commentOnPost(
     }
 
     // 落库成功后由动态服务把这条 pending 标成 done
-    createComment(db, userId, target.id, {
+    await createComment(db, userId, target.id, {
       content: cleanReply(reply, 200),
       personaId: persona.id,
     })
   } catch (e) {
     log.warn({ err: e, personaId: persona.id, postId: target.id }, '角色评论生成失败')
-    momentRepo.markStatus(db, {
+    await momentRepo.markStatus(db, {
       personaId: persona.id,
       kind: 'comment',
       postId: target.id,
@@ -211,7 +212,7 @@ async function publishMoment(
   // 关闭的模型不可被选用：不动用量额度，直接跳过
   if (provider && !isModelEnabled(provider, persona.model_override ?? provider.model)) return
 
-  const reserved = momentRepo.recordAction(db, {
+  const reserved = await momentRepo.recordAction(db, {
     personaId: persona.id,
     userId,
     kind: 'post',
@@ -221,9 +222,11 @@ async function publishMoment(
   if (!reserved) return
 
   const mapped = aiRepo.mapPersona(persona)
-  const recentMoments = postsRepo
-    .listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 6)
-    .map((post) => ({ author: post.author_name, content: post.content.slice(0, 120) }))
+  const recentPostRows = await postsRepo.listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 6)
+  const recentMoments = recentPostRows.map((post) => ({
+    author: post.author_name,
+    content: post.content.slice(0, 120),
+  }))
 
   try {
     const reply = (
@@ -235,7 +238,7 @@ async function publishMoment(
         maxTokens: 200,
         messages: buildMomentPostPrompt({
           persona: mapped,
-          memoryDigest: buildPersonaMemoryDigest(db, persona.id),
+          memoryDigest: await buildPersonaMemoryDigest(db, persona.id),
           recentMoments,
           localTime: formatLocalTime(now, TZ_OFFSET_MIN),
         }),
@@ -253,11 +256,11 @@ async function publishMoment(
       .trim()
 
     if (isSkipReply(reply)) {
-      momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'skipped' })
+      await momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'skipped' })
       return
     }
 
-    createPost(db, userId, {
+    await createPost(db, userId, {
       content: cleanReply(reply, 500),
       attachmentIds: [],
       visibility: 'friends',
@@ -265,7 +268,7 @@ async function publishMoment(
     })
   } catch (e) {
     log.warn({ err: e, personaId: persona.id }, '角色发动态失败')
-    momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'failed' })
+    await momentRepo.markStatus(db, { personaId: persona.id, kind: 'post', dayKey, status: 'failed' })
   }
 }
 
@@ -274,18 +277,17 @@ async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): 
   const { persona, settings, dayKey, now, random } = ctx
 
   // 点赞与评论看的是同一份候选动态，一轮扫描查一次就够
-  const candidates = postsRepo
-    .listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 24)
-    .filter((post) => post.persona_id !== persona.id)
+  const candidateRows = await postsRepo.listRecentForAi(db, now - MOMENT_AI_DEFAULTS.freshWindowMs, 24)
+  const candidates = candidateRows.filter((post) => post.persona_id !== persona.id)
 
-  likeSomething(db, ctx, candidates)
+  await likeSomething(db, ctx, candidates)
 
   if (
     settings.momentsCommentsPerDay > 0 &&
-    momentRepo.countToday(db, persona.id, 'comment', dayKey) < settings.momentsCommentsPerDay &&
+    (await momentRepo.countToday(db, persona.id, 'comment', dayKey)) < settings.momentsCommentsPerDay &&
     random() < COMMENT_CHANCE
   ) {
-    const done = momentRepo.commentedPostIds(
+    const done = await momentRepo.commentedPostIds(
       db,
       persona.id,
       candidates.map((post) => post.id),
@@ -302,7 +304,7 @@ async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): 
   if (
     settings.momentsPostsPerDay > 0 &&
     inActiveHours &&
-    momentRepo.countToday(db, persona.id, 'post', dayKey) < settings.momentsPostsPerDay &&
+    (await momentRepo.countToday(db, persona.id, 'post', dayKey)) < settings.momentsPostsPerDay &&
     random() < POST_CHANCE
   ) {
     await publishMoment(db, log, ctx)
@@ -320,14 +322,14 @@ export async function scanMomentsOnce(
   const random = options.random ?? Math.random
 
   // 进程崩溃留下的 pending 会一直占着配额
-  momentRepo.releaseStalePending(db, now - STALE_PENDING_MS)
+  await momentRepo.releaseStalePending(db, now - STALE_PENDING_MS)
 
-  for (const userId of aiRepo.listUsersWithMomentsEnabled(db)) {
-    const settings = aiRepo.readGlobalSettings(db, userId)
+  for (const userId of await aiRepo.listUsersWithMomentsEnabled(db)) {
+    const settings = await aiRepo.readGlobalSettings(db, userId)
     if (!settings.momentsEnabled) continue
 
-    for (const persona of aiRepo.listPersonas(db, userId)) {
-      const provider = resolveProvider(db, persona)
+    for (const persona of await aiRepo.listPersonas(db, userId)) {
+      const provider = await resolveProvider(db, persona)
       if (!provider) continue
       try {
         await runPersona(db, log, { userId, persona, provider, settings, dayKey, now, random })

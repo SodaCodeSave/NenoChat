@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from './helpers/pg'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -6,12 +7,13 @@ import type { FastifyInstance } from 'fastify'
 
 /**
  * 集成测试：用 Fastify 的 inject 直连应用，不占端口。
- * 所有断言都走真实路由 + 真实 SQLite，覆盖权限、幂等、seq 与增量同步。
+ * 所有断言都走真实路由 + 真实数据库，覆盖权限、幂等、seq 与增量同步。
  */
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-test-'))
 process.env.NODE_ENV = 'test'
 process.env.DATA_DIR = dataDir
+process.env.DATABASE_URL = testDatabaseUrl(import.meta.url)
 process.env.LOG_LEVEL = 'fatal'
 process.env.REGISTRATION_MODE = 'open'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-16-chars'
@@ -62,9 +64,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close()
-  // 先关掉 SQLite 连接，否则 Windows 上文件仍被占用无法清理
+  // 先关掉数据库连接池，避免资源泄漏影响后续清理
   const { closeDb } = await import('../src/db')
-  closeDb()
+  await closeDb()
   try {
     rmSync(dataDir, { recursive: true, force: true })
   } catch {
@@ -335,19 +337,18 @@ describe('会话与消息', () => {
 
 describe('同步变更日志', () => {
   it('每条写入都在同事务内落一条变更', async () => {
-    const { getDb } = await import('../src/db')
+    const { getDb, one } = await import('../src/db')
     const db = getDb()
-    const row = db.prepare('SELECT COUNT(*) AS c FROM sync_change_log').get() as { c: number }
+    const row = (await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM sync_change_log'))!
     expect(row.c).toBeGreaterThan(0)
 
-    const mismatch = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM messages m
+    const mismatch = (await one<{ c: number }>(
+      db,
+      `SELECT COUNT(*) AS c FROM messages m
          WHERE NOT EXISTS (
            SELECT 1 FROM sync_change_log cl WHERE cl.entity = 'message' AND cl.entity_id = m.id
          )`,
-      )
-      .get() as { c: number }
+    ))!
     expect(mismatch.c).toBe(0)
   })
 })

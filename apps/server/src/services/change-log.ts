@@ -1,5 +1,5 @@
-import type { DB } from '../db'
-import { stmt } from '../db'
+import type { Executor } from '../db'
+import { one } from '../db'
 import { now } from '../util/clock'
 
 export interface ChangeInput {
@@ -19,12 +19,13 @@ export interface ChangeInput {
  * 追加一条同步变更。必须在写入实体的同一个事务里调用，
  * 否则会出现「实体存在但客户端拉不到」或「客户端拉到不存在的实体」。
  */
-export function writeChange(db: DB, input: ChangeInput): number {
-  const info = stmt(
+export async function writeChange(db: Executor, input: ChangeInput): Promise<number> {
+  const row = await one<{ seq: number }>(
     db,
     `INSERT INTO sync_change_log (entity, entity_id, op, conversation_id, user_id, payload, actor_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING seq`,
+    [
       input.entity,
       input.entityId,
       input.op,
@@ -33,6 +34,7 @@ export function writeChange(db: DB, input: ChangeInput): number {
       JSON.stringify(input.payload),
       input.actorId ?? null,
       now(),
-    )
-  return Number(info.lastInsertRowid)
+    ],
+  )
+  return row?.seq ?? 0
 }

@@ -7,6 +7,8 @@ const EnvSchema = z.object({
   /** 对外基础地址，用于拼装附件 URL */
   PUBLIC_BASE_URL: z.string().default('http://localhost:8787'),
   DATA_DIR: z.string().default('./data'),
+  /** PostgreSQL 连接串，如 postgres://user:pass@host:5432/nenochat */
+  DATABASE_URL: z.string().default('postgres://nenochat:nenochat@localhost:5432/nenochat'),
   JWT_SECRET: z.string().min(16).default('dev-only-jwt-secret-change-me'),
   /** 用于加密服务端托管的 AI 密钥 */
   SECRET_KEY: z.string().min(16).default('dev-only-aes-secret-change-me'),

@@ -1,6 +1,7 @@
 import type { ServerEventName, WsFrame } from '@nenochat/shared'
 import { SYNC_BATCH_SIZE, WS_AUTH_TIMEOUT_MS, WS_HEARTBEAT_MS } from '@nenochat/shared'
 import type { DB } from '../db'
+import { all } from '../db'
 import * as membersRepo from '../db/repo/members'
 import * as usersRepo from '../db/repo/users'
 import { setHub, type RealtimeHub } from './hub'
@@ -96,15 +97,15 @@ class RealtimeHubImpl implements RealtimeHub {
     }
   }
 
-  sendToConversation(
+  async sendToConversation(
     conversationId: string,
     event: ServerEventName,
     payload: unknown,
     seq?: number,
     exceptUserId?: string,
-  ): void {
-    const ids = membersRepo
-      .listActive(this.db, conversationId)
+  ): Promise<void> {
+    const members = await membersRepo.listActive(this.db, conversationId)
+    const ids = members
       .map((m) => m.user_id)
       .filter((id) => id !== exceptUserId)
     this.sendToUsers(ids, event, payload, seq)
@@ -154,7 +155,7 @@ export async function catchUp(conn: Conn, db: DB): Promise<{ cursor: number; has
   let hasMore = true
 
   while (hasMore) {
-    const batch = listChanges(db, conn.userId, cursor, SYNC_BATCH_SIZE)
+    const batch = await listChanges(db, conn.userId, cursor, SYNC_BATCH_SIZE)
     sendEvent(conn, 'sync.batch', {
       changes: batch.changes,
       nextCursor: batch.nextCursor,
@@ -170,24 +171,24 @@ export async function catchUp(conn: Conn, db: DB): Promise<{ cursor: number; has
 }
 
 /** 选择要推送 presence 的用户：共同会话中的成员 */
-export function sharedContactIds(db: DB, userId: string): string[] {
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT m2.user_id AS id
-       FROM conversation_members m1
-       JOIN conversation_members m2 ON m2.conversation_id = m1.conversation_id
-       WHERE m1.user_id = ? AND m1.left_at IS NULL AND m2.left_at IS NULL AND m2.user_id <> ?`,
-    )
-    .all(userId, userId) as Array<{ id: string }>
+export async function sharedContactIds(db: DB, userId: string): Promise<string[]> {
+  const rows = await all<{ id: string }>(
+    db,
+    `SELECT DISTINCT m2.user_id AS id
+     FROM conversation_members m1
+     JOIN conversation_members m2 ON m2.conversation_id = m1.conversation_id
+     WHERE m1.user_id = ? AND m1.left_at IS NULL AND m2.left_at IS NULL AND m2.user_id <> ?`,
+    [userId, userId],
+  )
   return rows.map((r) => r.id)
 }
 
-export function touchPresence(db: DB, userId: string, status: 'online' | 'away' | 'dnd' | 'offline'): void {
+export async function touchPresence(db: DB, userId: string, status: 'online' | 'away' | 'dnd' | 'offline'): Promise<void> {
   const hub = hubInstance
   if (!hub) return
   const lastSeenAt = Date.now()
-  usersRepo.touchLastSeen(db, userId)
-  hub.sendToUsers(sharedContactIds(db, userId), 'presence.updated', { userId, status, lastSeenAt })
+  await usersRepo.touchLastSeen(db, userId)
+  hub.sendToUsers(await sharedContactIds(db, userId), 'presence.updated', { userId, status, lastSeenAt })
 }
 
 export const WS_TIMINGS = {

@@ -13,6 +13,7 @@ import {
 import { Cron } from 'croner'
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import type { DB } from '../db'
+import { all, one, run } from '../db'
 import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
@@ -95,45 +96,48 @@ function clampEnergy(value: number): number {
 /* ------------------------------ 成员与状态 ------------------------------ */
 
 /** 群里所有还在的 AI 成员（影子账号未被禁用、角色未删除） */
-export function listGroupPersonas(db: DB, conversationId: string): GroupPersonaMember[] {
-  const rows = db
-    .prepare(
-      `SELECT p.* FROM conversation_members cm
+export async function listGroupPersonas(db: DB, conversationId: string): Promise<GroupPersonaMember[]> {
+  const rows = await all<aiRepo.PersonaRow>(
+    db,
+    `SELECT p.* FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id AND c.type = 'group' AND c.deleted_at IS NULL
        JOIN ai_personas p ON p.user_id = cm.user_id AND p.deleted_at IS NULL
        JOIN users u ON u.id = cm.user_id AND u.status = 'active'
        WHERE cm.conversation_id = ? AND cm.left_at IS NULL
        ORDER BY cm.joined_at`,
-    )
-    .all(conversationId) as aiRepo.PersonaRow[]
+    [conversationId],
+  )
 
-  return rows.map((persona) => ({
-    persona,
-    botUserId: persona.user_id!,
-    provider: resolvePersonaProvider(db, persona),
-  }))
+  const out: GroupPersonaMember[] = []
+  for (const persona of rows) {
+    out.push({
+      persona,
+      botUserId: persona.user_id!,
+      provider: await resolvePersonaProvider(db, persona),
+    })
+  }
+  return out
 }
 
-function resolvePersonaProvider(db: DB, persona: aiRepo.PersonaRow): aiRepo.ProviderRow | null {
+async function resolvePersonaProvider(db: DB, persona: aiRepo.PersonaRow): Promise<aiRepo.ProviderRow | null> {
   if (persona.provider_id) {
-    const provider = aiRepo.findProvider(db, persona.provider_id)
+    const provider = await aiRepo.findProvider(db, persona.provider_id)
     if (provider) return provider
   }
-  return aiRepo.defaultProvider(db, persona.owner_id) ?? null
+  return (await aiRepo.defaultProvider(db, persona.owner_id)) ?? null
 }
 
-function readState(db: DB, conversationId: string, personaId: string): GroupState {
-  const row = db
-    .prepare('SELECT * FROM ai_group_state WHERE conversation_id = ? AND persona_id = ?')
-    .get(conversationId, personaId) as
-    | {
-        energy: number
-        mood: string
-        last_reply_at: number | null
-        last_autonomy_at: number | null
-        updated_at: number
-      }
-    | undefined
+async function readState(db: DB, conversationId: string, personaId: string): Promise<GroupState> {
+  const row = await one<{
+    energy: number
+    mood: string
+    last_reply_at: number | null
+    last_autonomy_at: number | null
+    updated_at: number
+  }>(db, 'SELECT * FROM ai_group_state WHERE conversation_id = ? AND persona_id = ?', [
+    conversationId,
+    personaId,
+  ])
 
   const ts = now()
   if (!row) {
@@ -156,8 +160,9 @@ function readState(db: DB, conversationId: string, personaId: string): GroupStat
   }
 }
 
-function writeState(db: DB, conversationId: string, personaId: string, state: GroupState): void {
-  db.prepare(
+async function writeState(db: DB, conversationId: string, personaId: string, state: GroupState): Promise<void> {
+  await run(
+    db,
     `INSERT INTO ai_group_state
        (conversation_id, persona_id, energy, mood, last_reply_at, last_autonomy_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -167,32 +172,33 @@ function writeState(db: DB, conversationId: string, personaId: string, state: Gr
        last_reply_at = excluded.last_reply_at,
        last_autonomy_at = excluded.last_autonomy_at,
        updated_at = excluded.updated_at`,
-  ).run(
-    conversationId,
-    personaId,
-    state.energy,
-    state.mood,
-    state.lastReplyAt,
-    state.lastAutonomyAt,
-    state.updatedAt,
+    [
+      conversationId,
+      personaId,
+      state.energy,
+      state.mood,
+      state.lastReplyAt,
+      state.lastAutonomyAt,
+      state.updatedAt,
+    ],
   )
 }
 
-function countToday(
+async function countToday(
   db: DB,
   conversationId: string,
   personaId: string,
   dayKey: string,
   kind: 'reply' | 'autonomy',
-): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS c FROM ai_group_log
+): Promise<number> {
+  const row = await one<{ c: number }>(
+    db,
+    `SELECT COUNT(*) AS c FROM ai_group_log
        WHERE conversation_id = ? AND persona_id = ? AND day_key = ? AND kind = ?
          AND status IN ('pending', 'dispatched', 'sent')`,
-    )
-    .get(conversationId, personaId, dayKey, kind) as { c: number }
-  return row.c
+    [conversationId, personaId, dayKey, kind],
+  )
+  return row?.c ?? 0
 }
 
 interface ReservedTurn {
@@ -203,7 +209,7 @@ interface ReservedTurn {
 }
 
 /** 先占配额再生成：昨天遗留的 pending 不会卡住今天 */
-function reserveTurn(
+async function reserveTurn(
   db: DB,
   input: {
     conversationId: string
@@ -214,29 +220,31 @@ function reserveTurn(
     state: GroupState
     replyToId?: string | null
   },
-): ReservedTurn | null {
-  return withTx(db, () => {
-    const used = countToday(db, input.conversationId, input.member.persona.id, input.dayKey, input.kind)
+): Promise<ReservedTurn | null> {
+  return withTx(db, async (tx) => {
+    const used = await countToday(tx, input.conversationId, input.member.persona.id, input.dayKey, input.kind)
     if (input.maxPerDay >= 0 && used >= input.maxPerDay) return null
 
     const ts = now()
     const logId = ulid()
     try {
-      db.prepare(
+      await run(
+        tx,
         `INSERT INTO ai_group_log
            (id, conversation_id, persona_id, user_id, kind, day_key, slot, status,
             message_id, reply_to_id, reason, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, ?)`,
-      ).run(
-        logId,
-        input.conversationId,
-        input.member.persona.id,
-        input.member.persona.owner_id,
-        input.kind,
-        input.dayKey,
-        used,
-        input.replyToId ?? null,
-        ts,
+        [
+          logId,
+          input.conversationId,
+          input.member.persona.id,
+          input.member.persona.owner_id,
+          input.kind,
+          input.dayKey,
+          used,
+          input.replyToId ?? null,
+          ts,
+        ],
       )
     } catch {
       // 自主开口有唯一索引，多实例只有一个能抢到同一格
@@ -245,7 +253,7 @@ function reserveTurn(
 
     const spend = input.kind === 'autonomy' ? 20 : 10
     const energy = clampEnergy(input.state.energy - spend)
-    writeState(db, input.conversationId, input.member.persona.id, {
+    await writeState(tx, input.conversationId, input.member.persona.id, {
       energy,
       mood: deriveMood(energy),
       lastReplyAt: input.kind === 'reply' ? ts : input.state.lastReplyAt,
@@ -257,35 +265,35 @@ function reserveTurn(
   })
 }
 
-function finishLog(
+async function finishLog(
   db: DB,
   logId: string,
   status: 'sent' | 'skipped' | 'failed',
   extra: { messageId?: string | null; reason?: string | null } = {},
-): void {
-  db.prepare('UPDATE ai_group_log SET status = ?, message_id = ?, reason = ? WHERE id = ?').run(
+): Promise<void> {
+  await run(db, 'UPDATE ai_group_log SET status = ?, message_id = ?, reason = ? WHERE id = ?', [
     status,
     extra.messageId ?? null,
     extra.reason ?? null,
     logId,
-  )
+  ])
 }
 
 /** 决策落库后实时推给主人的在线客户端；客户端按 debugMode 决定是否显示 */
-function pushDecision(db: DB, ownerId: string, decision: debugRepo.InsertDecisionInput): void {
-  const row = debugRepo.insertDecision(db, decision)
+async function pushDecision(db: DB, ownerId: string, decision: debugRepo.InsertDecisionInput): Promise<void> {
+  const row = await debugRepo.insertDecision(db, decision)
   hub().sendToUser(ownerId, 'ai.debug.decision', { decision: row })
 }
 
 /** 模型层产出（发出 / 沉默 / 失败）回填到规则层创建的决策记录上，并推送更新 */
-function resolveDecisionOutcome(
+async function resolveDecisionOutcome(
   db: DB,
   ownerId: string,
   logId: string,
   reason: string,
   fired: boolean,
-): void {
-  const updated = debugRepo.updateDecisionOutcome(db, logId, {
+): Promise<void> {
+  const updated = await debugRepo.updateDecisionOutcome(db, logId, {
     stage: 'model',
     reason,
     fired,
@@ -295,24 +303,21 @@ function resolveDecisionOutcome(
 
 /* ------------------------------ 提示词上下文 ------------------------------ */
 
-function rosterOf(db: DB, conversationId: string, selfBotId: string): Array<{ name: string; isSelf: boolean }> {
-  const rows = membersRepo.listActive(db, conversationId)
-  const users = new Map(
-    usersRepo
-      .listByIds(
-        db,
-        rows.map((row) => row.user_id),
-      )
-      .map((user) => [user.id, user.display_name]),
+async function rosterOf(db: DB, conversationId: string, selfBotId: string): Promise<Array<{ name: string; isSelf: boolean }>> {
+  const rows = await membersRepo.listActive(db, conversationId)
+  const userRows = await usersRepo.listByIds(
+    db,
+    rows.map((row) => row.user_id),
   )
+  const users = new Map(userRows.map((user) => [user.id, user.display_name]))
   return rows.map((row) => ({
     name: users.get(row.user_id) ?? row.user_id,
     isSelf: row.user_id === selfBotId,
   }))
 }
 
-function recentMessages(db: DB, conversationId: string): Message[] {
-  const rows = messagesRepo.page(db, {
+async function recentMessages(db: DB, conversationId: string): Promise<Message[]> {
+  const rows = await messagesRepo.page(db, {
     conversationId,
     before: null,
     after: null,
@@ -322,62 +327,68 @@ function recentMessages(db: DB, conversationId: string): Message[] {
 }
 
 /** 某条消息在引用谁：先查群里成员名，再退回 users 表，最后给个泛称 */
-function quotedOfMessage(
+async function quotedOfMessage(
   db: DB,
   replyToId: string | null | undefined,
   nameById: Map<string, string>,
-): { speaker: string; content: string } | null {
+): Promise<{ speaker: string; content: string } | null> {
   if (!replyToId) return null
-  const row = messagesRepo.findById(db, replyToId)
+  const row = await messagesRepo.findById(db, replyToId)
   if (!row) return null
+  const fallbackName = row.sender_id ? (await usersRepo.findById(db, row.sender_id))?.display_name ?? null : null
   const speaker =
-    (row.sender_id ? nameById.get(row.sender_id) : null) ??
-    (row.sender_id ? usersRepo.findById(db, row.sender_id)?.display_name : null) ??
-    '某人'
+    (row.sender_id ? nameById.get(row.sender_id) : null) ?? fallbackName ?? '某人'
   return { speaker, content: messagesRepo.previewOf(row) }
 }
 
-function toPromptRecent(
+async function toPromptRecent(
   db: DB,
   messages: Message[],
   selfBotId: string,
   nameById: Map<string, string>,
-): Array<{
+): Promise<Array<{
   speaker: string
   content: string
   isSelf: boolean
   mentionsSelf?: boolean
   replyTo?: { speaker: string; content: string } | null
-}> {
-  return messages
-    .filter((message) => message.senderType !== 'system' && !message.deletedAt && message.content.trim().length > 0)
-    .map((message) => ({
+}>> {
+  const out: Array<{
+    speaker: string
+    content: string
+    isSelf: boolean
+    mentionsSelf?: boolean
+    replyTo?: { speaker: string; content: string } | null
+  }> = []
+  for (const message of messages) {
+    if (message.senderType === 'system' || message.deletedAt || message.content.trim().length === 0) continue
+    out.push({
       speaker: nameById.get(message.senderId ?? '') ?? '某人',
       content: message.content,
       isSelf: message.senderId === selfBotId,
       mentionsSelf: Boolean(message.meta?.mentions?.includes(selfBotId)),
-      replyTo: quotedOfMessage(db, message.replyToId, nameById),
-    }))
+      replyTo: await quotedOfMessage(db, message.replyToId, nameById),
+    })
+  }
+  return out
 }
 
-function buildTurnPrompt(
+async function buildTurnPrompt(
   db: DB,
   input: GroupTurnInput,
-): ReturnType<typeof buildGroupPrompt> {
-  const conversation = conversationsRepo.findById(db, input.conversationId)
+): Promise<ReturnType<typeof buildGroupPrompt>> {
+  const conversation = await conversationsRepo.findById(db, input.conversationId)
   const persona = aiRepo.mapPersona(input.member.persona)
-  const messages = recentMessages(db, input.conversationId)
-  const nameById = new Map(
-    membersRepo
-      .listActive(db, input.conversationId)
-      .map((row) => [
-        row.user_id,
-        usersRepo.findById(db, row.user_id)?.display_name ?? row.user_id,
-      ] as const),
-  )
+  const messages = await recentMessages(db, input.conversationId)
+  const memberRows = await membersRepo.listActive(db, input.conversationId)
+  const nameById = new Map<string, string>()
+  for (const row of memberRows) {
+    const user = await usersRepo.findById(db, row.user_id)
+    nameById.set(row.user_id, user?.display_name ?? row.user_id)
+  }
 
-  const triggerRow = input.trigger ? messagesRepo.findById(db, input.trigger.messageId) : null
-  const scheduleRow = scheduleRepo.findSchedule(
+  const triggerRow = input.trigger ? await messagesRepo.findById(db, input.trigger.messageId) : null
+  const scheduleRow = await scheduleRepo.findSchedule(
     db,
     input.member.persona.id,
     localDayKey(now(), TZ_OFFSET_MIN),
@@ -388,21 +399,21 @@ function buildTurnPrompt(
     mood: input.mood,
     energy: input.energy,
     groupName: conversation?.name ?? '群聊',
-    members: rosterOf(db, input.conversationId, input.member.botUserId),
-    recent: toPromptRecent(db, messages, input.member.botUserId, nameById),
+    members: await rosterOf(db, input.conversationId, input.member.botUserId),
+    recent: await toPromptRecent(db, messages, input.member.botUserId, nameById),
     mode: input.kind,
-    stickers: aiStickerOptionsForPersona(db, input.member.persona),
+    stickers: await aiStickerOptionsForPersona(db, input.member.persona),
     trigger: input.trigger
       ? {
           speaker: input.trigger.speaker,
           content: input.trigger.content,
           mustReply: input.trigger.mustReply,
-          replyTo: triggerRow ? quotedOfMessage(db, triggerRow.reply_to_id, nameById) : null,
+          replyTo: triggerRow ? await quotedOfMessage(db, triggerRow.reply_to_id, nameById) : null,
         }
       : null,
     idleHours:
       input.kind === 'autonomy'
-        ? Math.max(0, Math.floor((now() - conversationLastMessageAt(db, input.conversationId)) / 3_600_000))
+        ? Math.max(0, Math.floor((now() - (await conversationLastMessageAt(db, input.conversationId))) / 3_600_000))
         : undefined,
     localTime: formatLocalTime(now(), TZ_OFFSET_MIN),
     schedule: scheduleRow ? scheduleRepo.mapSchedule(scheduleRow) : null,
@@ -410,11 +421,13 @@ function buildTurnPrompt(
   })
 }
 
-function conversationLastMessageAt(db: DB, conversationId: string): number {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(created_at), 0) AS ts FROM messages WHERE conversation_id = ?')
-    .get(conversationId) as { ts: number }
-  return row.ts
+async function conversationLastMessageAt(db: DB, conversationId: string): Promise<number> {
+  const row = await one<{ ts: number }>(
+    db,
+    'SELECT COALESCE(MAX(created_at), 0) AS ts FROM messages WHERE conversation_id = ?',
+    [conversationId],
+  )
+  return row?.ts ?? 0
 }
 
 /* ------------------------------ 消息落库 ------------------------------ */
@@ -423,7 +436,7 @@ function conversationLastMessageAt(db: DB, conversationId: string): number {
  * 群聊 AI 分段落库的公共入口：服务端生成与客户端回传都走这里。
  * 分段里若带有效的表情标记，拆成文字与表情两条消息；最多解析一个标记。
  */
-function appendGroupSegmentCore(
+async function appendGroupSegmentCore(
   db: DB,
   input: {
     conversationId: string
@@ -437,11 +450,11 @@ function appendGroupSegmentCore(
     replyToId?: string | null
     clientNonce: string
   },
-): Message {
-  const existing = messagesRepo.findByNonceInConversation(db, input.conversationId, input.clientNonce)
+): Promise<Message> {
+  const existing = await messagesRepo.findByNonceInConversation(db, input.conversationId, input.clientNonce)
   if (existing) return messagesRepo.mapMessage(existing)
 
-  const enabledIds = aiEnabledStickerIds(db, input.persona)
+  const enabledIds = await aiEnabledStickerIds(db, input.persona)
   const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
   const text = marker?.stickerId ? marker.text : input.content
 
@@ -456,7 +469,7 @@ function appendGroupSegmentCore(
     },
   })
 
-  const appendText = (content: string, index: number, replyToId: string | null): Message =>
+  const appendText = async (content: string, index: number, replyToId: string | null): Promise<Message> =>
     appendSystemMessage(db, {
       conversationId: input.conversationId,
       senderType: 'ai' as SenderType,
@@ -471,8 +484,8 @@ function appendGroupSegmentCore(
     })
 
   const stickerNonce = `${input.clientNonce}-s`
-  const stickerAppend = (index: number, replyToId: string | null): Message | null =>
-    appendStickerMessage(db, {
+  const stickerAppend = async (index: number, replyToId: string | null): Promise<Message | null> =>
+    (await appendStickerMessage(db, {
       conversationId: input.conversationId,
       stickerId: marker!.stickerId!,
       generationId: input.generationId,
@@ -482,28 +495,28 @@ function appendGroupSegmentCore(
       model: input.model ?? undefined,
       totalSegments: input.totalSegments,
       proactive: input.proactive,
-    }) ?? null
+    })) ?? null
 
   // replyToId 只挂在第一片上：文字在前挂文字，表情在前挂表情
   if (marker?.stickerId && marker.stickerFirst) {
-    const sticker = stickerAppend(input.index, input.replyToId ?? null)
+    const sticker = await stickerAppend(input.index, input.replyToId ?? null)
     const textIndex = sticker ? input.index + 1 : input.index
-    const first = sticker ?? appendText(text, input.index, input.replyToId ?? null)
-    if (text.trim()) appendText(text, textIndex, null)
+    const first = sticker ?? (await appendText(text, input.index, input.replyToId ?? null))
+    if (text.trim()) await appendText(text, textIndex, null)
     return first
   }
 
   const hasText = text.trim().length > 0
   if (marker?.stickerId) {
-    const textMessage = hasText ? appendText(text, input.index, input.replyToId ?? null) : null
-    const sticker = stickerAppend(textMessage ? input.index + 1 : input.index, textMessage ? null : input.replyToId ?? null)
+    const textMessage = hasText ? await appendText(text, input.index, input.replyToId ?? null) : null
+    const sticker = await stickerAppend(textMessage ? input.index + 1 : input.index, textMessage ? null : input.replyToId ?? null)
     return textMessage ?? sticker!
   }
 
   return appendText(text, input.index, input.replyToId ?? null)
 }
 
-function appendGroupSegment(
+async function appendGroupSegment(
   db: DB,
   input: {
     conversationId: string
@@ -516,22 +529,22 @@ function appendGroupSegment(
     proactive?: boolean
     replyToId?: string | null
   },
-): Message {
+): Promise<Message> {
   return appendGroupSegmentCore(db, {
     ...input,
     clientNonce: `${input.generationId}-${input.index}`,
   })
 }
 
-function appendSegments(
+async function appendSegments(
   db: DB,
   input: GroupTurnInput,
   segments: string[],
   model: string | null,
-): string | null {
+): Promise<string | null> {
   let firstId: string | null = null
   for (let index = 0; index < segments.length; index++) {
-    const message = appendGroupSegment(db, {
+    const message = await appendGroupSegment(db, {
       conversationId: input.conversationId,
       persona: input.member.persona,
       generationId: input.logId,
@@ -553,9 +566,9 @@ function appendSegments(
 async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
   const provider = input.member.provider
   if (!provider) {
-    finishLog(db, input.logId, 'skipped', { reason: 'no_provider' })
+    await finishLog(db, input.logId, 'skipped', { reason: 'no_provider' })
     if (input.settings.debugMode) {
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
+      await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'no_provider', false)
     }
     return 'no_provider'
   }
@@ -565,16 +578,16 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
 
   // 关闭的模型不可被选用：本轮直接跳过，不发起上游调用
   if (!isModelEnabled(provider, model)) {
-    finishLog(db, input.logId, 'skipped', { reason: 'model_disabled' })
+    await finishLog(db, input.logId, 'skipped', { reason: 'model_disabled' })
     if (debugDecisions) {
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'model_disabled', false)
+      await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'model_disabled', false)
     }
     return 'skipped'
   }
 
   // 顺手补齐当天日程
   await scheduleService.ensureScheduleQuietly(db, input.member.persona)
-  const prompt = buildTurnPrompt(db, input)
+  const prompt = await buildTurnPrompt(db, input)
 
   let reply: string
   try {
@@ -601,17 +614,17 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
       .trim()
   } catch (e) {
     const reason = e instanceof Error ? e.message.slice(0, 160) : 'generate_failed'
-    finishLog(db, input.logId, 'failed', { reason })
+    await finishLog(db, input.logId, 'failed', { reason })
     if (debugDecisions) {
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
+      await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, reason, false)
     }
     return 'failed'
   }
 
   if (isSkipReply(reply)) {
-    finishLog(db, input.logId, 'skipped', { reason: 'skip' })
+    await finishLog(db, input.logId, 'skipped', { reason: 'skip' })
     if (debugDecisions) {
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
+      await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'skip', false)
     }
     return 'skipped'
   }
@@ -621,17 +634,17 @@ async function runTurn(db: DB, input: GroupTurnInput): Promise<TurnOutcome> {
     pattern: input.settings.segmentPattern,
   }).slice(0, 3)
   if (segments.length === 0) {
-    finishLog(db, input.logId, 'skipped', { reason: 'empty_reply' })
+    await finishLog(db, input.logId, 'skipped', { reason: 'empty_reply' })
     if (debugDecisions) {
-      resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
+      await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'empty_reply', false)
     }
     return 'skipped'
   }
 
-  const firstId = appendSegments(db, input, segments, model)
-  finishLog(db, input.logId, 'sent', { messageId: firstId })
+  const firstId = await appendSegments(db, input, segments, model)
+  await finishLog(db, input.logId, 'sent', { messageId: firstId })
   if (debugDecisions) {
-    resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
+    await resolveDecisionOutcome(db, input.member.persona.owner_id, input.logId, 'sent', true)
   }
   return 'sent'
 }
@@ -653,14 +666,14 @@ function delay(ms: number): Promise<void> {
 
 /** 用户发了一条群消息：规则预筛后决定谁接话，多个角色按序排队接话 */
 export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger): Promise<void> {
-  const conversation = conversationsRepo.findById(db, trigger.conversationId)
+  const conversation = await conversationsRepo.findById(db, trigger.conversationId)
   if (!conversation || conversation.type !== 'group' || conversation.deleted_at !== null) return
 
-  const sender = usersRepo.findById(db, trigger.senderId)
+  const sender = await usersRepo.findById(db, trigger.senderId)
   const senderName = sender?.display_name ?? '某人'
   if (sender?.is_bot === 1) return
 
-  const members = listGroupPersonas(db, trigger.conversationId)
+  const members = await listGroupPersonas(db, trigger.conversationId)
   if (members.length === 0) return
 
   const ts = now()
@@ -669,10 +682,10 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
 
   // 同一个群里的成员可能属于不同主人；设置按主人缓存，一条消息每个主人只读一次
   const settingsByOwner = new Map<string, AiGlobalSettings>()
-  const settingsOf = (ownerId: string): AiGlobalSettings => {
+  const settingsOf = async (ownerId: string): Promise<AiGlobalSettings> => {
     let settings = settingsByOwner.get(ownerId)
     if (!settings) {
-      settings = aiRepo.readGlobalSettings(db, ownerId)
+      settings = await aiRepo.readGlobalSettings(db, ownerId)
       settingsByOwner.set(ownerId, settings)
     }
     return settings
@@ -680,7 +693,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
 
   for (const member of members) {
     const mapped = aiRepo.mapPersona(member.persona)
-    const settings = settingsOf(member.persona.owner_id)
+    const settings = await settingsOf(member.persona.owner_id)
     if (fired >= settings.groupRepliesPerMessage) break
 
     // 排队接话：已经有人说过话了，轮到下一个角色前先歇口气
@@ -693,11 +706,11 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       Boolean(trigger.mentions?.includes(member.botUserId)) ||
       (mapped.name.length > 0 && trigger.content.includes(`@${mapped.name}`))
 
-    const state = readState(db, trigger.conversationId, member.persona.id)
+    const state = await readState(db, trigger.conversationId, member.persona.id)
     const decision = decideGroupReply({
       now: ts,
       enabled: settings.groupEnabled,
-      repliesToday: countToday(db, trigger.conversationId, member.persona.id, dayKey, 'reply'),
+      repliesToday: await countToday(db, trigger.conversationId, member.persona.id, dayKey, 'reply'),
       maxRepliesPerDay: settings.groupRepliesPerDay,
       lastReplyAt: state.lastReplyAt,
       cooldownMs:
@@ -715,7 +728,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
     // 没开调试模式时这些记录没人看，不写
     if (!decision.fire) {
       if (settings.debugMode && settings.groupEnabled) {
-        pushDecision(db, member.persona.owner_id, {
+        await pushDecision(db, member.persona.owner_id, {
           conversationId: trigger.conversationId,
           personaId: member.persona.id,
           personaName: mapped.name,
@@ -731,7 +744,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
       continue
     }
 
-    const reserved = reserveTurn(db, {
+    const reserved = await reserveTurn(db, {
       conversationId: trigger.conversationId,
       member,
       kind: 'reply',
@@ -743,7 +756,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
     if (!reserved) continue
 
     if (settings.debugMode) {
-      pushDecision(db, member.persona.owner_id, {
+      await pushDecision(db, member.persona.owner_id, {
         conversationId: trigger.conversationId,
         personaId: member.persona.id,
         personaName: mapped.name,
@@ -778,7 +791,7 @@ export async function respondToGroupMessage(db: DB, trigger: GroupMessageTrigger
         },
       })
     } catch (e) {
-      finishLog(db, reserved.logId, 'failed', {
+      await finishLog(db, reserved.logId, 'failed', {
         reason: e instanceof Error ? e.message.slice(0, 160) : 'unknown',
       })
     }
@@ -800,18 +813,17 @@ interface AutonomyCandidate {
   persona: aiRepo.PersonaRow
 }
 
-function listAutonomyCandidates(db: DB): AutonomyCandidate[] {
-  const rows = db
-    .prepare(
-      `SELECT cm.conversation_id AS conversation_id, p.*
+async function listAutonomyCandidates(db: DB): Promise<AutonomyCandidate[]> {
+  const rows = await all<aiRepo.PersonaRow & { conversation_id: string }>(
+    db,
+    `SELECT cm.conversation_id AS conversation_id, p.*
        FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id AND c.type = 'group' AND c.deleted_at IS NULL
        JOIN ai_personas p ON p.user_id = cm.user_id AND p.deleted_at IS NULL
        JOIN users u ON u.id = cm.user_id AND u.status = 'active'
        WHERE cm.left_at IS NULL
        ORDER BY cm.joined_at`,
-    )
-    .all() as Array<aiRepo.PersonaRow & { conversation_id: string }>
+  )
 
   return rows.map((row) => ({ conversation_id: row.conversation_id, persona: row }))
 }
@@ -826,36 +838,38 @@ export async function scanGroupAutonomyOnce(
   const ts = now()
   const dayKey = localDayKey(ts, TZ_OFFSET_MIN)
 
-  db.prepare(
+  await run(
+    db,
     `UPDATE ai_group_log SET status = 'failed', reason = 'stale_pending'
-     WHERE status = 'pending' AND created_at < ?`,
-  ).run(ts - STALE_PENDING_MS)
+       WHERE status = 'pending' AND created_at < ?`,
+    [ts - STALE_PENDING_MS],
+  )
 
   const spokenGroups = new Set<string>()
 
   // 候选按主人分组读设置：一个主人可能有好几个角色，设置只读一次
   const settingsByOwner = new Map<string, AiGlobalSettings>()
-  const settingsOf = (ownerId: string): AiGlobalSettings => {
+  const settingsOf = async (ownerId: string): Promise<AiGlobalSettings> => {
     let settings = settingsByOwner.get(ownerId)
     if (!settings) {
-      settings = aiRepo.readGlobalSettings(db, ownerId)
+      settings = await aiRepo.readGlobalSettings(db, ownerId)
       settingsByOwner.set(ownerId, settings)
     }
     return settings
   }
 
-  for (const candidate of listAutonomyCandidates(db)) {
+  for (const candidate of await listAutonomyCandidates(db)) {
     if (spokenGroups.has(candidate.conversation_id)) continue
 
-    const settings = settingsOf(candidate.persona.owner_id)
+    const settings = await settingsOf(candidate.persona.owner_id)
     if (!settings.groupEnabled) continue
 
-    const state = readState(db, candidate.conversation_id, candidate.persona.id)
-    const lastMessageAt = conversationLastMessageAt(db, candidate.conversation_id)
+    const state = await readState(db, candidate.conversation_id, candidate.persona.id)
+    const lastMessageAt = await conversationLastMessageAt(db, candidate.conversation_id)
     const decision = decideGroupAutonomy({
       now: ts,
       enabled: settings.groupEnabled,
-      autonomyToday: countToday(db, candidate.conversation_id, candidate.persona.id, dayKey, 'autonomy'),
+      autonomyToday: await countToday(db, candidate.conversation_id, candidate.persona.id, dayKey, 'autonomy'),
       maxAutonomyPerDay: settings.groupAutonomyPerDay,
       lastAutonomyAt: state.lastAutonomyAt,
       idleMs: ts - lastMessageAt,
@@ -866,7 +880,7 @@ export async function scanGroupAutonomyOnce(
     if (!decision.fire) {
       // 规则层没放行也记一条：主人需要看到「谁为什么没主动开口」；没开调试模式就不写
       if (settings.debugMode) {
-        pushDecision(db, candidate.persona.owner_id, {
+        await pushDecision(db, candidate.persona.owner_id, {
           conversationId: candidate.conversation_id,
           personaId: candidate.persona.id,
           personaName: candidate.persona.name,
@@ -885,10 +899,10 @@ export async function scanGroupAutonomyOnce(
     const member: GroupPersonaMember = {
       persona: candidate.persona,
       botUserId: candidate.persona.user_id!,
-      provider: resolvePersonaProvider(db, candidate.persona),
+      provider: await resolvePersonaProvider(db, candidate.persona),
     }
 
-    const reserved = reserveTurn(db, {
+    const reserved = await reserveTurn(db, {
       conversationId: candidate.conversation_id,
       member,
       kind: 'autonomy',
@@ -900,7 +914,7 @@ export async function scanGroupAutonomyOnce(
     if (!reserved) continue
 
     if (settings.debugMode) {
-      pushDecision(db, candidate.persona.owner_id, {
+      await pushDecision(db, candidate.persona.owner_id, {
         conversationId: candidate.conversation_id,
         personaId: candidate.persona.id,
         personaName: candidate.persona.name,
@@ -930,7 +944,7 @@ export async function scanGroupAutonomyOnce(
       })
     } catch (e) {
       log.error({ err: e, personaId: candidate.persona.id }, '群自主发言失败')
-      finishLog(db, reserved.logId, 'failed', { reason: 'exception' })
+      await finishLog(db, reserved.logId, 'failed', { reason: 'exception' })
     }
   }
 }

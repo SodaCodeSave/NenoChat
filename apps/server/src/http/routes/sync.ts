@@ -12,17 +12,17 @@ export async function syncRoutes(app: FastifyInstance): Promise<void> {
     const since = Number(request.query.since ?? 0)
     const limit = Math.min(Number(request.query.limit ?? 500) || 500, 1000)
 
-    const min = syncService.minCursor(db)
+    const min = await syncService.minCursor(db)
     if (since > 0 && min > 0 && since < min - 1) {
       return { reset: true, reason: 'cursor_expired', snapshotCursor: min - 1 }
     }
 
-    return syncService.listChanges(db, userId, Number.isFinite(since) ? since : 0, limit)
+    return await syncService.listChanges(db, userId, Number.isFinite(since) ? since : 0, limit)
   })
 
   /** 游标也要登录后才能看：maxCursor 属于全局信息，不能匿名泄漏 */
   app.get('/sync/head', async (request) => {
     await requireUserId(request)
-    return { cursor: syncService.maxCursor(db) }
+    return { cursor: await syncService.maxCursor(db) }
   })
 }
