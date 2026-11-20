@@ -57,7 +57,7 @@ PUBLIC_BASE_URL=http://你的服务器地址:8787
 docker compose up -d
 ```
 
-数据库（PostgreSQL）持久化在 `nenochat-pg` 数据卷，上传文件在 `nenochat-data` 数据卷；NAS 等 bind mount 场景改用 `./data` 目录挂载即可。
+数据库（PostgreSQL）持久化在 `nenochat-pg` 数据卷，上传文件在 `nenochat-data` 数据卷；NAS 部署（`deploy/` 目录）用 bind mount：数据库在 `./data/postgres`，上传文件在 `./data`。
 
 ### 3. 安装客户端并连接
 
