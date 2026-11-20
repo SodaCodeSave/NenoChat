@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
-import LoginForm from '@/components/auth/LoginForm.vue'
 import { useAuthStore } from '@/stores/auth'
-import { useUiStore } from '@/stores/ui'
 import { useServersStore, normalizeServerUrl } from '@/stores/servers'
 import { resetWorkspace } from '@/app/bootstrap'
 import {
@@ -22,9 +21,9 @@ import { isTauri, platformName } from '@/platform/device'
 
 type ProbeState = 'checking' | 'online' | 'offline' | 'blocked'
 
+const router = useRouter()
 const auth = useAuthStore()
 const servers = useServersStore()
-const ui = useUiStore()
 
 const url = ref('http://localhost:8787')
 const label = ref('')
@@ -35,55 +34,6 @@ const error = ref<string | null>(null)
 const status = ref<Record<string, ProbeState>>({})
 const versions = ref<Record<string, string | null>>({})
 const localNetwork = ref<LocalNetworkState>('unsupported')
-
-/** 手机端卡片当前朝向：servers=选服务器，login=登录表单 */
-const face = ref<'servers' | 'login'>(
-  ui.isMobile && servers.current !== null ? 'login' : 'servers',
-)
-const flipping = ref(false)
-/** 翻转相位：out=转走，in=换面后待转回 */
-const tilt = ref<'out' | 'in' | null>(null)
-
-const flipClass = computed(() => {
-  if (tilt.value === 'out') return 'setup-flip-out'
-  if (tilt.value === 'in') return 'setup-flip-in'
-  return ''
-})
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/** 两面之间平滑翻转：缩小转走 → 换面 → 放大转回 */
-async function flipTo(next: 'servers' | 'login'): Promise<void> {
-  if (next === face.value || flipping.value) return
-  if (!ui.isMobile || ui.reduceMotion) {
-    face.value = next
-    return
-  }
-  flipping.value = true
-  tilt.value = 'out'
-  await wait(170)
-  face.value = next
-  tilt.value = 'in'
-  await nextTick()
-  // 强制回流，让换面后的起始姿态先落定再过渡回去
-  void document.body.offsetHeight
-  tilt.value = null
-  await wait(200)
-  flipping.value = false
-}
-
-// 窗口尺寸跨过移动端断点时，把朝向对齐到当前状态
-watch(
-  () => ui.isMobile,
-  (mobile) => {
-    tilt.value = null
-    flipping.value = false
-    if (mobile) face.value = servers.current !== null ? 'login' : 'servers'
-    else face.value = 'servers'
-  },
-)
 
 const normalized = computed(() => {
   try {
@@ -204,17 +154,12 @@ onBeforeUnmount(() => {
 
 async function selectServer(id: string): Promise<void> {
   if (switchingId.value) return
-  // 已选中的服务器再点一次，手机端直接翻到登录面
-  if (id === servers.currentId) {
-    void flipTo('login')
-    return
-  }
   switchingId.value = id
   try {
     await servers.setCurrent(id)
     resetWorkspace()
     await auth.clearSession()
-    void flipTo('login')
+    await router.replace('/login')
   } finally {
     switchingId.value = null
   }
@@ -233,7 +178,7 @@ async function connect(): Promise<void> {
     await auth.clearSession()
     url.value = ''
     label.value = ''
-    void flipTo('login')
+    await router.replace('/login')
   } catch (e) {
     if (e instanceof LocalNetworkPermissionError) localNetwork.value = e.state
     error.value = e instanceof Error ? e.message : '连接失败，请检查地址'
@@ -244,184 +189,146 @@ async function connect(): Promise<void> {
 </script>
 
 <template>
-  <div class="grid gap-5 lg:grid-cols-2 lg:items-stretch">
-    <section
-      v-show="!ui.isMobile || face === 'servers'"
-      class="setup-flip h-full rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow-soft)]"
-      :class="flipClass"
+  <div class="mx-auto w-full max-w-md">
+    <div class="mb-5 flex items-center justify-between">
+      <div>
+        <h1 class="text-[16px] font-semibold text-text-strong">选择服务器</h1>
+        <p class="text-[12px] text-muted">绿点可用 · 红点不可用</p>
+      </div>
+      <button
+        type="button"
+        class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11.5px] text-muted hover:bg-surface-2 hover:text-accent disabled:opacity-50"
+        :disabled="probing"
+        :title="probing ? '正在测试' : '重新测试所有服务器'"
+        @click="testServers"
+      >
+        <Icon name="refresh" :size="14" />
+        {{ probing ? '测试中' : '刷新' }}
+      </button>
+    </div>
+
+    <div
+      v-if="bridgeMissing"
+      class="mb-4 rounded-xl border border-danger/40 bg-danger/10 p-3"
     >
-      <div class="mb-5 flex items-start justify-between">
-        <div class="flex items-center gap-2">
-          <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-accent-text">
-            <Icon name="server" :size="18" />
-          </span>
-          <div>
-            <h1 class="text-[16px] font-semibold text-text-strong">选择服务器</h1>
-            <p class="text-[12px] text-muted">绿点可用 · 红点不可用</p>
+      <div class="flex items-start gap-2">
+        <Icon name="wifiOff" :size="15" class="mt-0.5 text-danger" />
+        <div class="min-w-0">
+          <p class="text-[12.5px] font-medium text-text-strong">当前安装包缺少本地网络支持</p>
+          <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
+            这个安装包没有带原生权限声明，系统会静默拦截对局域网服务器的访问。请更新或重新安装客户端。
+          </p>
+          <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-else-if="permissionBlocked"
+      class="mb-4 rounded-xl border border-accent/35 bg-accent-soft/50 p-3"
+    >
+      <div class="flex items-start gap-2">
+        <Icon name="wifiOff" :size="15" class="mt-0.5 text-accent" />
+        <div class="min-w-0">
+          <p class="text-[12.5px] font-medium text-text-strong">需要「附近的设备」权限</p>
+          <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
+            Android 17 起系统会拦截应用对局域网服务器的访问，允许本地网络权限后才能连接。
+          </p>
+          <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-lg bg-accent px-3 py-1.5 text-[11.5px] font-medium text-accent-text"
+              @click="grantPermission"
+            >
+              {{ localNetwork === 'denied' ? '重新请求权限' : '允许访问' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-muted hover:text-accent"
+              @click="goToSettings"
+            >
+              去系统设置
+            </button>
           </div>
         </div>
-        <button
-          type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11.5px] text-muted hover:bg-surface-2 hover:text-accent disabled:opacity-50"
-          :disabled="probing"
-          :title="probing ? '正在测试' : '重新测试所有服务器'"
-          @click="testServers"
-        >
-          <Icon name="refresh" :size="14" />
-          {{ probing ? '测试中' : '刷新' }}
-        </button>
       </div>
+    </div>
 
-      <div
-        v-if="bridgeMissing"
-        class="mb-4 rounded-xl border border-danger/40 bg-danger/10 p-3"
+    <p v-if="servers.servers.length === 0" class="py-6 text-center text-[12px] text-muted">
+      还没有保存的服务器，先在下方添加一个。
+    </p>
+
+    <div v-else class="space-y-1.5">
+      <button
+        v-for="server in servers.servers"
+        :key="server.id"
+        type="button"
+        class="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-60"
+        :class="
+          server.id === servers.currentId
+            ? 'border-accent/45 bg-accent-soft/40'
+            : 'border-line bg-surface-2 hover:bg-surface-3'
+        "
+        :disabled="switchingId !== null"
+        @click="selectServer(server.id)"
       >
-        <div class="flex items-start gap-2">
-          <Icon name="wifiOff" :size="15" class="mt-0.5 text-danger" />
-          <div class="min-w-0">
-            <p class="text-[12.5px] font-medium text-text-strong">当前安装包缺少本地网络支持</p>
-            <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
-              这个安装包没有带原生权限声明，系统会静默拦截对局域网服务器的访问。请更新或重新安装客户端。
-            </p>
-            <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-else-if="permissionBlocked"
-        class="mb-4 rounded-xl border border-accent/35 bg-accent-soft/50 p-3"
-      >
-        <div class="flex items-start gap-2">
-          <Icon name="wifiOff" :size="15" class="mt-0.5 text-accent" />
-          <div class="min-w-0">
-            <p class="text-[12.5px] font-medium text-text-strong">需要「附近的设备」权限</p>
-            <p class="mt-1 text-[11.5px] leading-relaxed text-muted">
-              Android 17 起系统会拦截应用对局域网服务器的访问，允许本地网络权限后才能连接。
-            </p>
-            <p class="mt-2 font-mono text-[10.5px] text-muted">{{ diagnosticLine }}</p>
-            <div class="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="rounded-lg bg-accent px-3 py-1.5 text-[11.5px] font-medium text-accent-text"
-                @click="grantPermission"
-              >
-                {{ localNetwork === 'denied' ? '重新请求权限' : '允许访问' }}
-              </button>
-              <button
-                type="button"
-                class="rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-muted hover:text-accent"
-                @click="goToSettings"
-              >
-                去系统设置
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <p v-if="servers.servers.length === 0" class="py-6 text-center text-[12px] text-muted">
-        还没有保存的服务器，先在下方添加一个。
-      </p>
-
-      <div v-else class="space-y-1.5">
-        <button
-          v-for="server in servers.servers"
-          :key="server.id"
-          type="button"
-          class="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-60"
-          :class="
-            server.id === servers.currentId
-              ? 'border-accent/45 bg-accent-soft/40'
-              : 'border-line bg-surface-2 hover:bg-surface-3'
-          "
-          :disabled="switchingId !== null"
-          @click="selectServer(server.id)"
-        >
-          <span
-            class="h-2 w-2 shrink-0 rounded-full"
-            :class="dotClass(status[server.id])"
-            :title="dotLabel(status[server.id])"
-          />
-          <span class="min-w-0 flex-1">
-            <span class="flex min-w-0 items-center gap-1.5">
-              <span class="truncate text-[13px] font-medium text-text-strong">{{ server.name }}</span>
-              <span
-                v-if="versions[server.id]"
-                class="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10.5px] text-muted"
-              >{{ versions[server.id] }}</span>
-            </span>
-            <span class="block truncate text-[11px] text-muted">{{ server.baseUrl }}</span>
+        <span
+          class="h-2 w-2 shrink-0 rounded-full"
+          :class="dotClass(status[server.id])"
+          :title="dotLabel(status[server.id])"
+        />
+        <span class="min-w-0 flex-1">
+          <span class="flex min-w-0 items-center gap-1.5">
+            <span class="truncate text-[13px] font-medium text-text-strong">{{ server.name }}</span>
+            <span
+              v-if="versions[server.id]"
+              class="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10.5px] text-muted"
+            >{{ versions[server.id] }}</span>
           </span>
-          <Icon
-            v-if="server.id === servers.currentId"
-            name="check"
-            :size="14"
-            class="text-accent"
-          />
-          <Icon v-else name="chevronRight" :size="13" class="text-muted" />
-        </button>
-      </div>
+          <span class="block truncate text-[11px] text-muted">{{ server.baseUrl }}</span>
+        </span>
+        <Icon
+          v-if="server.id === servers.currentId"
+          name="check"
+          :size="14"
+          class="text-accent"
+        />
+        <Icon v-else name="chevronRight" :size="13" class="text-muted" />
+      </button>
+    </div>
 
-      <div class="mt-5 border-t border-line pt-4">
-        <p class="mb-2 text-[11px] font-medium tracking-wide text-muted">添加服务器</p>
-        <div class="space-y-2">
-          <label class="block">
-            <input
-              v-model="url"
-              type="text"
-              placeholder="http://192.168.1.10:8787"
-              class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
-              @keydown.enter="connect"
-            />
-            <span v-if="normalized" class="mt-1 block text-[11px] text-muted">
-              将连接 {{ normalized }}
-            </span>
-          </label>
+    <div class="mt-5 border-t border-line pt-4">
+      <p class="mb-2 text-[11px] font-medium tracking-wide text-muted">添加服务器</p>
+      <div class="space-y-2">
+        <label class="block">
           <input
-            v-model="label"
+            v-model="url"
             type="text"
-            placeholder="服务器备注（可选）"
+            placeholder="http://192.168.1.10:8787"
             class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+            @keydown.enter="connect"
           />
-          <p v-if="error" class="rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{{ error }}</p>
-          <button
-            type="button"
-            class="h-10 w-full rounded-lg bg-accent text-[13.5px] font-medium text-accent-text disabled:opacity-60"
-            :disabled="adding || !url.trim()"
-            @click="connect"
-          >
-            {{ adding ? '正在测试并添加…' : '测试并添加' }}
-          </button>
-        </div>
+          <span v-if="normalized" class="mt-1 block text-[11px] text-muted">
+            将连接 {{ normalized }}
+          </span>
+        </label>
+        <input
+          v-model="label"
+          type="text"
+          placeholder="服务器备注（可选）"
+          class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+        />
+        <p v-if="error" class="rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{{ error }}</p>
+        <button
+          type="button"
+          class="h-10 w-full rounded-lg bg-accent text-[13.5px] font-medium text-accent-text disabled:opacity-60"
+          :disabled="adding || !url.trim()"
+          @click="connect"
+        >
+          {{ adding ? '正在测试并添加…' : '测试并添加' }}
+        </button>
       </div>
-    </section>
-
-    <LoginForm
-      v-show="!ui.isMobile || face === 'login'"
-      :show-server-switch="ui.isMobile"
-      class="setup-flip"
-      :class="flipClass"
-      @change-server="flipTo('servers')"
-    />
+    </div>
   </div>
 </template>
-
-<style scoped>
-/* 手机端选服务器 ↔ 登录的卡片翻转，姿态由 JS 相位类驱动 */
-.setup-flip {
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform;
-}
-
-.setup-flip-out {
-  transform: perspective(1200px) rotateY(90deg) scale(0.86);
-  transition-duration: 170ms;
-  transition-timing-function: ease-in;
-}
-
-.setup-flip-in {
-  transform: perspective(1200px) rotateY(-90deg) scale(0.86);
-  transition: none;
-}
-</style>

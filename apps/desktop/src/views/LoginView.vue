@@ -13,7 +13,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-md">
-    <LoginForm :show-server-switch="true" @change-server="router.replace('/setup')" />
+  <div class="mx-auto w-full max-w-md">
+    <LoginForm />
   </div>
 </template>

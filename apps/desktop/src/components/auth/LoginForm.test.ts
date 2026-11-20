@@ -18,9 +18,21 @@ describe('登录入口', () => {
     expect(formSource).toContain('请先选择或添加一个服务器')
   })
 
-  it('独立登录页复用同一表单并保留切换入口', () => {
-    expect(loginSource).toContain('LoginForm')
-    expect(loginSource).toContain(':show-server-switch="true"')
+  it('独立登录页复用同一表单，未选服务器时落到选服务器页', () => {
+    expect(loginSource).toContain('<LoginForm />')
+    expect(loginSource).toContain("router.replace('/setup')")
+  })
+
+  it('logo 下方显示正在登录到的服务器，底部有更换服务器小字入口', () => {
+    expect(formSource).toContain('正在登录「')
+    expect(formSource).toContain("router.replace('/setup')")
+    expect(formSource).toContain('更换服务器')
+    expect(formSource).not.toContain('showServerSwitch')
+  })
+
+  it('裸页面切换带渐入渐出动效', () => {
+    expect(appSource).toContain('page-fade')
+    expect(appSource).toContain('mode="out-in"')
   })
 
   it('未登录默认落到服务器页', () => {
@@ -49,6 +61,12 @@ describe('登录页极简化', () => {
   it('logo、标题与服务器切换居中展示', () => {
     expect(formSource).toContain('flex-col items-center')
     expect(formSource).toContain('text-center')
+  })
+
+  it('顶部为全尺寸品牌字标，黑白主题色，无文字标题', () => {
+    expect(formSource).toContain('<BrandLogo class="h-8 text-text-strong"')
+    expect(formSource).not.toContain('name="message"')
+    expect(formSource).not.toContain('登录 NenoChat')
   })
 })
 

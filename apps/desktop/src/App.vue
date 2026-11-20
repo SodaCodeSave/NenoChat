@@ -108,13 +108,28 @@ onMounted(async () => {
       <button v-else type="button" class="boot-error__retry" @click="start">重试</button>
     </div>
     <component :is="layout" v-else key="main">
-      <RouterView />
+      <RouterView v-slot="{ Component, route: viewRoute }">
+        <Transition name="page-fade" mode="out-in">
+          <component :is="Component" :key="viewRoute.path" />
+        </Transition>
+      </RouterView>
     </component>
   </Transition>
   <UpdateDialog />
 </template>
 
 <style scoped>
+/* 裸页面（选服务器 ↔ 登录）之间的渐入渐出 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
+}
+
 .boot-error {
   position: absolute;
   inset: 0;

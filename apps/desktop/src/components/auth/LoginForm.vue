@@ -1,16 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import Icon from '@/components/ui/Icon.vue'
+import BrandLogo from '@/components/layout/BrandLogo.vue'
 import { readLastUser, useAuthStore } from '@/stores/auth'
 import { useConversationsStore } from '@/stores/conversations'
 import { useServersStore } from '@/stores/servers'
 import { useSyncStore } from '@/stores/sync'
-
-const props = withDefaults(defineProps<{ showServerSwitch?: boolean }>(), {
-  showServerSwitch: false,
-})
-const emit = defineEmits<{ changeServer: [] }>()
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -110,10 +105,6 @@ function switchMode(next: 'login' | 'register' | 'pair'): void {
   error.value = null
 }
 
-const heading = computed(() =>
-  mode.value === 'login' ? '登录 NenoChat' : mode.value === 'register' ? '创建账号' : '用配对码接入',
-)
-
 const submitLabel = computed(() =>
   busy.value ? '请稍候…' : mode.value === 'login' ? '登录' : mode.value === 'register' ? '注册并登录' : '接入',
 )
@@ -121,22 +112,10 @@ const submitLabel = computed(() =>
 
 <template>
   <div class="flex w-full flex-col items-center">
-    <span class="grid h-12 w-12 place-items-center rounded-2xl bg-accent text-accent-text">
-      <Icon name="message" :size="24" />
-    </span>
-    <h1 class="mt-3 text-center text-[17px] font-semibold text-text-strong">{{ heading }}</h1>
+    <BrandLogo class="h-8 text-text-strong" />
 
-    <button
-      v-if="props.showServerSwitch"
-      type="button"
-      class="mt-1 flex items-center gap-1 text-[11.5px] text-muted transition-colors hover:text-accent"
-      @click="emit('changeServer')"
-    >
-      <Icon name="server" :size="11" />
-      {{ servers.current?.name ?? '未选择服务器' }} · 切换
-    </button>
-    <p v-else class="mt-1 text-[11.5px] text-muted">
-      {{ servers.current?.name ?? '未选择服务器' }}
+    <p class="mt-2.5 text-[11.5px] text-muted">
+      {{ servers.current ? `正在登录「${servers.current.name}」服务器` : '未选择服务器' }}
     </p>
 
     <div
@@ -253,5 +232,13 @@ const submitLabel = computed(() =>
         </button>
       </form>
     </template>
+
+    <button
+      type="button"
+      class="mt-5 text-[11.5px] text-muted transition-colors hover:text-accent"
+      @click="router.replace('/setup')"
+    >
+      更换服务器
+    </button>
   </div>
 </template>
