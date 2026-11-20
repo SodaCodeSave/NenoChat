@@ -1,6 +1,7 @@
 import { buildApp } from './app'
 import { env } from './env'
 import { closeDb } from './db'
+import { startEmbeddedDb, stopEmbeddedDb } from './db/embedded'
 
 /**
  * 一体化版由客户端托管：父进程被强杀或崩溃时子进程会变成孤儿，
@@ -20,6 +21,9 @@ function watchParent(): void {
 }
 
 async function main(): Promise<void> {
+  // 一体版没有独立数据库服务：DATABASE_URL 未设置时先拉起内嵌 PostgreSQL
+  await startEmbeddedDb()
+
   const app = await buildApp()
   watchParent()
 
@@ -27,6 +31,7 @@ async function main(): Promise<void> {
     app.log.info({ signal }, 'shutting down')
     await app.close()
     await closeDb()
+    await stopEmbeddedDb()
     process.exit(0)
   }
 

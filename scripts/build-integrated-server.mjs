@@ -2,10 +2,10 @@
 //   resources/server/
 //     server.cjs          业务代码（esbuild 单文件，原生模块走外部依赖）
 //     migrations/*.sql    数据库迁移脚本
-//     node_modules/**     只在运行时需要、无法打包的原生模块
+//     node_modules/**     只在运行时需要、无法打包的 PostgreSQL 原生二进制
 //     node(.exe)          与构建机同版本的 Node 运行时
-// 客户端启动时直接 spawn 这份运行时，不再要求用户自己装 Node 或跑服务端。
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+// 客户端启动时直接 spawn 这份运行时，不再要求用户自己装 Node、PostgreSQL 或跑服务端。
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,16 +20,23 @@ const platform = process.platform
 const arch = process.arch
 const nodeBinaryName = platform === 'win32' ? 'node.exe' : 'node'
 
-/** better-sqlite3 的预编译二进制按平台分目录，只留当前平台那一份 */
-function sqlitePrebuildName() {
-  const alias = { win32: 'win32', darwin: 'darwin', linux: 'linux' }[platform]
-  if (!alias) throw new Error(`不支持的平台：${platform}`)
-  return `${alias}-${arch}.node`
-}
-
 /** 解析包在 pnpm 虚拟仓库里的真实目录，避免把符号链接打进安装包 */
 function realPackageDir(name) {
-  return path.dirname(requireFromServer.resolve(`${name}/package.json`))
+  const entry = requireFromServer.resolve(name)
+  // 部分包的 exports 不暴露 package.json，从入口文件沿目录向上找名字匹配的包根
+  let dir = path.dirname(entry)
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'))
+      if (pkg.name === name) return dir
+    } catch {
+      // 不是包根，继续向上
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  throw new Error(`无法定位包目录：${name}`)
 }
 
 /** 复制目录时按相对路径过滤，用来剔掉源码、声明文件等运行期用不到的内容 */
@@ -42,23 +49,6 @@ function copyFiltered(from, to, keep) {
       return keep(path.relative(from, src).split(path.sep).join('/'))
     },
   })
-}
-
-function copySqlite() {
-  const from = realPackageDir('better-sqlite3')
-  const to = path.join(outDir, 'node_modules/better-sqlite3')
-  const prebuild = sqlitePrebuildName()
-  copyFiltered(from, to, (rel) => {
-    if (rel === 'package.json') return true
-    // 目录本身也要放行，否则 cpSync 会把整棵子树剪掉
-    if (rel === 'lib' || rel.startsWith('lib/')) return true
-    if (rel === 'prebuilds') return true
-    if (rel.startsWith('prebuilds/')) return rel === `prebuilds/${prebuild}`
-    return false
-  })
-  if (!existsSync(path.join(to, 'prebuilds', prebuild))) {
-    throw new Error(`better-sqlite3 缺少当前平台的预编译包：${prebuild}`)
-  }
 }
 
 function copyArgon2() {
@@ -78,6 +68,32 @@ function copyArgon2() {
   if (!existsSync(path.join(to, 'argon2/index.js'))) {
     throw new Error('@node-rs/argon2 复制失败')
   }
+}
+
+/** 内嵌 PostgreSQL 的平台二进制（initdb/postgres 与全部动态库），一体版运行必须 */
+function copyEmbeddedPg() {
+  const pkgName = `@embedded-postgres/${platform}-${arch}`
+  const from = realPackageDir(pkgName)
+  const to = path.join(outDir, 'node_modules/@embedded-postgres', `${platform}-${arch}`)
+  copyFiltered(from, to, (rel) => {
+    // native/ 是二进制主体（约 100MB），dist/ 是定位它的入口脚本
+    if (rel === 'package.json' || rel === 'LICENSE.md') return true
+    return rel === 'dist' || rel.startsWith('dist/') || rel === 'native' || rel.startsWith('native/')
+  })
+  if (!existsSync(path.join(to, 'package.json'))) {
+    throw new Error(`${pkgName} 复制失败`)
+  }
+  const mb = Math.round(dirSize(to) / (1024 * 1024))
+  return mb
+}
+
+function dirSize(dir) {
+  let total = 0
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    total += entry.isDirectory() ? dirSize(full) : statSync(full).size
+  }
+  return total
 }
 
 function copyMigrations() {
@@ -112,12 +128,20 @@ async function bundleServer() {
     logLevel: 'warning',
     // version.mjs 的 CLI 判定用不到 import.meta，打包成 CJS 时的告警可以忽略
     logOverride: { 'empty-import-meta': 'silent' },
-    // 原生模块必须留在磁盘上，交给 Node 自己 require
-    external: ['better-sqlite3', '@node-rs/argon2'],
+    // 原生模块必须留在磁盘上，交给 Node 自己 require；PG 平台二进制由
+    // embedded-postgres 运行时按平台动态 import，同样走 node_modules 解析
+    external: ['@node-rs/argon2', '@embedded-postgres/*'],
     // 打包成 CJS 后没有 import.meta，迁移目录靠 __dirname 定位
     define: { 'import.meta.dirname': '__dirname' },
     banner: {
-      js: '// NenoChat 一体化服务端，由 scripts/build-integrated-server.mjs 生成',
+      js: [
+        '// NenoChat 一体化服务端，由 scripts/build-integrated-server.mjs 生成',
+        '// GUI 环境里没有控制台：给所有子进程注入 windowsHide，防止 initdb/postgres 弹黑框',
+        'const __nenoOriginalSpawn = require("node:child_process").spawn',
+        'require("node:child_process").spawn = function (file, args, options) {',
+        '  return __nenoOriginalSpawn(file, args, { ...(options ?? {}), windowsHide: true })',
+        '}',
+      ].join('\n'),
     },
     metafile: true,
   })
@@ -132,14 +156,14 @@ async function main() {
 
   const bundleKb = await bundleServer()
   const migrationCount = copyMigrations()
-  copySqlite()
   copyArgon2()
+  const pgMb = copyEmbeddedPg()
   const nodeMb = copyNodeRuntime()
 
   console.log(
     [
       `服务端运行时已生成：${path.relative(rootDir, outDir)}`,
-      `  代码 ${bundleKb} KB · 迁移 ${migrationCount} 个 · Node 运行时 ${nodeMb} MB · 平台 ${platform}-${arch}`,
+      `  代码 ${bundleKb} KB · 迁移 ${migrationCount} 个 · PG 二进制 ${pgMb} MB · Node 运行时 ${nodeMb} MB · 平台 ${platform}-${arch}`,
     ].join('\n'),
   )
 }
