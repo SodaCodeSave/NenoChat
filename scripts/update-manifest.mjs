@@ -9,10 +9,10 @@ import { pathToFileURL } from 'node:url'
 
 const REPO = 'SodaCodeSave/NenoChat'
 
-/** 认得出的 updater 签名产物后缀 → 平台键 */
+/** 认得出的 updater 签名产物后缀 → 平台键（v2 直接签原始安装包，不套 zip） */
 const ARTIFACT_KINDS = [
-  { suffix: '.exe.zip.sig', platform: 'windows-x86_64' },
-  { suffix: '.AppImage.tar.gz.sig', platform: 'linux-x86_64' },
+  { suffix: '.exe.sig', platform: 'windows-x86_64' },
+  { suffix: '.AppImage.sig', platform: 'linux-x86_64' },
 ]
 
 function parseArgs(argv) {

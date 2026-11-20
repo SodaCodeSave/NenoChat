@@ -62,7 +62,6 @@ jobs:
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.zip
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             update-partial-regular-windows-x86_64.json
           fail_on_unmatched_files: true
@@ -115,7 +114,6 @@ jobs:
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NenoChat-Integrated_*.exe
-            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/NenoChat-Integrated_*.exe.zip
             apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/NenoChat-Integrated_*.msi
             update-partial-integrated-windows-x86_64.json
           fail_on_unmatched_files: true
@@ -172,7 +170,6 @@ jobs:
         with:
           files: |
             apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
-            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz
             apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             update-partial-regular-linux-x86_64.json
           fail_on_unmatched_files: true
