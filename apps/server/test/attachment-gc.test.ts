@@ -43,7 +43,7 @@ async function upload(
   buffer: Buffer,
   filename: string,
   mime: string,
-  kind: 'avatar' | 'file' = 'avatar',
+  kind: 'avatar' | 'file' | 'background' = 'avatar',
 ): Promise<{ id: string; url: string; storageKey: string }> {
   const { body, boundary } = multipartBody(buffer, filename, mime)
   const res = await app.inject({
@@ -210,6 +210,30 @@ describe('附件回收', () => {
     const staleRow = await one(db, 'SELECT id FROM attachments WHERE id = ?', [stale.id])
     expect(staleRow).toBeUndefined()
     expect(result.freedBytes).toBeGreaterThan(0)
+  })
+
+  it('users.banner_url 引用的空间头图不会被回收，清掉引用后才回收', async () => {
+    const now = Date.now()
+    // 内容要与其它用例的上传不同：附件按内容 sha256 去重，撞内容会复用同一行
+    const banner = await upload(pngBuffer(128), 'banner.png', 'image/png', 'background')
+    await run(db, 'UPDATE users SET banner_url = ? WHERE id = ?', [banner.url, userId])
+    // 拨到宽限期外：除了头图引用再无别的引用，也不允许回收
+    const old = now - 3 * DAY
+    await run(db, 'UPDATE attachments SET created_at = ? WHERE id = ?', [old, banner.id])
+    ageFile(banner.storageKey, old)
+
+    const { reclaimAttachments } = await import('../src/services/attachment-gc')
+    const kept = await reclaimAttachments(db, { filesRoot, now, minAgeMs: DAY })
+    expect(fileExists(banner.storageKey)).toBe(true)
+    const rowAfterKeep = await one(db, 'SELECT id FROM attachments WHERE id = ?', [banner.id])
+    expect(rowAfterKeep).toBeDefined()
+
+    // 清掉引用后，同一批文件与附件行就该被回收
+    await run(db, 'UPDATE users SET banner_url = NULL WHERE id = ?', [userId])
+    await reclaimAttachments(db, { filesRoot, now, minAgeMs: DAY })
+    expect(fileExists(banner.storageKey)).toBe(false)
+    const rowAfterSweep = await one(db, 'SELECT id FROM attachments WHERE id = ?', [banner.id])
+    expect(rowAfterSweep).toBeUndefined()
   })
 
   it('没有孤儿时重复执行是幂等的', async () => {

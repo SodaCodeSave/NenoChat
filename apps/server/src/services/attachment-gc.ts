@@ -156,12 +156,15 @@ export async function collectReferencedKeys(db: DB): Promise<Set<string>> {
     await yieldEventLoop()
   }
 
-  // 头像与角色卡直接存 URL
-  const avatarRows = await all<{ url: string | null }>(
+  // 头像、空间头图与角色卡直接存 URL
+  const avatarRows = await all<{ url: string | null; banner: string | null }>(
     db,
-    "SELECT avatar_url AS url FROM users WHERE avatar_url LIKE '/files/%'",
+    "SELECT avatar_url AS url, banner_url AS banner FROM users WHERE avatar_url LIKE '/files/%' OR banner_url LIKE '/files/%'",
   )
-  for (const row of avatarRows) addKey(keys, row.url)
+  for (const row of avatarRows) {
+    addKey(keys, row.url)
+    addKey(keys, row.banner)
+  }
 
   // 用户设置的聊天背景图也是「URL 存在设置列里」的引用，漏扫会被 GC 当孤儿删掉
   const bgRows = await all<{ url: string | null }>(

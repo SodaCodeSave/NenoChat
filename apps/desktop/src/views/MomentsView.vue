@@ -4,8 +4,11 @@ import type { Post } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import Dialog from '@/components/ui/form/Dialog.vue'
+import MomentsComposer from '@/components/moments/MomentsComposer.vue'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
+import { userApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useMomentsStore } from '@/stores/moments'
 import { useUiStore } from '@/stores/ui'
@@ -14,17 +17,65 @@ const auth = useAuthStore()
 const moments = useMomentsStore()
 const ui = useUiStore()
 
-const draft = ref('')
-const pendingImages = ref<Array<{ id: string; url: string; name: string }>>([])
-const uploading = ref(false)
-const uploadError = ref<string | null>(null)
-const fileInput = ref<HTMLInputElement | null>(null)
+// 手机端发帖弹窗：与桌面常驻发布框共用同一份 MomentsComposer
+const composerOpen = ref(false)
+
 const openComments = ref<Record<string, boolean>>({})
 const commentDrafts = ref<Record<string, string>>({})
 
-const canPublish = computed(
-  () => (draft.value.trim().length > 0 || pendingImages.value.length > 0) && !moments.publishing,
+// 空间头图：点头图直接换，走 background 附件 + users.banner_url
+const bannerInput = ref<HTMLInputElement | null>(null)
+const bannerUploading = ref(false)
+const bannerError = ref<string | null>(null)
+/** 刚选好文件还没传完时先本地预览，传完换回服务端地址 */
+const bannerPreview = ref<string | null>(null)
+
+const bannerUrl = computed(() => bannerPreview.value ?? auth.user?.bannerUrl ?? null)
+const bannerStyle = computed(() =>
+  bannerUrl.value
+    ? undefined
+    : {
+        background:
+          'linear-gradient(115deg, var(--accent-soft) 0%, color-mix(in srgb, var(--accent) 34%, var(--surface)) 58%, color-mix(in srgb, var(--accent) 62%, var(--surface)) 100%)',
+      },
 )
+
+function pickBanner(): void {
+  if (bannerUploading.value) return
+  bannerInput.value?.click()
+}
+
+async function onBannerChange(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  // 允许再次选同一个文件
+  target.value = ''
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    bannerError.value = '头图需要是图片文件'
+    return
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    bannerError.value = '图片不能超过 10MB'
+    return
+  }
+
+  bannerError.value = null
+  bannerUploading.value = true
+  const localObjectUrl = URL.createObjectURL(file)
+  bannerPreview.value = localObjectUrl
+  try {
+    const attachment = await uploadFile(file, { kind: 'background' })
+    const result = await userApi.updateProfile({ bannerUrl: attachment.url })
+    if (auth.user) auth.user.bannerUrl = result.user.bannerUrl ?? attachment.url
+  } catch (e) {
+    bannerError.value = e instanceof Error ? e.message : '头图上传失败'
+  } finally {
+    URL.revokeObjectURL(localObjectUrl)
+    bannerPreview.value = null
+    bannerUploading.value = false
+  }
+}
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts
@@ -34,51 +85,6 @@ function relativeTime(ts: number): string {
   if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
   const date = new Date(ts)
   return `${date.getMonth() + 1}月${date.getDate()}日`
-}
-
-async function pickImages(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = ''
-  if (files.length === 0) return
-
-  uploading.value = true
-  uploadError.value = null
-  try {
-    for (const file of files.slice(0, 9 - pendingImages.value.length)) {
-      if (!file.type.startsWith('image/')) {
-        uploadError.value = '动态只能配图片'
-        continue
-      }
-      const attachment = await uploadFile(file, { kind: 'file' })
-      pendingImages.value = [
-        ...pendingImages.value,
-        { id: attachment.id, url: attachment.url, name: attachment.filename },
-      ]
-    }
-  } catch (e) {
-    uploadError.value = e instanceof Error ? e.message : '图片上传失败'
-  } finally {
-    uploading.value = false
-  }
-}
-
-function removePendingImage(id: string): void {
-  pendingImages.value = pendingImages.value.filter((item) => item.id !== id)
-}
-
-async function publish(): Promise<void> {
-  if (!canPublish.value) return
-  try {
-    await moments.publish(
-      draft.value.trim(),
-      pendingImages.value.map((item) => item.id),
-    )
-    draft.value = ''
-    pendingImages.value = []
-  } catch {
-    /* 错误已写进 store.error */
-  }
 }
 
 async function toggleComments(post: Post): Promise<void> {
@@ -142,78 +148,88 @@ onMounted(() => {
 
     <div class="scroll-area flex-1">
       <div class="mx-auto w-full max-w-2xl px-3 py-3 md:px-4 md:py-4">
-        <!-- 发布框 -->
-        <section class="rounded-2xl border border-line bg-surface p-3">
-          <div class="flex gap-3">
+        <!-- 空间头：头图 + 头像 + 签名，签名复用个人资料的 bio -->
+        <section class="overflow-hidden rounded-2xl border border-line bg-surface">
+          <button
+            type="button"
+            class="group relative block h-28 w-full md:h-36"
+            :disabled="bannerUploading"
+            :title="bannerUrl ? '更换头图' : '设置头图'"
+            @click="pickBanner"
+          >
+            <img
+              v-if="bannerUrl"
+              :src="resolveFileUrl(bannerUrl) ?? ''"
+              alt="空间头图"
+              class="h-full w-full object-cover"
+            />
+            <span v-else class="block h-full w-full" :style="bannerStyle" />
+            <span
+              class="absolute inset-0 hidden items-center justify-center gap-1.5 bg-black/45 text-[12.5px] font-medium text-white transition-opacity group-hover:opacity-100 md:flex"
+              :class="bannerUploading ? 'opacity-100' : 'opacity-0'"
+            >
+              <Icon name="camera" :size="15" />
+              {{ bannerUploading ? '上传中…' : '更换头图' }}
+            </span>
+            <span
+              class="absolute right-2 bottom-2 flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-1 text-[11px] text-white md:hidden"
+            >
+              <Icon name="camera" :size="12" />
+              {{ bannerUploading ? '上传中…' : bannerUrl ? '更换头图' : '设置头图' }}
+            </span>
+          </button>
+
+          <div class="flex items-end gap-3 px-4 pb-3">
             <Avatar
               :name="auth.user?.displayName ?? '我'"
               :src="auth.user?.avatarUrl ?? null"
               :seed="auth.user?.id ?? 'me'"
-              :size="38"
+              :size="56"
+              ring
+              class="-mt-7"
             />
-            <textarea
-              v-model="draft"
-              rows="3"
-              maxlength="5000"
-              placeholder="分享点什么…"
-              class="min-h-[72px] w-full resize-none rounded-xl border border-line bg-surface-2 px-3 py-2 text-[13.5px] leading-[1.6] outline-none focus:border-accent"
-            />
-          </div>
-
-          <div v-if="pendingImages.length > 0" class="mt-2 grid grid-cols-3 gap-2 pl-[50px]">
-            <div
-              v-for="image in pendingImages"
-              :key="image.id"
-              class="group relative aspect-square overflow-hidden rounded-lg border border-line"
-            >
-              <img
-                :src="resolveFileUrl(image.url) ?? ''"
-                :alt="image.name"
-                class="h-full w-full object-cover"
-              />
-              <button
-                type="button"
-                class="absolute top-1 right-1 rounded-full bg-black/60 p-1.5 text-white"
-                :class="ui.isMobile ? 'block' : 'hidden group-hover:block'"
-                @click="removePendingImage(image.id)"
-              >
-                <Icon name="close" :size="12" />
-              </button>
+            <div class="min-w-0 pb-1">
+              <p class="truncate text-[14.5px] font-semibold text-text-strong">
+                {{ auth.user?.displayName ?? '我' }}
+              </p>
+              <p class="truncate text-[12px] leading-[1.6] text-muted">
+                {{ auth.user?.bio || '这个人很懒，什么都没有写' }}
+              </p>
             </div>
           </div>
 
-          <div class="mt-2 flex items-center gap-2 pl-[50px]">
-            <input
-              ref="fileInput"
-              type="file"
-              accept="image/*"
-              multiple
-              class="hidden"
-              @change="pickImages"
-            />
-            <button
-              type="button"
-              class="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-muted hover:bg-surface-2 hover:text-text disabled:opacity-50"
-              :disabled="uploading || pendingImages.length >= 9"
-              @click="fileInput?.click()"
-            >
-              <Icon name="image" :size="15" />
-              {{ uploading ? '上传中…' : '图片' }}
-            </button>
-            <span class="text-[11px] text-muted">{{ pendingImages.length }}/9</span>
-            <button
-              type="button"
-              class="ml-auto rounded-lg bg-accent px-3 py-1 text-[12.5px] font-medium text-accent-text disabled:opacity-50"
-              :disabled="!canPublish"
-              @click="publish"
-            >
-              {{ moments.publishing ? '发布中…' : '发布' }}
-            </button>
-          </div>
-
-          <p v-if="uploadError" class="mt-1 pl-[50px] text-[11.5px] text-danger">{{ uploadError }}</p>
-          <p v-if="moments.error" class="mt-1 pl-[50px] text-[11.5px] text-danger">{{ moments.error }}</p>
+          <input
+            ref="bannerInput"
+            type="file"
+            accept="image/*"
+            class="hidden"
+            @change="onBannerChange"
+          />
+          <p v-if="bannerError" class="px-4 pb-2 text-[11.5px] text-danger">{{ bannerError }}</p>
         </section>
+
+        <!-- 发布框：桌面端常驻内嵌；手机端紧凑条点开弹窗发帖 -->
+        <MomentsComposer v-if="!ui.isMobile" class="mt-3" />
+
+        <button
+          v-else
+          type="button"
+          class="mt-3 flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left active:bg-surface-2"
+          @click="composerOpen = true"
+        >
+          <Avatar
+            :name="auth.user?.displayName ?? '我'"
+            :src="auth.user?.avatarUrl ?? null"
+            :seed="auth.user?.id ?? 'me'"
+            :size="32"
+          />
+          <span class="min-w-0 flex-1 truncate text-[12.5px] text-muted">分享点什么…</span>
+          <Icon name="image" :size="16" class="text-muted" />
+        </button>
+
+        <Dialog v-model:open="composerOpen" title="发动态" width="md">
+          <MomentsComposer bare @published="composerOpen = false" />
+        </Dialog>
 
         <!-- 信息流 -->
         <div

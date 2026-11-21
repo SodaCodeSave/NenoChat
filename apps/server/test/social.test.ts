@@ -15,6 +15,7 @@ process.env.SECRET_KEY = 'test-aes-secret-at-least-16-chars'
 
 let app: FastifyInstance
 let alice = ''
+let aliceId = ''
 let bob = ''
 let bobId = ''
 let conversationId = ''
@@ -74,10 +75,11 @@ beforeAll(async () => {
   app = await buildApp()
   await app.ready()
 
-  const a = await api<{ tokens: { accessToken: string } }>('POST', '/auth/register', {
+  const a = await api<{ user: { id: string }; tokens: { accessToken: string } }>('POST', '/auth/register', {
     body: { username: 'alice_social', password: 'pass12345', displayName: '爱丽丝', device: device('dev-a') },
   })
   alice = a.json.tokens.accessToken
+  aliceId = a.json.user.id
 
   const b = await api<{ user: { id: string }; tokens: { accessToken: string } }>('POST', '/auth/register', {
     body: { username: 'bob_social', password: 'pass12345', displayName: '鲍勃', device: device('dev-b') },
@@ -181,6 +183,50 @@ describe('动态空间', () => {
 
     const feed = await api<{ posts: Array<{ id: string }> }>('GET', '/posts', { token: alice })
     expect(feed.json.posts.some((p) => p.id === postId)).toBe(false)
+  })
+})
+
+describe('空间头图', () => {
+  it('PATCH /users/me 设置 bannerUrl 后本人与别人都能回读', async () => {
+    const patched = await api<{ user: { bannerUrl: string | null } }>('PATCH', '/users/me', {
+      token: alice,
+      body: { bannerUrl: '/files/backgrounds/aa/bb/cover.png' },
+    })
+    expect(patched.status).toBe(200)
+    expect(patched.json.user.bannerUrl).toBe('/files/backgrounds/aa/bb/cover.png')
+
+    const fetched = await api<{ user: { bannerUrl: string | null } }>('GET', `/users/${aliceId}`, {
+      token: bob,
+    })
+    expect(fetched.json.user.bannerUrl).toBe('/files/backgrounds/aa/bb/cover.png')
+  })
+
+  it('bannerUrl 置 null 即恢复未设置状态', async () => {
+    const cleared = await api<{ user: { bannerUrl: string | null } }>('PATCH', '/users/me', {
+      token: alice,
+      body: { bannerUrl: null },
+    })
+    expect(cleared.json.user.bannerUrl).toBeNull()
+  })
+
+  it('超长 bannerUrl 被拒绝', async () => {
+    const res = await api('PATCH', '/users/me', {
+      token: alice,
+      body: { bannerUrl: `/files/${'x'.repeat(600)}.png` },
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('设置头图不影响昵称与签名', async () => {
+    const patched = await api<{ user: { displayName: string; bio: string | null; bannerUrl: string | null } }>(
+      'PATCH',
+      '/users/me',
+      { token: alice, body: { bannerUrl: '/files/backgrounds/cc/dd/wide.png' } },
+    )
+    expect(patched.json.user.displayName).toBe('爱丽丝')
+    expect(patched.json.user.bannerUrl).toBe('/files/backgrounds/cc/dd/wide.png')
+    // 测试间互不污染：结尾清掉
+    await api('PATCH', '/users/me', { token: alice, body: { bannerUrl: null } })
   })
 })
 

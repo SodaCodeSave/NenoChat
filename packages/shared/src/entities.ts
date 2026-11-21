@@ -22,6 +22,8 @@ export interface PublicUser {
   displayName: string
   avatarUrl?: string | null
   bio?: string | null
+  /** 动态空间头图，未设置时前端渲染渐变占位 */
+  bannerUrl?: string | null
 }
 
 export interface User extends PublicUser {

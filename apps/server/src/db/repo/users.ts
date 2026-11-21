@@ -9,6 +9,7 @@ export interface UserRow {
   display_name: string
   password_hash: string
   avatar_url: string | null
+  banner_url: string | null
   bio: string | null
   status: string
   is_admin: number
@@ -26,6 +27,7 @@ export function mapUser(row: UserRow): User {
     username: row.username,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
+    bannerUrl: row.banner_url,
     bio: row.bio,
     status: row.status === 'disabled' ? 'disabled' : 'active',
     isAdmin: row.is_admin === 1,
@@ -41,6 +43,7 @@ export function mapPublicUser(row: UserRow): PublicUser {
     username: row.username,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
+    bannerUrl: row.banner_url,
     bio: row.bio,
   }
 }
@@ -95,6 +98,7 @@ export async function create(db: DB, input: CreateUserInput): Promise<UserRow> {
 export interface UpdateProfileInput {
   displayName?: string
   avatarUrl?: string | null
+  bannerUrl?: string | null
   bio?: string | null
 }
 
@@ -104,12 +108,13 @@ export async function updateProfile(db: DB, id: string, patch: UpdateProfileInpu
 
   const row = await one<UserRow>(
     db,
-    `UPDATE users SET display_name = ?, avatar_url = ?, bio = ?, updated_at = ?, updated_by_device = ?
+    `UPDATE users SET display_name = ?, avatar_url = ?, banner_url = ?, bio = ?, updated_at = ?, updated_by_device = ?
      WHERE id = ?
      RETURNING *`,
     [
       patch.displayName ?? current.display_name,
       patch.avatarUrl === undefined ? current.avatar_url : patch.avatarUrl,
+      patch.bannerUrl === undefined ? current.banner_url : patch.bannerUrl,
       patch.bio === undefined ? current.bio : patch.bio,
       now(),
       deviceId ?? null,
