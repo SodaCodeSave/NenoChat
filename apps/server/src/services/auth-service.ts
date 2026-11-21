@@ -17,8 +17,8 @@ import * as tokensRepo from '../db/repo/refresh-tokens'
 import { ensureNotificationSettings, ensureUserSettings } from '../db/repo/settings'
 import { err } from '../util/errors'
 import { hashPassword, randomToken, sha256, verifyPassword } from '../util/crypto'
-import { env } from '../env'
 import { now } from '../util/clock'
+import { getRegistrationMode } from './server-settings-service'
 
 /** 只依赖 @fastify/jwt 的 sign 能力，便于测试时替换 */
 export interface JwtSigner {
@@ -68,7 +68,8 @@ async function issueTokens(
 }
 
 async function assertRegistrationAllowed(db: DB, inviteCode?: string): Promise<void> {
-  const mode = env.REGISTRATION_MODE
+  // 注册模式支持管理面板运行时修改：DB 值优先，没改过则回落 env
+  const mode = await getRegistrationMode(db)
   if (mode === 'closed') throw err.forbidden('本服务器已关闭注册')
 
   if (mode === 'invite') {
