@@ -6,6 +6,7 @@ import Dialog from '@/components/ui/form/Dialog.vue'
 import MessageItem from './MessageItem.vue'
 import { dayKey, dayLabel, useMessageDisplay } from '@/composables/message-display'
 import { cachedObjectUrl, ensureCached } from '@/platform/file-cache'
+import { resolveImageDataUrl } from '@/platform/image-data-url'
 import { savePngImage } from '@/platform/save-image'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -152,6 +153,19 @@ function waitForImages(root: HTMLElement): Promise<void> {
   ).then(() => undefined)
 }
 
+/** fetchFn 的转换缓存：同一地址只转换一次 */
+const dataUrlCache = new Map<string, string>()
+
+/**
+ * 交给 modern-screenshot 的图片解析钩子：光栅化所需的每个图片地址
+ * 先转成 data URL，全程零网络请求（blob: 地址直接读本地缓存），
+ * 绕开跨域 CORS、陈旧 HTTP 缓存与 blob 失效三类问题；
+ * 解析失败返回 false 交给默认管线降级。
+ */
+async function toDataUrl(url: string): Promise<string | false> {
+  return (await resolveImageDataUrl(url, dataUrlCache)) ?? false
+}
+
 async function generate(): Promise<void> {
   phase.value = 'generating'
   errorText.value = null
@@ -170,7 +184,7 @@ async function generate(): Promise<void> {
     await new Promise((resolve) => window.setTimeout(resolve, 220))
     await nextFrame()
 
-    const result = await domToBlob(container.value, { scale: 2 })
+    const result = await domToBlob(container.value, { scale: 2, fetchFn: toDataUrl })
     if (!result) throw new Error('截图生成失败')
     blob = result
     previewUrl.value = URL.createObjectURL(result)

@@ -284,6 +284,8 @@ export function ensureCached(rawUrl: string, kind: CachedFileKind): Promise<void
     if (!absolute) return
 
     try {
+      // 不带 cache 选项：与页面 <img> 的缓存行为保持一致，
+      // 强刷（reload）会使旧缓存条目失效，把还能显示的图片一起弄没
       const response = await fetch(absolute)
       if (!response.ok) return
       const blob = await response.blob()
