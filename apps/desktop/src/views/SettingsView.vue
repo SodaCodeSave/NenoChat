@@ -17,6 +17,7 @@ import ConnectorSettings from '@/components/settings/ConnectorSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
 import StorageSettings from '@/components/settings/StorageSettings.vue'
+import { CLIENT_VERSION } from '@/version'
 import { useAuthStore } from '@/stores/auth'
 import { useServersStore } from '@/stores/servers'
 import { useUiStore } from '@/stores/ui'
@@ -402,7 +403,7 @@ onBeforeUnmount(() => {
       </nav>
 
       <p class="border-t border-line px-4 py-2.5 text-[10.5px] text-muted">
-        NenoChat 0.1.0 · 设置即时保存
+        NenoChat {{ CLIENT_VERSION }} · 设置即时保存
       </p>
     </aside>
 
