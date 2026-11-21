@@ -4,7 +4,8 @@ import { blobToDataUrl, resolveImageDataUrl } from '@/platform/image-data-url'
 /**
  * 截图光栅化依赖把图片转成 data URL。回归重点：
  * 失败必须返回 null 而不是抛错（交还默认管线降级）、同 URL 只 fetch 一次、
- * fetch 不带 cache 选项（与页面 <img> 的缓存行为一致，不产生缓存失效副作用）。
+ * fetch 用 cache: 'no-store'（绕过无 CORS 头的陈旧缓存条目，
+ * 且旁路缓存写入，不把页面 img 依赖的旧条目作废）。
  */
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }))
@@ -42,7 +43,7 @@ describe('image-data-url', () => {
     delete (globalThis as Record<string, unknown>).__fakeReadAsDataURL
   })
 
-  it('fetch 成功时返回 data URL，且不带 cache 选项（与页面 img 行为一致）', async () => {
+  it('fetch 成功时返回 data URL，且请求带 cache: no-store', async () => {
     ;(globalThis as Record<string, unknown>).__fakeReadAsDataURL = () => 'data:image/png;base64,AAAA'
     fetchMock.mockResolvedValue(okResponse([1, 2, 3]))
 
@@ -50,7 +51,7 @@ describe('image-data-url', () => {
     const result = await resolveImageDataUrl('http://s/files/a.png', cache)
 
     expect(result).toBe('data:image/png;base64,AAAA')
-    expect(fetchMock).toHaveBeenCalledWith('http://s/files/a.png')
+    expect(fetchMock).toHaveBeenCalledWith('http://s/files/a.png', { cache: 'no-store' })
     expect(cache.get('http://s/files/a.png')).toBe('data:image/png;base64,AAAA')
   })
 

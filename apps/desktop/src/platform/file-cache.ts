@@ -284,9 +284,9 @@ export function ensureCached(rawUrl: string, kind: CachedFileKind): Promise<void
     if (!absolute) return
 
     try {
-      // 不带 cache 选项：与页面 <img> 的缓存行为保持一致，
-      // 强刷（reload）会使旧缓存条目失效，把还能显示的图片一起弄没
-      const response = await fetch(absolute)
+      // cache: 'no-store' 绕过可能残留的无 CORS 头陈旧缓存条目，同时
+      // 旁路缓存写入——不影响页面 <img> 依赖的现有缓存条目
+      const response = await fetch(absolute, { cache: 'no-store' })
       if (!response.ok) return
       const blob = await response.blob()
       if (blob.size === 0 || blob.size > MAX_SINGLE_BYTES) return

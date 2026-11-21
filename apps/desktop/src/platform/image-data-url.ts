@@ -3,10 +3,10 @@
  *
  * 截图光栅化（modern-screenshot）要求把图片内嵌为 data URL，但它的默认
  * 管线会踩两类坑：跨域 CORS 拦截、以及 blob URL 序列化进 SVG 后失效。
- * 这里统一先转 data URL；fetch 不带 cache 选项——必须与页面 <img> 的
- * 缓存行为一致：页面能显示的图截图就能拿到，页面拿不到的图不做额外
- * 破坏（尤其不能用 reload 强刷，那会使旧缓存条目失效，把页面上原本
- * 还能靠缓存显示的图片一起弄没）。
+ * 这里统一先转 data URL。fetch 用 cache: 'no-store'：
+ * - 绕过 HTTP 缓存里可能残留的无 CORS 头陈旧条目（默认模式会一直命中失败）；
+ * - 完全旁路缓存写入，不会像 reload 那样把旧条目作废——页面 <img> 靠
+ *   旧缓存条目显示的图片不会被这次请求弄没。
  */
 
 export function blobToDataUrl(blob: Blob): Promise<string> {
@@ -33,7 +33,7 @@ export async function resolveImageDataUrl(
   const cached = cache.get(url)
   if (cached) return cached
   try {
-    const response = await fetch(url)
+    const response = await fetch(url, { cache: 'no-store' })
     if (!response.ok) return null
     const blob = await response.blob()
     if (blob.size === 0) return null
