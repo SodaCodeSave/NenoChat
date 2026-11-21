@@ -49,8 +49,6 @@ interface SettingsSection {
   icon: IconName
   description: string
   anchors: SettingsAnchor[]
-  /** 分区组件自带标题时，外壳不再重复渲染 */
-  selfHeader?: boolean
 }
 
 const route = useRoute()
@@ -89,7 +87,6 @@ const allSections: SettingsSection[] = [
     icon: 'bell',
     description: '系统通知、声音与免打扰',
     anchors: [],
-    selfHeader: true,
   },
   {
     key: 'server',
@@ -531,7 +528,7 @@ onBeforeUnmount(() => {
           class="mx-auto w-full max-w-[880px] px-4 pb-10 md:px-8"
           :class="ui.isMobile ? 'pt-4' : 'pt-6'"
         >
-          <div v-if="!currentMeta.selfHeader" class="mb-4">
+          <div class="mb-4">
             <h2 class="text-[19px] font-semibold tracking-tight text-text-strong">
               {{ currentMeta.label }}
             </h2>
