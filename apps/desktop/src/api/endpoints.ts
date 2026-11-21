@@ -10,6 +10,7 @@ import {
   type ServerInfo,
   type User,
   type UserSettings,
+  type UserSettingsPatch,
 } from '@nenochat/shared'
 import { http } from './http'
 
@@ -170,6 +171,11 @@ export const syncApi = {
 export const notificationSettingsApi = {
   update: (patch: Partial<NotificationSettings>) =>
     http.patch<{ notificationSettings: NotificationSettings }>(p('/settings/notifications'), patch),
+}
+
+export const settingsApi = {
+  update: (patch: UserSettingsPatch) =>
+    http.patch<{ settings: UserSettings }>(p('/settings'), patch),
 }
 
 export const userApi = {

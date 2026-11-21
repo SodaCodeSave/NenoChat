@@ -9,6 +9,7 @@ import { localServerInfo } from '@/platform/local-server'
 import { ensureLocalNetworkAccess } from '@/platform/local-network'
 import { CLIENT_VERSION } from '@/version'
 import { useServersStore } from './servers'
+import { useUiStore } from './ui'
 
 export type AuthStatus = 'idle' | 'restoring' | 'authenticated' | 'anonymous'
 /** 自动登录恢复失败的原因：auth 表示凭证失效需重登，其余可重试 */
@@ -235,7 +236,11 @@ export const useAuthStore = defineStore('auth', () => {
   async function loadProfile(): Promise<void> {
     const me = await authApi.me()
     if (me.user) user.value = me.user
-    if (me.settings) settings.value = me.settings
+    if (me.settings) {
+      settings.value = me.settings
+      // 聊天背景跟账号走：登录后以服务端值为准覆盖本地镜像
+      useUiStore().applyServerBackground(me.settings)
+    }
     if (me.notificationSettings) notificationSettings.value = me.notificationSettings
   }
 
@@ -419,6 +424,8 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken = ''
     settings.value = null
     notificationSettings.value = null
+    // 背景属于账号，登出/会话失效时一并清掉，避免下一账号首屏串台
+    useUiStore().clearServerBackground()
     setAccessToken(null)
     status.value = 'anonymous'
     hasStoredCredential.value = false

@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { ThemeMode } from '@nenochat/shared'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Segmented from '@/components/ui/form/Segmented.vue'
 import Switch from '@/components/ui/form/Switch.vue'
 import { useUiStore, type LinkDisplay, type MessageStyle } from '@/stores/ui'
+import { uploadFile } from '@/api/files'
+import { settingsApi } from '@/api/endpoints'
+import { resolveFileUrl } from '@/api/http'
+import { extractDominantColor } from '@/platform/bg-accent'
 
 const ui = useUiStore()
 
@@ -21,6 +26,75 @@ const themeOptions = [
   { value: ThemeMode.Dark, label: '深色', icon: 'moon' as const },
   { value: ThemeMode.System, label: '跟随系统', icon: 'settings' as const },
 ]
+
+const input = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const progress = ref(0)
+const error = ref<string | null>(null)
+/** 刚选好文件还没传完时先本地预览，传完换回服务端地址 */
+const localPreview = ref<string | null>(null)
+
+const bgPreviewUrl = computed(() => localPreview.value ?? resolveFileUrl(ui.chatBgUrl))
+const bgLabel = computed(() => (uploading.value ? `上传中 ${progress.value}%` : '上传背景'))
+
+function pick(): void {
+  if (uploading.value) return
+  input.value?.click()
+}
+
+async function onChange(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  // 允许再次选同一个文件
+  target.value = ''
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    error.value = '请选择图片文件'
+    return
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    error.value = '图片不能超过 10MB'
+    return
+  }
+
+  error.value = null
+  uploading.value = true
+  progress.value = 0
+  // 单独跟踪对象 URL：成功路径上预览已切回服务端地址，finally 里也要能 revoke
+  const localObjectUrl = URL.createObjectURL(file)
+  localPreview.value = localObjectUrl
+
+  try {
+    const attachment = await uploadFile(file, {
+      kind: 'background',
+      onProgress: (percent) => {
+        progress.value = percent
+      },
+    })
+    // 主色只在上传设备提取一次，随 user_settings 同步，其它设备启动即用
+    const accent = await extractDominantColor(file)
+    const { settings } = await settingsApi.update({ chatBgUrl: attachment.url, chatBgAccent: accent })
+    ui.setChatBackground(settings.chatBgUrl, settings.chatBgAccent)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '上传失败'
+  } finally {
+    URL.revokeObjectURL(localObjectUrl)
+    localPreview.value = null
+    uploading.value = false
+  }
+}
+
+async function removeBackground(): Promise<void> {
+  if (uploading.value) return
+  error.value = null
+  try {
+    await settingsApi.update({ chatBgUrl: null, chatBgAccent: null })
+    ui.setChatBackground(null, null)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '移除失败'
+  }
+}
 </script>
 
 <template>
@@ -36,7 +110,11 @@ const themeOptions = [
         />
       </SettingRow>
 
-      <SettingRow label="主题色" description="按钮、链接与选中态会使用这个颜色" stacked>
+      <SettingRow
+        label="主题色"
+        description="按钮、链接与选中态会使用这个颜色；设置聊天背景并开启「主题色随背景」后，会改用从背景提取的颜色"
+        stacked
+      >
         <div class="flex flex-wrap items-center gap-2.5">
           <button
             v-for="accent in accents"
@@ -67,6 +145,55 @@ const themeOptions = [
             {{ accents.find((item) => item.key === ui.accent)?.label ?? '自定义' }}
           </span>
         </div>
+      </SettingRow>
+    </SettingsCard>
+
+    <SettingsCard id="background" title="聊天背景" description="背景只在聊天消息区显示，仅自己可见" icon="image">
+      <SettingRow label="背景图片" description="支持 PNG / JPEG / WEBP / GIF，最大 10MB" stacked>
+        <div class="flex items-center gap-3">
+          <div class="h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-line bg-surface-2">
+            <img
+              v-if="bgPreviewUrl"
+              :src="bgPreviewUrl"
+              class="h-full w-full object-cover"
+              alt="聊天背景预览"
+            />
+            <div v-else class="grid h-full place-items-center text-[11px] text-muted">未设置</div>
+          </div>
+          <div class="min-w-0 space-y-1.5">
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="rounded-lg border border-line px-2.5 py-1 text-[12px] text-text hover:bg-surface-3 disabled:opacity-50"
+                :disabled="uploading"
+                @click="pick"
+              >
+                {{ bgLabel }}
+              </button>
+              <button
+                v-if="ui.chatBgUrl"
+                type="button"
+                class="rounded-lg border border-line px-2.5 py-1 text-[12px] text-danger hover:bg-danger/10 disabled:opacity-50"
+                :disabled="uploading"
+                @click="removeBackground"
+              >
+                移除
+              </button>
+            </div>
+            <p v-if="error" class="text-[11.5px] text-danger">{{ error }}</p>
+          </div>
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        label="主题色随背景"
+        description="开启后自动从背景图提取主题色；关闭则使用上面手动选择的主题色"
+      >
+        <Switch
+          :model-value="ui.accentFollowBg"
+          aria-label="主题色随背景"
+          @update:model-value="ui.setAccentFollowBg"
+        />
       </SettingRow>
     </SettingsCard>
 
@@ -128,5 +255,7 @@ const themeOptions = [
         />
       </SettingRow>
     </SettingsCard>
+
+    <input ref="input" type="file" accept="image/*" class="hidden" @change="onChange" />
   </div>
 </template>

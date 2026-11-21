@@ -10,6 +10,8 @@ import { describeUsage } from './debug-labels'
 import { useAiStore } from '@/stores/ai'
 import { useAuthStore } from '@/stores/auth'
 import { useDebugStore } from '@/stores/debug'
+import { useUiStore } from '@/stores/ui'
+import { resolveFileUrl } from '@/api/http'
 import { collapseAccidentalDuplicates } from '@/composables/message-merge'
 
 const props = defineProps<{
@@ -49,6 +51,22 @@ const scroller = ref<HTMLElement | null>(null)
 const auth = useAuthStore()
 const ai = useAiStore()
 const debug = useDebugStore()
+const ui = useUiStore()
+
+/**
+ * 聊天背景：不动 DOM，直接在滚动容器上写双层背景——上层薄纱压住花图保证气泡外可读，
+ * 下层背景图铺满。默认 attachment=scroll 让壁纸钉在可视区（微信式），不随消息滚动拉伸。
+ */
+const chatBgStyle = computed(() => {
+  const absolute = resolveFileUrl(ui.chatBgUrl)
+  if (!absolute) return undefined
+  const scrim = 'color-mix(in srgb, var(--surface) 45%, transparent)'
+  return {
+    backgroundImage: `linear-gradient(${scrim}, ${scrim}), url("${absolute}")`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  }
+})
 
 /** 发送者名称/头像/seed 与引用摘要：与聊天截图共用同一套解析 */
 const { senderName, senderAvatar, senderSeed, replyViewOf } = useMessageDisplay(
@@ -500,7 +518,12 @@ defineExpose({ scrollToBottom })
 </script>
 
 <template>
-  <div ref="scroller" class="scroll-area relative flex-1 touch-pan-y px-0 py-2" @scroll.passive="onScroll">
+  <div
+    ref="scroller"
+    class="scroll-area relative flex-1 touch-pan-y px-0 py-2"
+    :style="chatBgStyle"
+    @scroll.passive="onScroll"
+  >
     <div
       v-if="hasMoreOlder"
       class="mx-auto mb-2 w-fit rounded-full bg-surface-2 px-3 py-1 text-[11px] text-muted"

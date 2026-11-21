@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { ThemeMode, type UserSettings } from '@nenochat/shared'
 import { useMediaQuery } from '@vueuse/core'
+import { accentVariants, normalizeHex } from '@/platform/bg-accent'
 
 const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
@@ -11,6 +12,17 @@ const SEND_KEY_KEY = 'nenochat.sendKey'
 const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 const CONNECTOR_HINTS_KEY = 'nenochat.showConnectorHints'
+const CHAT_BG_URL_KEY = 'nenochat.chatBgUrl'
+const CHAT_BG_ACCENT_KEY = 'nenochat.chatBgAccent'
+const ACCENT_FOLLOW_BG_KEY = 'nenochat.accentFollowBg'
+
+/** data-accent='custom' 时派生变量写进 <html> 内联 style，CSS 里按深浅模式取用 */
+const CUSTOM_ACCENT_VARS = [
+  '--accent-custom',
+  '--accent-soft-custom',
+  '--accent-custom-dark',
+  '--accent-soft-custom-dark',
+] as const
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
 export type MobileTab = 'messages' | 'contacts' | 'moments' | 'me'
@@ -50,6 +62,16 @@ export const useUiStore = defineStore('ui', () => {
   /** 是否在消息里显示连接器动作提示（"已联网搜索"等小字），纯本地偏好 */
   const showConnectorHints = ref(localStorage.getItem(CONNECTOR_HINTS_KEY) !== 'false')
 
+  /**
+   * 聊天背景图（服务端 /files/... 相对 URL）与随图提取的主色。
+   * 真值在服务端 user_settings，localStorage 只做镜像保证重开首屏不闪；
+   * 登录后由 applyServerBackground 以服务端值为准覆盖。
+   */
+  const chatBgUrl = ref<string | null>(localStorage.getItem(CHAT_BG_URL_KEY) || null)
+  const chatBgAccent = ref<string | null>(normalizeHex(localStorage.getItem(CHAT_BG_ACCENT_KEY) ?? ''))
+  /** 主题色是否跟随背景图；关闭后回退到手动选择的主题色 */
+  const accentFollowBg = ref(localStorage.getItem(ACCENT_FOLLOW_BG_KEY) !== 'false')
+
   const navSection = ref<NavSection>('messages')
   const mobileTab = ref<MobileTab>('messages')
   const rightPanel = ref<RightPanel>('members')
@@ -67,7 +89,20 @@ export const useUiStore = defineStore('ui', () => {
   function applyTheme(): void {
     const root = document.documentElement
     root.classList.toggle('dark', resolvedTheme.value === 'dark')
-    root.dataset.accent = accent.value
+    // 主题色跟随背景：切到 custom 档，把提取主色的四档派生色写进内联变量
+    //（浅色读 --accent-custom*，深色读 --accent-custom-dark*，见 index.css）
+    const variants =
+      accentFollowBg.value && chatBgAccent.value ? accentVariants(chatBgAccent.value) : null
+    if (variants) {
+      root.dataset.accent = 'custom'
+      root.style.setProperty('--accent-custom', variants.light)
+      root.style.setProperty('--accent-soft-custom', variants.softLight)
+      root.style.setProperty('--accent-custom-dark', variants.dark)
+      root.style.setProperty('--accent-soft-custom-dark', variants.softDark)
+    } else {
+      root.dataset.accent = accent.value
+      for (const name of CUSTOM_ACCENT_VARS) root.style.removeProperty(name)
+    }
     root.dataset.reduceMotion = reduceMotion.value ? 'true' : 'false'
     root.style.setProperty('--font-scale', String(fontScale.value))
   }
@@ -119,6 +154,33 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(CONNECTOR_HINTS_KEY, String(next))
   }
 
+  /** 设置/清除聊天背景（null 表示清除），同步镜像到 localStorage 供下次启动免闪 */
+  function setChatBackground(url: string | null, accentHex: string | null): void {
+    chatBgUrl.value = url
+    chatBgAccent.value = accentHex ? normalizeHex(accentHex) : null
+    if (url) localStorage.setItem(CHAT_BG_URL_KEY, url)
+    else localStorage.removeItem(CHAT_BG_URL_KEY)
+    if (chatBgAccent.value) localStorage.setItem(CHAT_BG_ACCENT_KEY, chatBgAccent.value)
+    else localStorage.removeItem(CHAT_BG_ACCENT_KEY)
+    applyTheme()
+  }
+
+  function setAccentFollowBg(next: boolean): void {
+    accentFollowBg.value = next
+    localStorage.setItem(ACCENT_FOLLOW_BG_KEY, String(next))
+    applyTheme()
+  }
+
+  /** 服务端下发的背景设置覆盖本地镜像（只碰背景字段，theme/accent 仍是纯本地偏好） */
+  function applyServerBackground(settings: Pick<UserSettings, 'chatBgUrl' | 'chatBgAccent'>): void {
+    setChatBackground(settings.chatBgUrl, settings.chatBgAccent)
+  }
+
+  /** 登出/切服务器时清掉上一账号的背景，避免下一账号首屏串台 */
+  function clearServerBackground(): void {
+    setChatBackground(null, null)
+  }
+
   function toggleConversationList(): void {
     setConversationListCollapsed(!conversationListCollapsed.value)
   }
@@ -153,6 +215,9 @@ export const useUiStore = defineStore('ui', () => {
     linkDisplay,
     conversationListCollapsed,
     showConnectorHints,
+    chatBgUrl,
+    chatBgAccent,
+    accentFollowBg,
     navSection,
     mobileTab,
     rightPanel,
@@ -173,6 +238,10 @@ export const useUiStore = defineStore('ui', () => {
     setConversationListCollapsed,
     toggleConversationList,
     setShowConnectorHints,
+    setChatBackground,
+    setAccentFollowBg,
+    applyServerBackground,
+    clearServerBackground,
     applyServerSettings,
   }
 })

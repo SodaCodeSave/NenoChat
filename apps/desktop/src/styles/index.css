@@ -132,6 +132,18 @@
   --accent-soft: #3a2130;
   --bubble-own: #3a2130;
 }
+/* 背景图提取的主题色：useTheme 在跟随背景时把 data-accent 写成 custom，
+ * 四个变量由 ui store 从提取主色派生后写进 <html> 内联 style（platform/bg-accent.ts） */
+:root[data-accent='custom'] {
+  --accent: var(--accent-custom, #2f6bff);
+  --accent-soft: var(--accent-soft-custom, #e8eeff);
+  --bubble-own: var(--accent-soft-custom, #e8eeff);
+}
+.dark[data-accent='custom'] {
+  --accent: var(--accent-custom-dark, #5865f2);
+  --accent-soft: var(--accent-soft-custom-dark, #2f3350);
+  --bubble-own: var(--accent-soft-custom-dark, #2f3350);
+}
 
 html,
 body,

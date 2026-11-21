@@ -2,7 +2,7 @@ import { API_PREFIX, type Attachment } from '@nenochat/shared'
 import { getAccessToken, getBaseUrl, getDeviceId } from './http'
 
 export interface UploadOptions {
-  kind?: 'avatar' | 'file' | 'sticker'
+  kind?: 'avatar' | 'file' | 'sticker' | 'background'
   onProgress?: (percent: number) => void
   signal?: AbortSignal
 }
