@@ -5,7 +5,7 @@ import { domToBlob } from 'modern-screenshot'
 import Dialog from '@/components/ui/form/Dialog.vue'
 import MessageItem from './MessageItem.vue'
 import { dayKey, dayLabel, useMessageDisplay } from '@/composables/message-display'
-import { ensureCached } from '@/platform/file-cache'
+import { cachedObjectUrl, ensureCached } from '@/platform/file-cache'
 import { savePngImage } from '@/platform/save-image'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -105,6 +105,38 @@ async function prewarmAttachments(): Promise<void> {
   await Promise.all(tasks)
 }
 
+/**
+ * 头像的展示地址。Avatar 组件不走本地缓存（始终是跨域网络地址），
+ * 截图光栅化时跨域 fetch 可能被拦导致头像空白，这里先把头像预热成
+ * 本地缓存 blob URL 再渲染；预热失败时回退原地址。
+ */
+const avatarUrls = ref<Record<string, string>>({})
+
+function displayAvatar(message: Message): string | null {
+  const raw = display.senderAvatar(message)
+  if (!raw) return null
+  return avatarUrls.value[raw] ?? raw
+}
+
+async function prewarmAvatars(): Promise<void> {
+  const raws = new Set<string>()
+  for (const message of props.messages) {
+    const raw = display.senderAvatar(message)
+    if (raw && !/^(data:|blob:)/i.test(raw)) raws.add(raw)
+  }
+  await Promise.all(
+    [...raws].map(async (raw) => {
+      try {
+        await ensureCached(raw, 'avatar')
+        const cached = await cachedObjectUrl(raw)
+        if (cached) avatarUrls.value = { ...avatarUrls.value, [raw]: cached }
+      } catch {
+        /* 预热失败回退网络地址，尽力而为 */
+      }
+    }),
+  )
+}
+
 /** 等容器内所有图片加载完成（或失败），再合成才能保证图片都在图里 */
 function waitForImages(root: HTMLElement): Promise<void> {
   const images = [...root.querySelectorAll('img')]
@@ -129,11 +161,13 @@ async function generate(): Promise<void> {
   generatedAt.value = formatStamp(Date.now())
 
   try {
-    await prewarmAttachments()
+    await Promise.all([prewarmAttachments(), prewarmAvatars()])
     await nextTick()
     await nextFrame()
     if (!container.value) throw new Error('截图容器未就绪')
     await waitForImages(container.value)
+    // img-fade 的淡入过渡有 160ms：等图片加载完再补一拍，避免拍到半透明
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
     await nextFrame()
 
     const result = await domToBlob(container.value, { scale: 2 })
@@ -209,7 +243,7 @@ async function save(): Promise<void> {
             v-else
             :message="row.message"
             :sender-name="display.senderName(row.message)"
-            :sender-avatar="display.senderAvatar(row.message)"
+            :sender-avatar="displayAvatar(row.message)"
             :sender-seed="display.senderSeed(row.message)"
             :is-own="row.message.senderId === auth.user?.id"
             :show-header="row.showHeader"
@@ -219,7 +253,8 @@ async function save(): Promise<void> {
 
       <footer class="mt-3 flex items-end justify-between border-t border-line pt-3">
         <p class="text-[11px] text-muted">生成于 {{ generatedAt }}</p>
-        <span class="h-3.5 text-accent [&>svg]:h-full [&>svg]:w-auto" v-html="wordmark" />
+        <!-- 品牌水印固定黑色，不随主题强调色变化 -->
+        <span class="h-3.5 text-black [&>svg]:h-full [&>svg]:w-auto" v-html="wordmark" />
       </footer>
     </div>
   </div>
