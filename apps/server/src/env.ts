@@ -26,6 +26,8 @@ const EnvSchema = z.object({
   LOCAL_AUTH_TOKEN: z.string().default(''),
   /** 一体化版是否对外开放到局域网（手机扫码接入），由客户端开关决定 */
   LAN_ENABLED: z.enum(['true', 'false']).default('false'),
+  /** 管理面板静态资源目录；缺省用包内 public/admin，目录不存在则不挂载 */
+  ADMIN_DIST_DIR: z.string().optional(),
 })
 
 export type Env = z.infer<typeof EnvSchema>

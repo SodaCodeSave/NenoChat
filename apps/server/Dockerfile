@@ -15,13 +15,18 @@ RUN corepack enable && corepack prepare pnpm@12 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/server/package.json ./apps/server/
+COPY apps/admin/package.json ./apps/admin/
 
-RUN pnpm install --filter @nenochat/server... --frozen-lockfile
+RUN pnpm install --filter @nenochat/server... --filter @nenochat/admin... --frozen-lockfile
 
 # 再复制源码与版本解析脚本（服务端启动时据此读取版本）
 COPY scripts ./scripts
 COPY packages/shared ./packages/shared
 COPY apps/server ./apps/server
+COPY apps/admin ./apps/admin
+
+# 管理面板构建：产物直接落到 apps/server/public/admin，服务端启动时发现即挂载
+RUN pnpm --filter @nenochat/admin build
 
 # 运行阶段：保留编译期原生模块
 FROM ${NODE_IMAGE} AS runner

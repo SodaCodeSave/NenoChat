@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import multipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
 import { API_PREFIX, MAX_UPLOAD_FILE_BYTES } from '@nenochat/shared'
@@ -88,6 +89,30 @@ export async function buildApp(): Promise<FastifyInstance> {
       reply.header('Cross-Origin-Resource-Policy', 'cross-origin')
     },
   })
+
+  // 管理面板（apps/admin 构建产物）。目录不存在就不挂载——只跑 API 的部署
+  // 不受影响；hash 路由意味着只需要正确送达 index.html，无需 SPA fallback。
+  const adminRoot = env.ADMIN_DIST_DIR
+    ? path.resolve(env.ADMIN_DIST_DIR)
+    : path.resolve(fileURLToPath(new URL('../public/admin', import.meta.url)))
+  if (fs.existsSync(path.join(adminRoot, 'index.html'))) {
+    await app.register(fastifyStatic, {
+      root: adminRoot,
+      prefix: '/admin/',
+      decorateReply: false,
+      setHeaders(reply, filePath) {
+        // 入口 HTML 不能缓存，否则发版后浏览器拿旧壳；带内容哈希的 assets 随便缓存
+        if (filePath.endsWith('.html')) {
+          reply.header('Cache-Control', 'no-cache')
+        } else {
+          reply.header('Cache-Control', 'public, max-age=31536000, immutable')
+        }
+      },
+    })
+    app.get('/admin', (_request, reply) => {
+      return reply.redirect('/admin/')
+    })
+  }
 
   await app.register(healthRoutes)
   await app.register(

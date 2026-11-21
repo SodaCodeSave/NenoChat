@@ -8,6 +8,8 @@ target/
 # 服务端运行时数据
 apps/server/data/
 apps/server/.env
+# 管理面板构建产物：由 apps/admin 的 vite 直接输出到这里（pnpm build:admin）
+apps/server/public/
 
 # 客户端构建产物
 apps/desktop/dist/
