@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NotificationLevel, NotificationSettings } from '@nenochat/shared'
-import Icon from '@/components/ui/Icon.vue'
+import Alert from '@/components/ui/form/Alert.vue'
+import Button from '@/components/ui/form/Button.vue'
+import Segmented from '@/components/ui/form/Segmented.vue'
+import SettingRow from '@/components/ui/form/SettingRow.vue'
+import SettingsCard from '@/components/ui/form/SettingsCard.vue'
+import Switch from '@/components/ui/form/Switch.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSystemNotificationsStore } from '@/stores/system-notifications'
 
@@ -9,15 +14,18 @@ const auth = useAuthStore()
 const notifications = useSystemNotificationsStore()
 
 const form = ref<NotificationSettings | null>(null)
-const saving = ref(false)
 const error = ref<string | null>(null)
 const savedHint = ref(false)
 const testHint = ref('')
 
-const levels: Array<{ key: NotificationLevel; label: string }> = [
-  { key: 'all', label: '全部消息' },
-  { key: 'mentions', label: '仅 @ 提及' },
-  { key: 'none', label: '不接收' },
+const canRequestPermission = computed(
+  () => notifications.permission !== 'granted' && notifications.permission !== 'unsupported',
+)
+
+const levelOptions = [
+  { value: 'all', label: '全部消息' },
+  { value: 'mentions', label: '仅 @ 提及' },
+  { value: 'none', label: '不接收' },
 ]
 
 const permissionLabel = computed(() => {
@@ -67,7 +75,6 @@ async function patch(partial: Partial<NotificationSettings>): Promise<void> {
   if (!form.value) return
   const previous = { ...form.value }
   form.value = { ...form.value, ...partial }
-  saving.value = true
   error.value = null
   try {
     const next = await auth.updateNotificationSettings(partial)
@@ -76,8 +83,6 @@ async function patch(partial: Partial<NotificationSettings>): Promise<void> {
   } catch (e) {
     form.value = previous
     error.value = e instanceof Error ? e.message : '保存失败'
-  } finally {
-    saving.value = false
   }
 }
 
@@ -111,147 +116,102 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div>
-    <h2 class="mb-1 text-[15px] font-semibold text-text-strong">通知</h2>
-    <p class="mb-4 text-[12px] text-muted">设置会同步到所有登录的设备，免打扰离线也生效</p>
-
-    <p v-if="error" class="mb-3 text-[12px] text-danger">{{ error }}</p>
-    <p v-else-if="savedHint" class="mb-3 text-[12px] text-accent">已保存</p>
+  <div class="space-y-3">
+    <Alert v-if="error" tone="danger">{{ error }}</Alert>
+    <Alert v-else-if="savedHint" tone="success">已保存</Alert>
 
     <template v-if="form">
       <!-- 系统权限 -->
-      <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-        <div class="flex items-start gap-2.5">
-          <span class="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-2 text-muted">
-            <Icon :name="notifications.permission === 'granted' ? 'bell' : 'bellOff'" :size="15" />
-          </span>
-          <div class="min-w-0 flex-1">
-            <p class="text-[13px] font-medium text-text-strong">系统通知</p>
-            <p class="mt-0.5 text-[11.5px] leading-relaxed text-muted">{{ permissionLabel }}</p>
-          </div>
-          <button
-            v-if="notifications.permission !== 'granted' && notifications.permission !== 'unsupported'"
-            type="button"
-            class="shrink-0 rounded-lg bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-text"
-            @click="enableSystemNotification"
-          >
+      <SettingsCard id="system" title="系统通知" :description="permissionLabel" icon="bell">
+        <template #actions>
+          <Button v-if="canRequestPermission" size="sm" @click="enableSystemNotification">
             去授权
-          </button>
+          </Button>
+        </template>
+        <div class="flex items-center gap-2">
+          <Button variant="ghost" size="sm" @click="sendTestNotification">发送测试通知</Button>
+          <span v-if="testHint" class="text-[11.5px] text-muted">{{ testHint }}</span>
         </div>
-        <div class="mt-2 flex items-center gap-2">
-          <button
-            type="button"
-            class="rounded-lg border border-line px-2.5 py-1 text-[12px] text-text hover:bg-surface-2"
-            @click="sendTestNotification"
-          >
-            发送测试通知
-          </button>
-          <span v-if="testHint" class="text-[11px] text-muted">{{ testHint }}</span>
-        </div>
-      </section>
+      </SettingsCard>
 
       <!-- 总开关 -->
-      <section class="mb-4 overflow-hidden rounded-xl border border-line bg-surface">
-        <label class="flex items-center justify-between border-b border-line px-4 py-3">
-          <span>
-            <span class="block text-[13px] text-text">桌面通知</span>
-            <span class="mt-0.5 block text-[11px] text-muted">新消息、@ 提及与 AI 消息到达时提醒</span>
-          </span>
-          <input
-            type="checkbox"
-            class="h-4 w-4 accent-[var(--accent)]"
-            :checked="form.desktopEnabled"
-            @change="toggle('desktopEnabled', ($event.target as HTMLInputElement).checked)"
+      <SettingsCard
+        id="alerts"
+        title="提醒方式"
+        description="设置会同步到所有登录的设备，免打扰离线也生效"
+        icon="volume"
+      >
+        <SettingRow label="桌面通知" description="新消息、@ 提及与 AI 消息到达时提醒" for-id="notify-desktop">
+          <Switch
+            id="notify-desktop"
+            :model-value="form.desktopEnabled"
+            aria-label="桌面通知"
+            @update:model-value="toggle('desktopEnabled', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <label class="flex items-center justify-between border-b border-line px-4 py-3">
-          <span>
-            <span class="block text-[13px] text-text">提示音</span>
-            <span class="mt-0.5 block text-[11px] text-muted">浏览器降级提示时播放短提示音</span>
-          </span>
-          <input
-            type="checkbox"
-            class="h-4 w-4 accent-[var(--accent)]"
-            :checked="form.soundEnabled"
-            @change="toggle('soundEnabled', ($event.target as HTMLInputElement).checked)"
+        <SettingRow label="提示音" description="浏览器降级提示时播放短提示音" for-id="notify-sound">
+          <Switch
+            id="notify-sound"
+            :model-value="form.soundEnabled"
+            aria-label="提示音"
+            @update:model-value="toggle('soundEnabled', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <label class="flex items-center justify-between px-4 py-3">
-          <span>
-            <span class="block text-[13px] text-text">显示内容预览</span>
-            <span class="mt-0.5 block text-[11px] text-muted">关闭后通知只显示「你收到一条新消息」</span>
-          </span>
-          <input
-            type="checkbox"
-            class="h-4 w-4 accent-[var(--accent)]"
-            :checked="form.showPreview"
-            @change="toggle('showPreview', ($event.target as HTMLInputElement).checked)"
+        <SettingRow
+          label="显示内容预览"
+          description="关闭后通知只显示「你收到一条新消息」"
+          for-id="notify-preview"
+        >
+          <Switch
+            id="notify-preview"
+            :model-value="form.showPreview"
+            aria-label="显示内容预览"
+            @update:model-value="toggle('showPreview', $event)"
           />
-        </label>
-      </section>
+        </SettingRow>
+      </SettingsCard>
 
       <!-- 默认级别 -->
-      <section class="mb-4 rounded-xl border border-line bg-surface p-4">
-        <p class="mb-1 text-[13px] font-medium text-text-strong">默认提醒级别</p>
-        <p class="mb-3 text-[11.5px] text-muted">单个会话可以单独覆盖这里的设置</p>
+      <SettingsCard id="levels" title="默认提醒级别" description="单个会话可以在会话设置里单独覆盖" icon="at">
+        <SettingRow label="私聊与 AI" stacked>
+          <Segmented
+            :model-value="form.dmLevel"
+            full
+            :options="levelOptions"
+            aria-label="私聊与 AI 提醒级别"
+            @update:model-value="setLevel('dmLevel', $event as NotificationLevel)"
+          />
+        </SettingRow>
 
-        <p class="mb-1.5 text-[12px] text-muted">私聊与 AI</p>
-        <div class="mb-3 flex gap-1.5">
-          <button
-            v-for="level in levels"
-            :key="`dm-${level.key}`"
-            type="button"
-            class="flex-1 rounded-lg border px-2 py-1.5 text-[12px] transition-colors"
-            :class="
-              form.dmLevel === level.key
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line bg-surface-2 text-muted hover:text-text'
-            "
-            @click="setLevel('dmLevel', level.key)"
-          >
-            {{ level.label }}
-          </button>
-        </div>
-
-        <p class="mb-1.5 text-[12px] text-muted">群聊</p>
-        <div class="flex gap-1.5">
-          <button
-            v-for="level in levels"
-            :key="`group-${level.key}`"
-            type="button"
-            class="flex-1 rounded-lg border px-2 py-1.5 text-[12px] transition-colors"
-            :class="
-              form.groupLevel === level.key
-                ? 'border-accent bg-accent-soft font-medium text-accent'
-                : 'border-line bg-surface-2 text-muted hover:text-text'
-            "
-            @click="setLevel('groupLevel', level.key)"
-          >
-            {{ level.label }}
-          </button>
-        </div>
-      </section>
+        <SettingRow label="群聊" stacked>
+          <Segmented
+            :model-value="form.groupLevel"
+            full
+            :options="levelOptions"
+            aria-label="群聊提醒级别"
+            @update:model-value="setLevel('groupLevel', $event as NotificationLevel)"
+          />
+        </SettingRow>
+      </SettingsCard>
 
       <!-- 免打扰 -->
-      <section class="rounded-xl border border-line bg-surface p-4">
-        <label class="flex items-center justify-between">
-          <span>
-            <span class="block text-[13px] text-text">免打扰时段</span>
-            <span class="mt-0.5 block text-[11px] text-muted">
-              时段内不弹系统通知，消息仍会在主页正常显示
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            class="h-4 w-4 accent-[var(--accent)]"
-            :checked="form.dndEnabled"
-            @change="toggle('dndEnabled', ($event.target as HTMLInputElement).checked)"
+      <SettingsCard id="dnd" title="免打扰" icon="moon">
+        <SettingRow
+          label="免打扰时段"
+          description="时段内不弹系统通知，消息仍会在主页正常显示"
+          for-id="notify-dnd"
+        >
+          <Switch
+            id="notify-dnd"
+            :model-value="form.dndEnabled"
+            aria-label="免打扰时段"
+            @update:model-value="toggle('dndEnabled', $event)"
           />
-        </label>
+        </SettingRow>
 
-        <div v-if="form.dndEnabled" class="mt-3 flex items-center gap-2">
+        <div v-if="form.dndEnabled" class="flex items-center gap-2 pb-3.5">
           <input
             type="time"
             :value="form.dndStart"
@@ -267,14 +227,10 @@ onBeforeUnmount(() => {
           />
         </div>
 
-        <p class="mt-2 text-[11px] text-muted">时区：{{ form.timezone }}</p>
-      </section>
-
-      <p v-if="saving" class="mt-3 text-[11.5px] text-muted">保存中…</p>
+        <p class="pb-3.5 text-[11px] text-muted">时区：{{ form.timezone }}</p>
+      </SettingsCard>
     </template>
 
-    <div v-else class="rounded-xl border border-dashed border-line p-4 text-[12.5px] text-muted">
-      正在读取通知设置…
-    </div>
+    <p v-else class="py-2 text-[12px] text-muted">正在读取通知设置…</p>
   </div>
 </template>
