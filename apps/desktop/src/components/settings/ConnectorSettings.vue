@@ -436,8 +436,8 @@ onMounted(() => {
             <TextInput id="connector-location" v-model="form.location" placeholder="北京 或 101010100" />
           </Field>
           <div class="grid grid-cols-2 gap-3">
-            <Field label="纬度" for-id="connector-latitude" optional><NumberInput id="connector-latitude" v-model="form.latitude" :min="-90" :max="90" /></Field>
-            <Field label="经度" for-id="connector-longitude" optional><NumberInput id="connector-longitude" v-model="form.longitude" :min="-180" :max="180" /></Field>
+            <Field label="纬度" for-id="connector-latitude" optional><NumberInput id="connector-latitude" v-model="form.latitude" :integer="false" :min="-90" :max="90" /></Field>
+            <Field label="经度" for-id="connector-longitude" optional><NumberInput id="connector-longitude" v-model="form.longitude" :integer="false" :min="-180" :max="180" /></Field>
           </div>
           <div class="space-y-2">
             <label v-for="setting in [
