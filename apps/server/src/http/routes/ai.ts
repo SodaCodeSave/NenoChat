@@ -321,6 +321,19 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { usage: await aiService.usageByRefs(db, userId, input.refIds) }
   })
 
+  /** 主人的 token 用量统计：总览、24h/7d/30d 时间序列与按模型/功能/角色聚合 */
+  app.get('/ai/usage/stats', async (request) => {
+    const userId = await requireUserId(request)
+    const query = parse(
+      z.object({
+        window: z.enum(['24h', '7d', '30d']),
+        tzOffset: z.coerce.number().int().min(-840).max(840).optional(),
+      }),
+      request.query,
+    )
+    return { stats: await aiService.usageStats(db, userId, query.window, query.tzOffset) }
+  })
+
   /* ------------------------------ 记忆 ------------------------------ */
   app.get<{ Params: { id: string } }>('/ai/conversations/:id/memory', async (request) => {
     const userId = await requireUserId(request)

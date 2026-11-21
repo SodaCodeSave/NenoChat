@@ -24,6 +24,8 @@ import {
   type AiProviderModel,
   type AiUsageEntry,
   type AiUsageKind,
+  type AiUsageStats,
+  type AiUsageWindow,
   type ChatMessage,
   type ConnectorActionMeta,
   type Conversation,
@@ -2372,6 +2374,17 @@ export async function debugSummary(db: DB, userId: string, conversationId: strin
     lastCompactedSeq: session?.last_compacted_seq ?? null,
     tokenEstimate: session?.token_estimate ?? null,
   })
+}
+
+/** 主人的 token 用量统计：时间窗作用于总览、时间序列与模型/功能/角色三个聚合 */
+export async function usageStats(
+  db: DB,
+  userId: string,
+  window: AiUsageWindow,
+  tzOffsetMinutes?: number,
+): Promise<AiUsageStats> {
+  // 客户端没带偏移时退回服务端时区
+  return debugRepo.usageStats(db, userId, window, tzOffsetMinutes ?? serverTzOffsetMinutes())
 }
 
 /** 本机密钥代跑后客户端回传的真实 usage */

@@ -1,4 +1,11 @@
-import type { AiDebugSummary, AiGroupDecision, AiUsageEntry, AiUsageKind } from '@nenochat/shared'
+import type {
+  AiDebugSummary,
+  AiGroupDecision,
+  AiUsageEntry,
+  AiUsageKind,
+  AiUsageStats,
+  AiUsageWindow,
+} from '@nenochat/shared'
 import { ulid } from '@nenochat/shared'
 import { all, one, run, type Executor } from '../index'
 import { now } from '../../util/clock'
@@ -136,9 +143,9 @@ async function aggregate(db: Executor, whereSql: string, param: string): Promise
     db,
     `SELECT
        COUNT(*) AS calls,
-       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-       COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
      FROM ai_usage_log u
      WHERE ${whereSql}`,
     [param],
@@ -196,6 +203,152 @@ export async function debugSummary(
     contextLevel,
     lastCompactedSeq: context.lastCompactedSeq,
     tokenEstimate: context.tokenEstimate,
+  }
+}
+
+/* ------------------------------ 用量统计 ------------------------------ */
+
+const USAGE_WINDOW_MS: Record<AiUsageWindow, number> = {
+  '24h': 24 * 3_600_000,
+  '7d': 7 * 86_400_000,
+  '30d': 30 * 86_400_000,
+}
+
+interface UsageSumRow {
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  cached_tokens: number
+}
+
+interface UsageBucketRow extends UsageSumRow {
+  bucket_index: number
+}
+
+interface UsageModelRow extends UsageSumRow {
+  model: string | null
+}
+
+interface UsageKindRow extends UsageSumRow {
+  kind: string
+}
+
+interface UsagePersonaRow extends UsageSumRow {
+  persona_id: string
+  persona_name: string
+}
+
+/** token 用量统计：总览、按桶时间序列与按模型/功能/角色聚合，时间窗作用于全部结果 */
+export async function usageStats(
+  db: Executor,
+  ownerId: string,
+  window: AiUsageWindow,
+  tzOffsetMinutes: number,
+): Promise<AiUsageStats> {
+  // 24h 每小时一桶；7d/30d 每天一桶，按客户端本地日的零点对齐（偏移后取整再还原）
+  const bucketMs = window === '24h' ? 3_600_000 : 86_400_000
+  const offsetMs = tzOffsetMinutes * 60_000
+  const to = now()
+  const from = Math.floor((to + offsetMs - USAGE_WINDOW_MS[window]) / bucketMs) * bucketMs - offsetMs
+  const where = 'owner_id = ? AND created_at >= ?'
+  // join 查询里 ai_personas 也有 created_at，必须带表前缀消歧
+  const whereU = 'u.owner_id = ? AND u.created_at >= ?'
+
+  const totals = await one<UsageSumRow>(
+    db,
+    `SELECT
+       COUNT(*) AS calls,
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+     FROM ai_usage_log
+     WHERE ${where}`,
+    [ownerId, from],
+  )
+
+  const seriesRows = await all<UsageBucketRow>(
+    db,
+    `SELECT (created_at + ?) / ? AS bucket_index,
+       COUNT(*) AS calls,
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+     FROM ai_usage_log
+     WHERE ${where}
+     GROUP BY 1
+     ORDER BY 1`,
+    [offsetMs, bucketMs, ownerId, from],
+  )
+
+  const byModel = await all<UsageModelRow>(
+    db,
+    `SELECT model,
+       COUNT(*) AS calls,
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+     FROM ai_usage_log
+     WHERE ${where}
+     GROUP BY model`,
+    [ownerId, from],
+  )
+
+  const byKind = await all<UsageKindRow>(
+    db,
+    `SELECT kind,
+       COUNT(*) AS calls,
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+     FROM ai_usage_log
+     WHERE ${where}
+     GROUP BY kind`,
+    [ownerId, from],
+  )
+
+  const byPersona = await all<UsagePersonaRow>(
+    db,
+    `SELECT u.persona_id, COALESCE(p.name, '已删除角色') AS persona_name,
+       COUNT(*) AS calls,
+       COALESCE(SUM(u.prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(u.completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(u.cached_tokens), 0)::bigint AS cached_tokens
+     FROM ai_usage_log u
+     LEFT JOIN ai_personas p ON p.id = u.persona_id
+     WHERE ${whereU} AND u.persona_id IS NOT NULL
+     GROUP BY u.persona_id, p.name`,
+    [ownerId, from],
+  )
+
+  const totalTokens = (row: UsageSumRow): number => row.prompt_tokens + row.completion_tokens
+  const descByTokens = <T extends UsageSumRow>(rows: T[]): T[] =>
+    [...rows].sort((a, b) => totalTokens(b) - totalTokens(a))
+  const toSum = (row: UsageSumRow) => ({
+    calls: row.calls,
+    promptTokens: row.prompt_tokens,
+    completionTokens: row.completion_tokens,
+    cachedTokens: row.cached_tokens,
+  })
+
+  return {
+    window,
+    from,
+    to,
+    bucketMs,
+    totals: totals
+      ? toSum(totals)
+      : { calls: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0 },
+    series: seriesRows.map((row) => ({
+      bucketStart: row.bucket_index * bucketMs - offsetMs,
+      ...toSum(row),
+    })),
+    byModel: descByTokens(byModel).map((row) => ({ model: row.model, ...toSum(row) })),
+    byKind: descByTokens(byKind).map((row) => ({ kind: row.kind as AiUsageKind, ...toSum(row) })),
+    byPersona: descByTokens(byPersona).map((row) => ({
+      personaId: row.persona_id,
+      personaName: row.persona_name,
+      ...toSum(row),
+    })),
   }
 }
 

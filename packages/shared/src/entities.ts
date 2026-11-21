@@ -463,6 +463,56 @@ export interface AiUsageEntry {
   createdAt: number
 }
 
+/** 用量统计的时间窗 */
+export type AiUsageWindow = '24h' | '7d' | '30d'
+
+/** 一个时间窗内的用量汇总 */
+export interface AiUsageTotals {
+  calls: number
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+}
+
+/** 柱状图的一个时间桶（bucketStart 为桶起点，已含客户端时区偏移） */
+export interface AiUsageBucket extends AiUsageTotals {
+  bucketStart: number
+}
+
+/** 按模型聚合的用量 */
+export interface AiUsageModelStat extends AiUsageTotals {
+  /** 上游未回传模型名时为 null */
+  model: string | null
+}
+
+/** 按功能场景聚合的用量 */
+export interface AiUsageKindStat extends AiUsageTotals {
+  kind: AiUsageKind
+}
+
+/** 按 AI 角色聚合的用量 */
+export interface AiUsagePersonaStat extends AiUsageTotals {
+  personaId: string
+  personaName: string
+}
+
+/** 主人的 token 用量统计（窗口作用于全部字段） */
+export interface AiUsageStats {
+  window: AiUsageWindow
+  /** 窗口起点（毫秒），已按桶对齐 */
+  from: number
+  to: number
+  /** 桶宽度：24h 每小时一桶，7d/30d 每天一桶 */
+  bucketMs: number
+  totals: AiUsageTotals
+  /** 非空桶按时间升序；前端按 from + bucketMs 补零 */
+  series: AiUsageBucket[]
+  byModel: AiUsageModelStat[]
+  byKind: AiUsageKindStat[]
+  /** 只含关联了角色的记录，未关联角色的调用仍计入 totals/byModel/byKind */
+  byPersona: AiUsagePersonaStat[]
+}
+
 /** 群聊成员的一次决策记录：规则层判定或模型层产出 */
 export interface AiGroupDecision {
   id: string
