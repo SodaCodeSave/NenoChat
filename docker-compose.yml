@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nenochat}
       POSTGRES_DB: nenochat
     volumes:
-      - nenochat-pg:/var/lib/postgresql/data
+      # PG 18+ 数据目录布局变更：单挂载点挂到 /var/lib/postgresql，数据落在其下 18/docker 子目录
+      - nenochat-pg:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U nenochat -d nenochat']
       interval: 5s
