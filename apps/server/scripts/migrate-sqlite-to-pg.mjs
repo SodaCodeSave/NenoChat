@@ -12,7 +12,7 @@
  * 2. 逐表读取 SQLite 全量行，按列名批量写入 PG（跳过 FTS 虚表与 schema_migrations）；
  * 3. 对自增列（sync_change_log.seq）重置 identity 序列到最大值。
  *
- * 幂等性：不做去重，重复执行会撞唯一键。建议只对空库执行一次。
+ * 幂等性：导入前清空 PG 对应表，可重复执行（以 SQLite 数据为准）。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -119,6 +119,9 @@ async function main() {
     const srcCols = sqliteCols.filter((c) => pgColSet.has(c) && c !== idCol)
     const rows = sqlite.prepare(`SELECT ${srcCols.join(', ')} FROM ${table}`).all()
     if (rows.length === 0) continue
+
+    // 导入前清空 PG 表：目标库可能有服务启动时写入的默认数据，以 SQLite 为准
+    await pg.query(`DELETE FROM ${table}`)
 
     const placeholders = srcCols.map((_, i) => `$${i + 1}`).join(', ')
     const insertSql = `INSERT INTO ${table} (${srcCols.join(', ')}) VALUES (${placeholders})`
