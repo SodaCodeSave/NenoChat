@@ -10,6 +10,7 @@ const LINK_DISPLAY_KEY = 'nenochat.linkDisplay'
 const SEND_KEY_KEY = 'nenochat.sendKey'
 const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
+const CONNECTOR_HINTS_KEY = 'nenochat.showConnectorHints'
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
 export type MobileTab = 'messages' | 'contacts' | 'moments' | 'me'
@@ -46,6 +47,8 @@ export const useUiStore = defineStore('ui', () => {
   const conversationListCollapsed = ref(
     localStorage.getItem(CONVERSATION_LIST_KEY) === 'true',
   )
+  /** 是否在消息里显示连接器动作提示（"已联网搜索"等小字），纯本地偏好 */
+  const showConnectorHints = ref(localStorage.getItem(CONNECTOR_HINTS_KEY) !== 'false')
 
   const navSection = ref<NavSection>('messages')
   const mobileTab = ref<MobileTab>('messages')
@@ -111,6 +114,11 @@ export const useUiStore = defineStore('ui', () => {
     applyTheme()
   }
 
+  function setShowConnectorHints(next: boolean): void {
+    showConnectorHints.value = next
+    localStorage.setItem(CONNECTOR_HINTS_KEY, String(next))
+  }
+
   function toggleConversationList(): void {
     setConversationListCollapsed(!conversationListCollapsed.value)
   }
@@ -144,6 +152,7 @@ export const useUiStore = defineStore('ui', () => {
     messageStyle,
     linkDisplay,
     conversationListCollapsed,
+    showConnectorHints,
     navSection,
     mobileTab,
     rightPanel,
@@ -163,6 +172,7 @@ export const useUiStore = defineStore('ui', () => {
     setReduceMotion,
     setConversationListCollapsed,
     toggleConversationList,
+    setShowConnectorHints,
     applyServerSettings,
   }
 })

@@ -186,7 +186,7 @@ const heweatherIcon = connectorPresetOf('heweather')?.icon ?? null
 
 /** 固化提示：本次回复用过的连接器动作，仅在该次生成的第一条消息上显示 */
 const connectorHints = computed(() => {
-  if (!props.aiGroupStart) return []
+  if (!props.aiGroupStart || !ui.showConnectorHints) return []
   return (props.message.meta?.ai?.connector ?? []).map((action) => ({
     kind: action.kind,
     icon: action.kind === 'bilibili' ? bilibiliIcon : action.kind === 'weather' ? heweatherIcon : null,
@@ -203,7 +203,7 @@ const connectorHints = computed(() => {
 
 /** 实时提示：占位气泡阶段正在执行的连接器动作 */
 const liveConnectorLabel = computed(() => {
-  if (!props.liveConnector || !props.thinking) return ''
+  if (!props.liveConnector || !props.thinking || !ui.showConnectorHints) return ''
   return props.liveConnector === 'web_search'
     ? '正在联网搜索…'
     : props.liveConnector === 'fetch'

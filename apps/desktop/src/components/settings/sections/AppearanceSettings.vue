@@ -97,6 +97,14 @@ const themeOptions = [
         />
       </SettingRow>
 
+      <SettingRow label="连接器提示" description="AI 回复里显示“已联网搜索”“已阅读网页”等资料来源小字">
+        <Switch
+          :model-value="ui.showConnectorHints"
+          aria-label="连接器提示"
+          @update:model-value="ui.setShowConnectorHints"
+        />
+      </SettingRow>
+
       <SettingRow label="发送方式" description="选择按下哪个快捷键时发送消息" stacked>
         <Segmented
           :model-value="ui.sendKey"
