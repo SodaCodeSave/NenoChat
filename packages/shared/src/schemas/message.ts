@@ -10,12 +10,13 @@ export const MessageMetaSchema = z
       .array(
         z.object({
           id: z.string(),
-          kind: z.enum(['image', 'file', 'sticker', 'avatar']),
+          kind: z.enum(['image', 'file', 'sticker', 'voice', 'avatar']),
           filename: z.string(),
           mime: z.string(),
           size: z.number(),
           width: z.number().nullable().optional(),
           height: z.number().nullable().optional(),
+          duration: z.number().nullable().optional(),
           url: z.string(),
           thumbUrl: z.string().nullable().optional(),
           description: z.string().max(1000).nullable().optional(),
@@ -33,7 +34,7 @@ export const MessageMetaSchema = z
         senderType: z.enum(['user', 'ai', 'system']).optional(),
         senderName: z.string().max(64),
         preview: z.string().max(200),
-        type: z.enum(['text', 'image', 'file', 'sticker', 'system']).optional(),
+        type: z.enum(['text', 'image', 'file', 'sticker', 'voice', 'system']).optional(),
       })
       .optional(),
   })
@@ -42,7 +43,7 @@ export const SendMessageSchema = z.object({
   conversationId: z.string().min(1),
   clientNonce: z.string().min(1).max(64),
   type: z
-    .enum([MessageType.Text, MessageType.Image, MessageType.File, MessageType.Sticker])
+    .enum([MessageType.Text, MessageType.Image, MessageType.File, MessageType.Sticker, MessageType.Voice])
     .default(MessageType.Text),
   content: z.string().max(8000, '单条消息过长').default(''),
   meta: MessageMetaSchema.optional(),

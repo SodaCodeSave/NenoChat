@@ -70,6 +70,8 @@ export function previewOf(row: MessageRow, max = 80): string {
       return '[文件]'
     case 'sticker':
       return '[表情]'
+    case 'voice':
+      return '[语音]'
     default:
       return row.content.trim().slice(0, max)
   }

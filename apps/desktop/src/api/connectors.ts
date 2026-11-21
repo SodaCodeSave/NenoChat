@@ -26,6 +26,10 @@ export interface ConnectorInput {
     weatherOnUserMessage?: boolean
     weatherOnMention?: boolean
     weatherTool?: boolean
+    ttsVoice?: string | null
+    ttsInstruction?: string | null
+    voiceProbability?: number | null
+    voiceTool?: boolean
   }
   secret?: {
     apiKey?: string

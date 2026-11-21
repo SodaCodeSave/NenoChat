@@ -470,6 +470,37 @@ export const useAiStore = defineStore('ai', () => {
     await generateOnServer(conversationId, persona, provider, content, nonce)
   }
 
+  /**
+   * 发送一条语音消息并触发 AI 生成。
+   * 语音消息本体按普通消息先发（类型 voice + 附件），生成请求正文传空：
+   * 服务端识别语音消息后按转写文本（ASR 未接入时为占位说明）组装上下文。
+   */
+  async function sendVoiceTurn(
+    conversationId: string,
+    attachment: AttachmentRef,
+    replyTo?: Message | null,
+  ): Promise<void> {
+    lastError.value = null
+    const persona = personaOf(conversationId)
+    if (!persona) throw new Error('这个会话没有绑定 AI 角色')
+    const provider = providerOf(persona)
+    if (!provider) throw new Error('还没有配置 AI 服务商')
+
+    await ensureSchedule(persona.id).catch(() => null)
+
+    const nonce = ulid()
+    await messages.send({
+      conversationId,
+      content: '',
+      clientNonce: nonce,
+      type: 'voice',
+      meta: { clientNonce: nonce, attachments: [attachment] },
+      replyToId: replyTo?.id ?? null,
+    })
+
+    await generateOnServer(conversationId, persona, provider, '', nonce)
+  }
+
   return {
     providers,
     personas,
@@ -494,6 +525,7 @@ export const useAiStore = defineStore('ai', () => {
     streamTextOf,
     isGenerating,
     sendTurn,
+    sendVoiceTurn,
     applyServerDelta,
     applyServerSegment,
     applyServerDone,

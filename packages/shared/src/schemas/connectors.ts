@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const ConnectorTypeSchema = z.enum(['deepseek_search', 'bilibili', 'heweather'])
+export const ConnectorTypeSchema = z.enum(['deepseek_search', 'bilibili', 'heweather', 'mimo_tts'])
 
 /** 非敏感配置：具体字段按连接器类型在服务端做二次校验 */
 export const ConnectorConfigSchema = z.object({
@@ -14,6 +14,14 @@ export const ConnectorConfigSchema = z.object({
   weatherOnUserMessage: z.boolean().optional(),
   weatherOnMention: z.boolean().optional(),
   weatherTool: z.boolean().optional(),
+  /** MiMo TTS 预置音色 ID */
+  ttsVoice: z.string().trim().max(64).nullable().optional(),
+  /** MiMo TTS 风格指令（自然语言） */
+  ttsInstruction: z.string().trim().max(1000).nullable().optional(),
+  /** AI 回复按概率转语音，0-1 */
+  voiceProbability: z.number().min(0).max(1).nullable().optional(),
+  /** 允许 AI 用 [[voice]] 标记主动发语音 */
+  voiceTool: z.boolean().optional(),
 })
 
 /** 敏感配置：创建/更新时随请求传入，服务端加密后只回掩码 */

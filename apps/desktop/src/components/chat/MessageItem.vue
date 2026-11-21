@@ -11,6 +11,7 @@ import { resolveFileUrl } from '@/api/http'
 import { resolveAttachmentUrl } from '@/platform/file-cache'
 import { formatMessageTime } from '@/composables/conversation'
 import { useLongPress } from '@/composables/use-long-press'
+import { useVoicePlayer } from '@/composables/use-voice-player'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -141,6 +142,39 @@ const attachments = computed(() =>
       attachment.url,
   })),
 )
+
+/* --------------------------- 语音消息 --------------------------- */
+
+const voicePlayer = useVoicePlayer()
+
+const voiceAttachment = computed(() =>
+  props.message.type === 'voice' ? (attachments.value[0] ?? null) : null,
+)
+
+const isVoicePlaying = computed(
+  () =>
+    voiceAttachment.value !== null &&
+    voicePlayer.playingUrl.value === voiceAttachment.value.displayUrl,
+)
+
+const isVoiceLoading = computed(
+  () =>
+    voiceAttachment.value !== null &&
+    voicePlayer.loadingUrl.value === voiceAttachment.value.displayUrl,
+)
+
+/** 时长显示：整秒不带小数，如 12″ / 12.3″ */
+const voiceDuration = computed(() => {
+  const seconds = voiceAttachment.value?.duration ?? 0
+  if (seconds <= 0) return null
+  return Number.isInteger(seconds) ? `${seconds}″` : `${seconds.toFixed(1)}″`
+})
+
+function playVoice(): void {
+  const url = voiceAttachment.value?.displayUrl
+  if (!url) return
+  void voicePlayer.toggle(url)
+}
 
 function openContextMenu(event: MouseEvent): void {
   // 撤回后的消息没有操作项，临时占位消息也不该有菜单
@@ -363,6 +397,45 @@ const liveConnectorLabel = computed(() => {
               <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
             </div>
           </template>
+
+          <!-- 语音：点击播放/停止，转写文本（或合成原文）显示在下方 -->
+          <div v-else-if="message.type === 'voice'">
+            <button
+              type="button"
+              class="flex items-center gap-2 rounded-full border border-line bg-surface-2 py-2 pl-3 pr-4 transition-colors hover:border-accent"
+              :class="qqOwn ? 'border-white/40 bg-white/15 text-white hover:border-white' : 'text-text'"
+              :aria-label="isVoicePlaying ? '停止播放' : '播放语音'"
+              @click="playVoice"
+            >
+              <Icon
+                name="volume"
+                :size="16"
+                :class="[
+                  isVoiceLoading ? 'animate-pulse text-accent' : isVoicePlaying ? 'text-accent' : '',
+                  qqOwn && !isVoicePlaying && !isVoiceLoading ? 'text-white' : '',
+                ]"
+              />
+              <span class="flex items-end gap-[2px]" aria-hidden="true">
+                <span
+                  v-for="bar in [10, 16, 7]"
+                  :key="bar"
+                  class="w-[2px] rounded-full"
+                  :class="isVoicePlaying ? 'bg-accent voice-bar' : qqOwn ? 'bg-white/50' : 'bg-muted/60'"
+                  :style="{ height: `${bar}px`, animationDelay: `${bar % 3 * 120}ms` }"
+                />
+              </span>
+              <span class="min-w-[2ch] text-[12px] tabular-nums">
+                {{ voiceDuration ?? '语音' }}
+              </span>
+            </button>
+            <p
+              v-if="message.content"
+              class="mt-1 text-[12.5px] leading-relaxed"
+              :class="qqOwn ? 'text-white/85' : 'text-muted'"
+            >
+              {{ message.content }}
+            </p>
+          </div>
 
           <!-- 图片 -->
           <div v-else-if="isImage" class="mt-1 space-y-1">

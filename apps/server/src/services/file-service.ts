@@ -23,6 +23,17 @@ export const TEXT_MIME = new Map<string, string>([
   ['application/json', '.json'],
 ])
 
+/** 允许上传的音频类型（用户语音消息；服务端合成的 TTS 也是 wav） */
+export const AUDIO_MIME = new Map<string, string>([
+  ['audio/wav', '.wav'],
+  ['audio/x-wav', '.wav'],
+  ['audio/webm', '.webm'],
+  ['audio/ogg', '.ogg'],
+  ['audio/mpeg', '.mp3'],
+  ['audio/mp4', '.m4a'],
+  ['audio/aac', '.aac'],
+])
+
 /**
  * 魔数校验：光看 Content-Type 与扩展名都能伪造，
  * 头像这类会直接进 <img> 的文件至少确认内容真的是图片。
@@ -70,7 +81,7 @@ export interface SaveUploadInput {
  */
 export async function saveUpload(db: DB, input: SaveUploadInput): Promise<Attachment> {
   const mime = input.mime.split(';')[0]!.trim().toLowerCase()
-  const ext = IMAGE_MIME.get(mime) ?? TEXT_MIME.get(mime)
+  const ext = IMAGE_MIME.get(mime) ?? TEXT_MIME.get(mime) ?? AUDIO_MIME.get(mime)
   if (!ext) throw err.validation(`不支持的文件类型：${input.mime}`)
 
   if (input.kind === 'avatar' || input.kind === 'sticker') {

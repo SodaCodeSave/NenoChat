@@ -282,6 +282,35 @@ async function handleAttachment(payload: {
   void nextTick(() => messageList.value?.scrollToBottom(true))
 }
 
+/** 语音消息：AI 会话里先发语音再触发一轮生成（ASR 接入后服务端会转写） */
+async function handleVoice(attachment: AttachmentRef): Promise<void> {
+  const id = conversationId.value
+  if (isAi.value) {
+    if (turnBusy.value) return
+    const target = replyTo.value
+    replyTo.value = null
+    turnBusy.value = true
+    try {
+      await ai.sendVoiceTurn(id, attachment, target)
+    } catch (e) {
+      aiError.value = e instanceof Error ? e.message : 'AI 生成失败'
+    } finally {
+      turnBusy.value = false
+    }
+    void nextTick(() => messageList.value?.scrollToBottom(true))
+    return
+  }
+  await messages.send({
+    conversationId: id,
+    content: '',
+    type: 'voice',
+    meta: { attachments: [attachment] },
+    replyToId: replyTo.value?.id ?? null,
+  })
+  replyTo.value = null
+  void nextTick(() => messageList.value?.scrollToBottom(true))
+}
+
 async function handleSticker(sticker: Sticker): Promise<void> {
   if (!sticker.url) return
   const id = conversationId.value
@@ -420,6 +449,7 @@ onBeforeUnmount(() => {
           @send="handleSend"
           @typing="typing.notifyTyping(conversationId)"
           @attachment="handleAttachment"
+          @voice="handleVoice"
           @sticker="handleSticker"
           @cancel-reply="replyTo = null"
           @cancel-edit="editing = null"

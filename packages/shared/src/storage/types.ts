@@ -22,7 +22,7 @@ export interface StorageReport {
 }
 
 /** 附件缓存中的文件类别，与消息附件 kind 对齐 */
-export type CachedFileKind = 'image' | 'file' | 'sticker' | 'avatar'
+export type CachedFileKind = 'image' | 'file' | 'sticker' | 'voice' | 'avatar'
 
 /** 附件缓存的元信息。blob 本身由各端自行存储，这里只描述可统计、可淘汰的部分 */
 export interface CachedFileMeta {

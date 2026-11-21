@@ -80,12 +80,14 @@ export interface Member {
 /** 消息附件引用（存于 message.meta.attachments） */
 export interface AttachmentRef {
   id: string
-  kind: 'image' | 'file' | 'sticker' | 'avatar'
+  kind: 'image' | 'file' | 'sticker' | 'voice' | 'avatar'
   filename: string
   mime: string
   size: number
   width?: number | null
   height?: number | null
+  /** 音频时长（秒），仅语音附件携带 */
+  duration?: number | null
   url: string
   thumbUrl?: string | null
   /** 识图模型生成的图片描述，仅图片附件且被识图后才有 */
@@ -617,8 +619,8 @@ export interface ServerInstance {
 
 /* ------------------------------ 连接器 ------------------------------ */
 
-/** 连接器类型：网页搜索 / B 站视频 */
-export type ConnectorType = 'deepseek_search' | 'bilibili' | 'heweather'
+/** 连接器类型：网页搜索 / B 站视频 / 天气 / MiMo 语音（TTS，ASR 预留） */
+export type ConnectorType = 'deepseek_search' | 'bilibili' | 'heweather' | 'mimo_tts'
 
 /** 非敏感配置，随连接器一起下发给客户端 */
 export interface ConnectorConfig {
@@ -635,6 +637,14 @@ export interface ConnectorConfig {
   weatherOnUserMessage?: boolean
   weatherOnMention?: boolean
   weatherTool?: boolean
+  /** MiMo TTS 预置音色 ID，如 mimo_default / 冰糖 / Mia */
+  ttsVoice?: string | null
+  /** MiMo TTS 风格指令（自然语言），传给 user 消息控制语气 */
+  ttsInstruction?: string | null
+  /** AI 回复按概率转成语音，0-1；0 表示不启用 */
+  voiceProbability?: number | null
+  /** 允许 AI 用 [[voice]] 标记主动发语音（工具模式） */
+  voiceTool?: boolean
 }
 
 /** 敏感配置只回掩码，明文永远不上客户端 */

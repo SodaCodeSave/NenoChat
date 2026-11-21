@@ -13,6 +13,8 @@ import {
   segmentDelay,
   splitSegments,
   stripStickerMarkers,
+  stripVoiceMarkers,
+  renderVoiceBlock,
   type AiMemoryFact,
   type AiMemorySummary,
   type AiDebugSummary,
@@ -51,12 +53,14 @@ import * as scheduleRepo from '../db/repo/schedule'
 import * as stickersRepo from '../db/repo/stickers'
 import { localDayKey, minutesOfDay, serverTzOffsetMinutes } from './proactive-rules'
 import { buildConnectorContext } from './connector-context'
+import * as connectorService from './connector-service'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
 import { AppError, err } from '../util/errors'
 import { decryptSecret, encryptSecret, maskSecret } from '../util/crypto'
 import { appendSystemMessage } from './message-service'
+import * as voiceService from './voice-service'
 import {
   emitAiConnectorStatus,
   emitAiDelta,
@@ -688,6 +692,7 @@ export async function appendStickerMessage(
  * 这样置顶、未读、搜索、离线补拉全部复用普通消息能力。
  * 分段里若带有效的表情标记，会拆成文字与表情两条消息；
  * 每条分段最多解析一个标记，其余标记按噪音剔除。
+ * 带 [[voice]] 标记或语音连接器概率命中时，整条分段转成语音消息。
  */
 export async function appendAiSegment(
   db: DB,
@@ -725,7 +730,41 @@ export async function appendAiSegment(
       : new Set((await stickersRepo.listAiStickers(db, ownerId)).map((row) => row.id))
     : new Set<string>()
   const marker = enabledIds.size > 0 ? extractStickerMarker(input.content, enabledIds) : null
-  const text = marker?.stickerId ? marker.text : input.content
+
+  // 语音：[[voice]] 标记（工具模式）或连接器概率命中时整条分段转语音；
+  // 与表情标记同段出现时表情优先，语音只吃纯文字分段，合成失败降级为文字。
+  const voicePlan =
+    ownerId && !marker?.stickerId
+      ? await voiceService.planVoiceSegment(db, ownerId, input.content)
+      : null
+  const text =
+    voicePlan && (voicePlan.voice || voicePlan.marked)
+      ? voicePlan.text
+      : marker?.stickerId
+        ? marker.text
+        : input.content
+
+  if (voicePlan?.voice && voicePlan.text && ownerId) {
+    const voiceMessage = await voiceService.appendVoiceMessage(db, {
+      conversationId,
+      ownerId,
+      text: voicePlan.text,
+      generationId: input.generationId,
+      index: input.index,
+      personaId,
+      model: input.model,
+      totalSegments: input.totalSegments,
+      proactive: input.proactive,
+      connector: input.connector,
+      clientNonce: input.clientNonce ?? null,
+    })
+    if (voiceMessage) {
+      if (session) {
+        await aiRepo.bumpSessionProgress(db, conversationId, 1, estimateTokens(voicePlan.text))
+      }
+      return voiceMessage
+    }
+  }
 
   const buildMeta = (index: number): MessageMeta => ({
     ai: {
@@ -1073,9 +1112,14 @@ async function runGenerationOnServer(
 
   // 当前输入由 buildChatMessages 统一追加一次，这里把它从 recent 里摘掉，
   // 否则模型会看到两遍同样的话（并发插入的 AI 消息也不影响这个判断）
+  // 语音消息在历史里按占位注入：有转写（content）直接用，还没有转写时标注为语音
   const recent = (await loadRecentMessages(db, input.conversationId, 61)).filter(
     (message) => message.id !== userMessageId,
-  ).slice(-60)
+  ).slice(-60).map((message) =>
+    message.type === 'voice' && !message.content.trim()
+      ? { ...message, content: '[语音]（暂无转写）' }
+      : message,
+  )
   const facts = (await aiRepo.listFacts(db, input.conversationId)).map(aiRepo.mapFact)
   const summary = await aiRepo.latestSummary(db, input.conversationId)
   const owner = await one<{ display_name: string }>(
@@ -1137,7 +1181,11 @@ async function runGenerationOnServer(
     facts,
     summary,
     recent,
-    userInput: input.content,
+    // 用户发的是语音时，输入用转写文本；ASR 还没接入时给占位说明，模型不至于对着空输入胡编
+    userInput:
+      userRow?.type === 'voice'
+        ? input.content.trim() || '[语音]（暂无转写，用户刚发来一条语音消息）'
+        : input.content,
     userName: owner?.display_name ?? '用户',
     quoted,
     userImages: imageInput.userImages,
@@ -1149,6 +1197,19 @@ async function runGenerationOnServer(
     connectorFetchContext: connector.fetchContext,
     relationshipEnabled: settings.relationshipEnabled,
   })
+
+  // 语音工具模式：连接器开启时把 [[voice]] 协议追加进系统提示词（概率模式无需提示词）
+  const voiceRow = await connectorService.enabledConnectorOfType(db, input.userId, 'mimo_tts')
+  if (voiceRow) {
+    let voiceTool = false
+    try {
+      voiceTool =
+        (JSON.parse(voiceRow.config || '{}') as { voiceTool?: unknown }).voiceTool === true
+    } catch {
+      voiceTool = false
+    }
+    if (voiceTool) chatMessages.push({ role: 'system', content: renderVoiceBlock() })
+  }
 
   const rule: SegmentRule = {
     enabled: settings.segmentEnabled,
@@ -1341,8 +1402,8 @@ async function runGenerationOnServer(
           generationId,
           conversationId: input.conversationId,
           index: startIndex + i,
-          // 表情标记在落库时才拆成真正的表情消息，实时气泡里不能露出原始标记
-          text: stripStickerMarkers(ready[i]!),
+          // 表情与语音标记都在落库时才拆成真正的消息，实时气泡里不能露出原始标记
+          text: stripVoiceMarkers(stripStickerMarkers(ready[i]!)),
         })
       })().catch(() => {})
     }

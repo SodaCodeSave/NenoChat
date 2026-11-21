@@ -16,6 +16,7 @@ const DEFAULTS = {
   deepseek_search: { baseUrl: 'https://api.deepseek.com', count: 5, maxComments: 8 },
   bilibili: { baseUrl: '', count: 0, maxComments: 8 },
   heweather: { baseUrl: 'https://api.qweather.com/v7', count: 0, maxComments: 0 },
+  mimo_tts: { baseUrl: 'https://api.xiaomimimo.com/v1', count: 0, maxComments: 0 },
 } satisfies Record<ConnectorType, { baseUrl: string; count: number; maxComments: number }>
 
 export interface ConnectorSecret {
@@ -104,12 +105,27 @@ function normalizeConfig(type: ConnectorType, config: ConnectorConfig | undefine
     merged.weatherOnMention = config?.weatherOnMention ?? true
     merged.weatherTool = config?.weatherTool ?? false
   }
+  if (type === 'mimo_tts') {
+    merged.ttsVoice = config?.ttsVoice?.trim() || MIMO_DEFAULT_VOICE
+    merged.ttsInstruction = config?.ttsInstruction?.trim() || null
+    merged.voiceProbability = Math.min(
+      1,
+      Math.max(0, config?.voiceProbability ?? 0),
+    )
+    merged.voiceTool = config?.voiceTool ?? false
+  }
   return merged
 }
 
 function assertSecret(type: ConnectorType, secret: ConnectorSecret): void {
-  if ((type === 'deepseek_search' || type === 'heweather') && !secret.apiKey?.trim()) {
-    throw err.validation(type === 'heweather' ? '和风天气连接器需要填写 API Key' : 'DeepSeek 搜索连接器需要填写 API Key')
+  if (type === 'deepseek_search' && !secret.apiKey?.trim()) {
+    throw err.validation('DeepSeek 搜索连接器需要填写 API Key')
+  }
+  if (type === 'heweather' && !secret.apiKey?.trim()) {
+    throw err.validation('和风天气连接器需要填写 API Key')
+  }
+  if (type === 'mimo_tts' && !secret.apiKey?.trim()) {
+    throw err.validation('MiMo 语音连接器需要填写 API Key')
   }
 }
 
@@ -539,6 +555,98 @@ export async function fetchHeweather(row: repo.ConnectorRow): Promise<string> {
   return lines.join('\n')
 }
 
+/* ------------------------------ MiMo 语音 ------------------------------ */
+
+/** MiMo TTS 预置音色缺省值：中国集群默认映射为「冰糖」 */
+export const MIMO_DEFAULT_VOICE = 'mimo_default'
+
+/** MiMo 语音合成模型（预置音色版）；音色设计与克隆模型暂不接入 */
+export const MIMO_TTS_MODEL = 'mimo-v2.5-tts'
+
+/** 单次合成的文本上限：聊天分条通常不超过几百字，超长直接截断 */
+const MIMO_TTS_MAX_CHARS = 1200
+
+interface MimoTtsPayload {
+  choices?: Array<{ message?: { audio?: { data?: string } } }>
+}
+
+export interface MimoTtsResult {
+  base64: string
+  mime: 'audio/wav'
+  bytes: Buffer
+}
+
+/**
+ * MiMo 语音合成：文本放在 assistant 消息里，风格指令放在 user 消息里，
+ * 响应的 choices[0].message.audio.data 是 base64 WAV（24kHz 16bit 单声道）。
+ */
+export async function synthesizeMimoTts(row: repo.ConnectorRow, text: string): Promise<MimoTtsResult> {
+  const config = parseConfig(row)
+  const secret = readConnectorSecret(row)
+  if (!secret.apiKey) throw err.validation('该连接器没有保存 MiMo API Key')
+  const target = text.trim().slice(0, MIMO_TTS_MAX_CHARS)
+  if (!target) throw err.validation('没有可合成的文本')
+
+  const base = (config.baseUrl || DEFAULTS.mimo_tts.baseUrl).trim().replace(/\/+$/, '')
+  const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+  // 兼容用户填了根域名或 /v1 的写法
+  const messages: Array<{ role: string; content: string }> = []
+  if (config.ttsInstruction?.trim()) {
+    messages.push({ role: 'user', content: config.ttsInstruction.trim().slice(0, 500) })
+  }
+  messages.push({ role: 'assistant', content: target })
+
+  const payload = await fetchConnectorJson<MimoTtsPayload>(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${secret.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: MIMO_TTS_MODEL,
+      messages,
+      audio: { format: 'wav', voice: config.ttsVoice || MIMO_DEFAULT_VOICE },
+    }),
+    timeoutMs: 60_000,
+    maxBytes: 16 * 1024 * 1024,
+  })
+
+  const data = payload.choices?.[0]?.message?.audio?.data
+  if (!data) throw new ConnectorRequestError('MiMo 没有返回音频数据')
+  return { base64: data, mime: 'audio/wav', bytes: Buffer.from(data, 'base64') }
+}
+
+/** 解析 WAV 头取时长（秒）；头部异常时按 24kHz 16bit 单声道估算 */
+export function wavDurationSeconds(bytes: Buffer): number {
+  try {
+    if (bytes.length >= 44 && bytes.subarray(0, 4).toString('ascii') === 'RIFF') {
+      const channels = bytes.readUInt16LE(22) || 1
+      const sampleRate = bytes.readUInt32LE(24) || 24000
+      const bitsPerSample = bytes.readUInt16LE(34) || 16
+      const byteRate = (sampleRate * channels * bitsPerSample) / 8
+      // data 块从固定偏移不一定拿得到大小，直接按总大小粗略扣除 44 字节头
+      const dataSize = bytes.length - 44
+      const seconds = dataSize / byteRate
+      if (Number.isFinite(seconds) && seconds > 0) return seconds
+    }
+  } catch {
+    /* 头部解析失败走估算 */
+  }
+  return bytes.length / (24_000 * 2)
+}
+
+/**
+ * MiMo 语音识别（ASR，预留）：用户语音消息转文字。
+ * 计划接入 MiMo ASR 接口（同一个 API Key 与 baseUrl），当前一律抛出未开放，
+ * 语音消息会以无转写占位的形式进入 AI 上下文。
+ */
+export async function transcribeMimoAsr(
+  _row: repo.ConnectorRow,
+  _audio: { base64: string; mime: string },
+): Promise<string> {
+  throw err.validation('语音识别暂未开放，敬请期待')
+}
+
 export async function testConnector(
   db: DB,
   ownerId: string,
@@ -558,6 +666,16 @@ export async function testConnector(
     } else if (type === 'heweather') {
       await fetchHeweather(row)
       result = { ok: true, message: '连接成功，天气数据获取正常' }
+    } else if (type === 'mimo_tts') {
+      const audio = await synthesizeMimoTts(row, '你好呀，很高兴认识你。')
+      const seconds = wavDurationSeconds(audio.bytes)
+      result = {
+        ok: seconds > 0,
+        message:
+          seconds > 0
+            ? `连接成功，语音合成正常（试听片段 ${seconds.toFixed(1)} 秒）`
+            : '连接成功，但返回的音频为空',
+      }
     } else {
       throw err.validation('不支持的连接器类型')
     }

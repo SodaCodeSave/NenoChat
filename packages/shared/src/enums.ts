@@ -12,6 +12,7 @@ export const MessageType = {
   Image: 'image',
   File: 'file',
   Sticker: 'sticker',
+  Voice: 'voice',
   System: 'system',
 } as const
 export type MessageType = (typeof MessageType)[keyof typeof MessageType]

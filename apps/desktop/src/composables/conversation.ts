@@ -51,6 +51,8 @@ export function messagePreview(message: Message | null | undefined): string {
       return `[文件] ${message.meta?.attachments?.[0]?.filename ?? ''}`.trim()
     case 'sticker':
       return '[表情]'
+    case 'voice':
+      return '[语音]'
     case 'system':
       return message.content
     default:

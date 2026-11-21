@@ -6,6 +6,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import type { AttachmentRef, Message, Sticker } from '@nenochat/shared'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
+import { useVoiceRecorder } from '@/composables/use-voice-recorder'
 import { useAuthStore } from '@/stores/auth'
 import { useMembersStore } from '@/stores/members'
 import { useStickersStore } from '@/stores/stickers'
@@ -35,6 +36,7 @@ const emit = defineEmits<{
   (e: 'cancel-reply'): void
   (e: 'cancel-edit'): void
   (e: 'attachment', payload: { attachment: AttachmentRef; type: 'image' | 'file' }): void
+  (e: 'voice', attachment: AttachmentRef): void
   (e: 'sticker', sticker: Sticker): void
 }>()
 
@@ -289,6 +291,62 @@ function sendSticker(sticker: Sticker): void {
 /** AI 会话模式下先缓冲的图片，发送时随正文一起交出去 */
 const pendingAttachments = ref<AttachmentRef[]>([])
 
+/* --------------------------- 语音录制 --------------------------- */
+
+const {
+  state: recorderState,
+  seconds: recorderSeconds,
+  error: recorderError,
+  start: recorderStart,
+  stop: recorderStop,
+  cancel: recorderCancel,
+} = useVoiceRecorder()
+const voiceUploading = ref(false)
+
+function formatRecordSeconds(total: number): string {
+  const minutes = Math.floor(total / 60)
+  const rest = total % 60
+  return minutes > 0 ? `${minutes}:${String(rest).padStart(2, '0')}` : `${rest}″`
+}
+
+/** 点麦克风开始录音；再次点（或点发送）结束并上传发送 */
+async function toggleRecording(): Promise<void> {
+  if (recorderState.value === 'recording') {
+    await sendRecording()
+    return
+  }
+  if (recorderState.value === 'processing') return
+  await recorderStart()
+}
+
+async function sendRecording(): Promise<void> {
+  const result = await recorderStop()
+  if (!result) return
+  voiceUploading.value = true
+  uploadError.value = null
+  try {
+    const attachment = await uploadFile(result.file, { kind: 'file' })
+    emit('voice', {
+      id: attachment.id,
+      kind: 'voice',
+      filename: attachment.filename,
+      mime: attachment.mime,
+      size: attachment.size,
+      duration: Math.round((result.durationMs / 1000) * 10) / 10,
+      url: attachment.url,
+      thumbUrl: attachment.thumbUrl,
+    })
+  } catch (e) {
+    uploadError.value = e instanceof Error ? e.message : '语音发送失败'
+  } finally {
+    voiceUploading.value = false
+  }
+}
+
+async function cancelRecording(): Promise<void> {
+  await recorderCancel()
+}
+
 function removePending(id: string): void {
   pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
 }
@@ -460,6 +518,35 @@ onMounted(() => {
     </div>
 
     <p v-if="uploadError" class="mb-1.5 text-[11.5px] text-danger">{{ uploadError }}</p>
+    <p v-else-if="recorderError" class="mb-1.5 text-[11.5px] text-danger">{{ recorderError }}</p>
+
+    <!-- 录音中：计时 + 取消/发送，盖在输入区上方 -->
+    <div
+      v-if="recorderState !== 'idle'"
+      class="mb-1.5 flex items-center gap-2 rounded-lg bg-danger/10 px-2.5 py-2"
+    >
+      <Icon name="mic" :size="14" class="animate-pulse text-danger" />
+      <span class="text-[13px] tabular-nums text-text">{{ formatRecordSeconds(recorderSeconds) }}</span>
+      <span class="min-w-0 flex-1 truncate text-[11.5px] text-muted">
+        {{ recorderState === 'processing' || voiceUploading ? '正在发送…' : '正在录音…' }}
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        :disabled="recorderState === 'processing' || voiceUploading"
+        @click="cancelRecording"
+      >
+        取消
+      </Button>
+      <Button
+        size="sm"
+        variant="primary"
+        :loading="recorderState === 'processing' || voiceUploading"
+        @click="sendRecording"
+      >
+        发送
+      </Button>
+    </div>
 
     <!-- AI 会话：待发送的图片，随正文一起发出 -->
     <div v-if="aiMode && pendingAttachments.length > 0" class="mb-1.5 flex flex-wrap gap-1.5">
@@ -513,6 +600,13 @@ onMounted(() => {
           :label="aiMode ? '发送图片（AI 可识别）' : '发送图片或文件'"
           :size="17"
           @click="fileInput?.click()"
+        />
+        <IconButton
+          icon="mic"
+          :label="recorderState === 'recording' ? '停止并发送语音' : '发语音消息'"
+          :size="17"
+          :class="recorderState === 'recording' ? 'text-danger' : ''"
+          @click="toggleRecording"
         />
         <span v-if="!ui.isMobile" class="ml-auto text-[11px] text-muted">
           {{ ui.sendKey === 'enter' ? 'Enter 发送' : 'Ctrl+Enter 发送' }}

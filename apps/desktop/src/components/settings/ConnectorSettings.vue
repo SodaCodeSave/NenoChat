@@ -7,6 +7,7 @@ import Field from '@/components/ui/form/Field.vue'
 import TextInput from '@/components/ui/form/TextInput.vue'
 import Textarea from '@/components/ui/form/Textarea.vue'
 import NumberInput from '@/components/ui/form/NumberInput.vue'
+import Select from '@/components/ui/form/Select.vue'
 import Button from '@/components/ui/form/Button.vue'
 import Switch from '@/components/ui/form/Switch.vue'
 import Alert from '@/components/ui/form/Alert.vue'
@@ -41,7 +42,25 @@ const form = ref({
   weatherOnUserMessage: false,
   weatherOnMention: true,
   weatherTool: false,
+  ttsVoice: 'mimo_default',
+  ttsInstruction: '',
+  /** 发语音概率按百分比填写，保存时换算成 0-1 */
+  voiceProbability: 0 as number | null,
+  voiceTool: false,
 })
+
+/** MiMo 预置音色：与官方预置音色列表一致，mimo_default 在中国集群映射为「冰糖」 */
+const MIMO_VOICES = [
+  { value: 'mimo_default', label: 'MiMo 默认（冰糖）' },
+  { value: '冰糖', label: '冰糖 · 中文女声' },
+  { value: '茉莉', label: '茉莉 · 中文女声' },
+  { value: '苏打', label: '苏打 · 中文男声' },
+  { value: '白桦', label: '白桦 · 中文男声' },
+  { value: 'Mia', label: 'Mia · 英文女声' },
+  { value: 'Chloe', label: 'Chloe · 英文女声' },
+  { value: 'Milo', label: 'Milo · 英文男声' },
+  { value: 'Dean', label: 'Dean · 英文男声' },
+]
 
 function connectorOf(type: ConnectorType): Connector | null {
   return connectors.value.find((item) => item.type === type) ?? null
@@ -81,6 +100,13 @@ function openForm(preset: ConnectorPreset): void {
     weatherOnUserMessage: existing?.config.weatherOnUserMessage ?? false,
     weatherOnMention: existing?.config.weatherOnMention ?? true,
     weatherTool: existing?.config.weatherTool ?? false,
+    ttsVoice: existing?.config.ttsVoice ?? 'mimo_default',
+    ttsInstruction: existing?.config.ttsInstruction ?? '',
+    voiceProbability:
+      existing?.config.voiceProbability === undefined || existing?.config.voiceProbability === null
+        ? 0
+        : Math.round(existing.config.voiceProbability * 100),
+    voiceTool: existing?.config.voiceTool ?? false,
   }
   error.value = null
   notice.value = null
@@ -110,36 +136,47 @@ async function save(): Promise<void> {
     error.value = '和风天气需要填写 API Key'
     return
   }
+  if (preset.type === 'mimo_tts' && !editingId.value && !form.value.apiKey.trim()) {
+    error.value = 'MiMo 语音需要填写 API Key'
+    return
+  }
   if (preset.type === 'heweather' && !form.value.location.trim() && (form.value.latitude === null || form.value.longitude === null)) {
     error.value = '请填写默认城市，或同时填写经纬度'
     return
   }
 
-  const config =
-    preset.type === 'deepseek_search'
-      ? {
-          baseUrl: form.value.baseUrl.trim() || null,
-          count: form.value.count ?? 5,
-        }
-      : preset.type === 'bilibili'
-        ? { maxComments: form.value.maxComments ?? 8 }
-        : {
-            baseUrl: form.value.baseUrl.trim() || null,
-            location: form.value.location.trim() || null,
-            latitude: form.value.latitude,
-            longitude: form.value.longitude,
-            weatherAlways: form.value.weatherAlways,
-            weatherOnUserMessage: form.value.weatherOnUserMessage,
-            weatherOnMention: form.value.weatherOnMention,
-            weatherTool: form.value.weatherTool,
-          }
+  let config: Record<string, unknown>
+  if (preset.type === 'deepseek_search') {
+    config = {
+      baseUrl: form.value.baseUrl.trim() || null,
+      count: form.value.count ?? 5,
+    }
+  } else if (preset.type === 'bilibili') {
+    config = { maxComments: form.value.maxComments ?? 8 }
+  } else if (preset.type === 'mimo_tts') {
+    config = {
+      baseUrl: form.value.baseUrl.trim() || null,
+      ttsVoice: form.value.ttsVoice,
+      ttsInstruction: form.value.ttsInstruction.trim() || null,
+      voiceProbability: Math.min(1, Math.max(0, (form.value.voiceProbability ?? 0) / 100)),
+      voiceTool: form.value.voiceTool,
+    }
+  } else {
+    config = {
+      baseUrl: form.value.baseUrl.trim() || null,
+      location: form.value.location.trim() || null,
+      latitude: form.value.latitude,
+      longitude: form.value.longitude,
+      weatherAlways: form.value.weatherAlways,
+      weatherOnUserMessage: form.value.weatherOnUserMessage,
+      weatherOnMention: form.value.weatherOnMention,
+      weatherTool: form.value.weatherTool,
+    }
+  }
 
   // 编辑时留空表示保持原凭据不变，避免误清空
   const secret: { apiKey?: string; cookie?: string } = {}
-  if (preset.type === 'deepseek_search' && form.value.apiKey.trim()) {
-    secret.apiKey = form.value.apiKey.trim()
-  }
-  if (preset.type === 'heweather' && form.value.apiKey.trim()) {
+  if ((preset.type === 'deepseek_search' || preset.type === 'heweather' || preset.type === 'mimo_tts') && form.value.apiKey.trim()) {
     secret.apiKey = form.value.apiKey.trim()
   }
   if (preset.type === 'bilibili' && form.value.cookie.trim()) {
@@ -413,6 +450,63 @@ onMounted(() => {
               <Switch v-model="form[setting.key]" size="sm" />
             </label>
           </div>
+        </template>
+        <template v-else-if="activePreset && String(activePreset.type) === 'mimo_tts'">
+          <Field
+            label="MiMo API Key"
+            for-id="connector-key"
+            :hint="
+              editingConnector?.secretMasked.apiKey
+                ? `已保存：${editingConnector.secretMasked.apiKey}，留空表示不修改`
+                : '在 MiMo 开放平台获取，服务端加密保存，只返回掩码'
+            "
+          >
+            <TextInput
+              id="connector-key"
+              v-model="form.apiKey"
+              type="password"
+              placeholder="请输入 API Key"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </Field>
+          <Field label="API 地址" for-id="connector-base" optional hint="留空使用 api.xiaomimimo.com/v1；也可填自建代理地址">
+            <TextInput
+              id="connector-base"
+              v-model="form.baseUrl"
+              placeholder="https://api.xiaomimimo.com/v1"
+              spellcheck="false"
+            />
+          </Field>
+          <Field label="音色" for-id="connector-voice">
+            <Select id="connector-voice" v-model="form.ttsVoice" :options="MIMO_VOICES" />
+          </Field>
+          <Field
+            label="风格指令"
+            for-id="connector-instruction"
+            optional
+            hint="自然语言描述语气与风格，如「温柔但带一点沙哑，语速偏慢」，每次合成都生效"
+          >
+            <Textarea
+              id="connector-instruction"
+              v-model="form.ttsInstruction"
+              :rows="3"
+              placeholder="例：用轻快活泼的语气说话，语速稍快，像朋友聊天"
+            />
+          </Field>
+          <Field label="自动发语音概率" for-id="connector-probability" hint="AI 每条回复按此概率转成语音，0 表示不启用">
+            <NumberInput
+              id="connector-probability"
+              v-model="form.voiceProbability"
+              :min="0"
+              :max="100"
+              suffix="%"
+            />
+          </Field>
+          <label class="flex items-center justify-between gap-3 text-[12px] text-text">
+            允许 AI 主动发语音（模型觉得合适时在回复里带 [[voice]] 标记）
+            <Switch v-model="form.voiceTool" size="sm" />
+          </label>
         </template>
         <template v-else>
           <Field

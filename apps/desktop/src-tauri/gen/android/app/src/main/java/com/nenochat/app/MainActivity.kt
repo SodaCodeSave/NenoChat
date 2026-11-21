@@ -3,10 +3,12 @@ package com.nenochat.app
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Base64
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -15,6 +17,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import java.io.File
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
@@ -23,12 +26,19 @@ class MainActivity : TauriActivity() {
   companion object {
     private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
     private const val REQUEST_LOCAL_NETWORK = 7101
+    private const val RECORD_AUDIO_PERMISSION = "android.permission.RECORD_AUDIO"
+    private const val REQUEST_RECORD_AUDIO = 7102
     private const val PREFS = "nenochat.native"
     private const val KEY_ASKED = "localNetworkRequested"
 
     /** 本地网络权限自 Android 17（API 37）引入，低版本由 INTERNET 隐式放行 */
     private const val MIN_LOCAL_NETWORK_API = 37
   }
+
+  /** 原生录音器状态；只允许同一时刻一段录音 */
+  private var voiceRecorder: MediaRecorder? = null
+  private var voiceFile: File? = null
+  private var voiceStartedAt: Long = 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -61,6 +71,9 @@ class MainActivity : TauriActivity() {
     // 局域网权限没有浏览器层的请求入口，由页面通过这座桥向原生侧索要
     this.webView = webView
     webView.addJavascriptInterface(LocalNetworkBridge(), "NenoLocalNetwork")
+    // WebView 里 getUserMedia 需要 WebChromeClient 接管权限弹窗，与 Tauri 自身的
+    // chrome client 冲突，所以语音消息的录音走原生 MediaRecorder 桥
+    webView.addJavascriptInterface(VoiceBridge(), "NenoVoiceBridge")
   }
 
   private fun supportsLocalNetwork() = Build.VERSION.SDK_INT >= MIN_LOCAL_NETWORK_API
@@ -170,5 +183,134 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun diagnostics(): String = diagnosticsJson()
+  }
+
+  /* ------------------------------ 语音消息录音 ------------------------------ */
+
+  private fun micPermissionGranted(): Boolean =
+    ContextCompat.checkSelfPermission(this, RECORD_AUDIO_PERMISSION) ==
+      PackageManager.PERMISSION_GRANTED
+
+  private fun requestMicPermission() {
+    ActivityCompat.requestPermissions(this, arrayOf(RECORD_AUDIO_PERMISSION), REQUEST_RECORD_AUDIO)
+  }
+
+  private fun startVoiceRecording(): JSONObject {
+    if (!micPermissionGranted()) {
+      runOnUiThread { requestMicPermission() }
+      return JSONObject().put("ok", false).put("error", "需要麦克风权限，请再次点击开始录音")
+    }
+    if (voiceRecorder != null) {
+      return JSONObject().put("ok", false).put("error", "已经在录音中")
+    }
+    val file = File(cacheDir, "voice-${System.currentTimeMillis()}.m4a")
+    try {
+      // MediaRecorder 构造器在 API 31 标记过时但仍可用；保持旧写法避免分版本适配
+      @Suppress("DEPRECATION")
+      val recorder = MediaRecorder()
+      recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+      recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+      recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+      recorder.setAudioSamplingRate(44100)
+      recorder.setAudioChannels(1)
+      recorder.setAudioEncodingBitRate(96000)
+      recorder.setOutputFile(file.absolutePath)
+      recorder.prepare()
+      recorder.start()
+      voiceRecorder = recorder
+      voiceFile = file
+      voiceStartedAt = System.currentTimeMillis()
+      return JSONObject().put("ok", true)
+    } catch (e: Exception) {
+      file.delete()
+      voiceRecorder = null
+      voiceFile = null
+      return JSONObject().put("ok", false).put("error", "无法启动录音：${e.message ?: "未知错误"}")
+    }
+  }
+
+  private fun deliverVoiceResult(payload: JSONObject?) {
+    val target = webView ?: return
+    // JSONObject.quote 产出的字符串字面量既是合法 JSON 也是合法 JS 表达式
+    val script =
+      "window.__nenoVoiceResult&&window.__nenoVoiceResult(" +
+        JSONObject.quote(payload?.toString() ?: "null") +
+        ")"
+    target.post { target.evaluateJavascript(script, null) }
+  }
+
+  /** 停止录音并把文件读成 base64 回传；结果通过 window.__nenoVoiceResult 送回页面 */
+  private fun stopVoiceRecording() {
+    val recorder = voiceRecorder
+    val file = voiceFile
+    if (recorder == null || file == null) {
+      deliverVoiceResult(null)
+      return
+    }
+    val durationMs = System.currentTimeMillis() - voiceStartedAt
+    try {
+      recorder.stop()
+    } catch (e: Exception) {
+      // 录音太短等场景 stop 会抛异常，按无结果处理
+      recorder.release()
+      voiceRecorder = null
+      file.delete()
+      voiceFile = null
+      deliverVoiceResult(null)
+      return
+    }
+    recorder.release()
+    voiceRecorder = null
+    voiceFile = null
+    try {
+      val bytes = file.readBytes()
+      val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+      val payload = JSONObject()
+        .put("base64", base64)
+        .put("mime", "audio/mp4")
+        .put("durationMs", if (durationMs > 0) durationMs.toLong() else 0L)
+      file.delete()
+      deliverVoiceResult(payload)
+    } catch (e: Exception) {
+      file.delete()
+      deliverVoiceResult(null)
+    }
+  }
+
+  private fun cancelVoiceRecording() {
+    val recorder = voiceRecorder
+    voiceRecorder = null
+    val file = voiceFile
+    voiceFile = null
+    if (recorder != null) {
+      try {
+        recorder.stop()
+      } catch (_: Exception) {
+        // 取消时录音文件作废，异常无需处理
+      }
+      recorder.release()
+    }
+    file?.delete()
+  }
+
+  override fun onDestroy() {
+    super.onDestroy()
+    cancelVoiceRecording()
+  }
+
+  /** 暴露给页面的原生录音桥；录出来的音频以 base64 回传给页面转 File 上传 */
+  private inner class VoiceBridge {
+    @JavascriptInterface
+    fun start(): String = startVoiceRecording().toString()
+
+    @JavascriptInterface
+    fun stop() {
+      runOnUiThread { stopVoiceRecording() }
+    }
+
+    @JavascriptInterface
+    fun cancel() {
+      runOnUiThread { cancelVoiceRecording() }
+    }
   }
 }

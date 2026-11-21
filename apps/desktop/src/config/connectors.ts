@@ -4,6 +4,8 @@ import bilibiliIcon from '@lobehub/icons-static-svg/icons/bilibili-color.svg?raw
 import bilibiliTextIcon from '@lobehub/icons-static-svg/icons/bilibili-text.svg?raw'
 import heweatherIcon from '@/assets/heweather-icon.svg?raw'
 import heweatherTextIcon from '@/assets/heweather-text.svg?raw'
+import mimoIcon from '@lobehub/icons-static-svg/icons/xiaomimimo.svg?raw'
+import mimoTextIcon from '@lobehub/icons-static-svg/icons/xiaomimimo-text.svg?raw'
 import type { ConnectorType } from '@nenochat/shared'
 
 export interface ConnectorPreset {
@@ -53,6 +55,16 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     capability: '无字幕时降级为标题、简介与热评总结；总结静默注入对话',
     icon: bilibiliIcon,
     textIcon: bilibiliTextIcon,
+  },
+  {
+    id: 'mimo-tts',
+    type: 'mimo_tts',
+    label: 'MiMo 语音',
+    name: 'MiMo 语音',
+    description: '接入小米 MiMo 语音合成，让 AI 用语音回复',
+    capability: 'AI 可按概率或用 [[voice]] 标记发语音；用户语音识别（ASR）即将支持',
+    icon: mimoIcon,
+    textIcon: mimoTextIcon,
   },
 ]
 

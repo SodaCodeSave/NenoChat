@@ -312,6 +312,22 @@ textarea {
   animation: neno-blink 1s steps(2, start) infinite;
 }
 
+/* 语音气泡的声浪条：播放时上下跳动 */
+@keyframes neno-voice-bar {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.voice-bar {
+  transform-origin: bottom;
+  animation: neno-voice-bar 0.9s ease-in-out infinite;
+}
+
 /* ---------------------------- 反馈动效 ---------------------------- */
 
 @keyframes neno-fade-in {

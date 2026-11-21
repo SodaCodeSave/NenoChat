@@ -23,6 +23,7 @@ const CACHE_CATEGORY: Record<CachedFileKind, StorageCategoryKey> = {
   avatar: 'images',
   file: 'files',
   sticker: 'stickers',
+  voice: 'files',
 }
 
 /** 人类可读的字节数，保留合适的精度 */
