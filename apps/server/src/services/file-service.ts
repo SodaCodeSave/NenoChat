@@ -98,7 +98,21 @@ export async function saveUpload(db: DB, input: SaveUploadInput): Promise<Attach
   const sha256 = crypto.createHash('sha256').update(input.buffer).digest('hex')
 
   const existing = await attachmentsRepo.findBySha(db, input.userId, sha256)
-  if (existing) return attachmentsRepo.mapAttachment(existing)
+  // 去重命中也不能直接复用：文件可能与库脱节（容器重建丢盘等场景），
+  // 磁盘上真的存在才返回；缺失时按原 storage_key 补写文件自愈，不重复建行
+  if (existing) {
+    const absolute = path.join(dataDir(), 'files', existing.storage_key)
+    if (fs.existsSync(absolute)) {
+      return attachmentsRepo.mapAttachment(existing)
+    }
+    fs.mkdirSync(path.dirname(absolute), { recursive: true })
+    try {
+      fs.writeFileSync(absolute, input.buffer, { flag: 'wx' })
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+    }
+    return attachmentsRepo.mapAttachment(existing)
+  }
 
   const folder = input.kind === 'avatar' ? 'avatars' : input.kind === 'sticker' ? 'stickers' : 'files'
   const storageKey = `${folder}/${sha256.slice(0, 2)}/${sha256.slice(2, 4)}/${sha256}${ext}`

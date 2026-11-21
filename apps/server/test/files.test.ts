@@ -107,6 +107,28 @@ describe('文件上传', () => {
     expect(second.json.attachment.id).toBe(first.json.attachment.id)
   })
 
+  it('去重命中但文件丢失时重新补盘，不再返回 404', async () => {
+    const { dataDir: dataDirOf } = await import('../src/db')
+    const buffer = pngBuffer(96)
+    const first = await upload(buffer, 'heal.png', 'image/png')
+    expect(first.status).toBe(200)
+    const url = first.json.attachment.url as string
+
+    // 模拟容器重建丢盘：把已入库的文件从磁盘删掉
+    const diskPath = path.join(dataDirOf(), 'files', url.slice('/files/'.length))
+    rmSync(diskPath)
+    const broken = await app.inject({ method: 'GET', url })
+    expect(broken.statusCode).toBe(404)
+
+    // 同一内容重新上传：去重命中已入库行，但必须把文件补写回来
+    const again = await upload(buffer, 'heal.png', 'image/png')
+    expect(again.status).toBe(200)
+    expect(again.json.attachment.id).toBe(first.json.attachment.id)
+
+    const fetched = await app.inject({ method: 'GET', url })
+    expect(fetched.statusCode).toBe(200)
+  })
+
   it('内容与类型不符的头像被拒绝', async () => {
     const res = await upload(Buffer.from('not an image at all'), 'fake.png', 'image/png')
     expect(res.status).toBe(400)
