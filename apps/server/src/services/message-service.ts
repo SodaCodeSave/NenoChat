@@ -218,7 +218,7 @@ export async function forward(
   const byId = new Map(rows.map((row) => [row.id, row]))
   const sources = input.messageIds
     .map((id) => byId.get(id))
-    .filter((row): row is MessageRow => Boolean(row) && row.deleted_at === null && row.type !== 'system')
+    .filter((row): row is MessageRow => row !== undefined && row.deleted_at === null && row.type !== 'system')
   if (sources.length === 0) throw err.validation('没有可转发的消息')
 
   const sourceConversations = [...new Set(sources.map((row) => row.conversation_id))]
