@@ -1,0 +1,145 @@
+@import 'tailwindcss';
+
+/* 深色模式由 <html class="dark"> 驱动（与 desktop 共用一套令牌，取聊天客户端的子集） */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --surface: #ffffff;
+  --surface-2: #f5f6f8;
+  --surface-3: #eceef2;
+  --border: #e3e6ec;
+  --text: #1a1a1e;
+  --text-strong: #0d0d10;
+  --muted: #6b7280;
+  --accent: #2f6bff;
+  --accent-soft: #e8eeff;
+  --accent-text: #ffffff;
+  --danger: #e5484d;
+  --success: #2fa84f;
+  --shadow-soft: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px rgb(16 24 40 / 0.06);
+  --radius-panel: 12px;
+}
+
+.dark {
+  --surface: #1e1f22;
+  --surface-2: #2b2d31;
+  --surface-3: #35373c;
+  --border: #3a3d44;
+  --text: #e6e7ea;
+  --text-strong: #f7f8fa;
+  --muted: #949ba4;
+  --accent: #5865f2;
+  --accent-soft: #2f3350;
+  --accent-text: #ffffff;
+  --danger: #f2555a;
+  --success: #3ba55d;
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.32);
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border);
+  --color-text: var(--text);
+  --color-text-strong: var(--text-strong);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+
+  --radius-panel: var(--radius-panel);
+
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+}
+
+/* 动效令牌：只做反馈（与 DESIGN.md 约定一致） */
+@theme {
+  --animate-fade-in: neno-fade-in 140ms ease-out both;
+  --animate-rise-in: neno-rise-in 140ms ease-out both;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* 表格与长列表的滚动条 */
+.scroll-area {
+  overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes neno-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes neno-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

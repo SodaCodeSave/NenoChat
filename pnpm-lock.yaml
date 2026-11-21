@@ -166,6 +166,49 @@ importers:
 
   .: {}
 
+  apps/admin:
+    dependencies:
+      '@nenochat/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      pinia:
+        specifier: ^3
+        version: 3.0.4(typescript@5.9.3)(vue@3.5.45(typescript@5.9.3))
+      reka-ui:
+        specifier: ^2
+        version: 2.11.0(vue@3.5.45(typescript@5.9.3))
+      vue:
+        specifier: ^3.5.13
+        version: 3.5.45(typescript@5.9.3)
+      vue-router:
+        specifier: ^4
+        version: 4.6.5(vue@3.5.45(typescript@5.9.3))
+      zod:
+        specifier: ^4
+        version: 4.6.7
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4
+        version: 4.3.5(vite@8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.7
+        version: 6.0.11(vite@8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(vue@3.5.45(typescript@5.9.3))
+      tailwindcss:
+        specifier: ^4
+        version: 4.3.5
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.0.16
+        version: 8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
+      vitest:
+        specifier: ^5
+        version: 5.1.0(@types/node@22.20.5)(vite@8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vue-tsc:
+        specifier: ^3.3.5
+        version: 3.3.14(typescript@5.9.3)
+
   apps/desktop:
     dependencies:
       '@lobehub/icons-static-svg':
