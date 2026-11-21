@@ -139,6 +139,11 @@ export const messageApi = {
     ),
   send: (body: SendMessageBody) =>
     http.post<{ message: Message; duplicated: boolean }>(p('/messages'), body),
+  forward: (messageIds: string[], targetConversationIds: string[]) =>
+    http.post<{ results: Array<{ conversationId: string; messages: Message[] }> }>(
+      p('/messages/forward'),
+      { messageIds, targetConversationIds },
+    ),
   edit: (messageId: string, content: string) =>
     http.patch<{ message: Message }>(p(`/messages/${messageId}`), { content }),
   recall: (messageId: string) => http.delete<{ message: Message }>(p(`/messages/${messageId}`)),

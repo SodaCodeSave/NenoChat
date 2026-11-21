@@ -213,6 +213,9 @@ importers:
       '@vueuse/core':
         specifier: ^13
         version: 13.9.0(vue@3.5.45(typescript@5.9.3))
+      modern-screenshot:
+        specifier: ^4.7.0
+        version: 4.7.0
       pinia:
         specifier: ^3
         version: 3.0.4(typescript@5.9.3)(vue@3.5.45(typescript@5.9.3))
@@ -1605,6 +1608,9 @@ packages:
 
   mnemonist@0.40.8:
     resolution: {integrity: sha512-tebbu8e/W45Nz7USfGcmnHUiOcNsXa9Mow8eb0UPwOk3gu6grw0/2+SefXBJCgDQpE9mdn7dNUMJBra9mcRUVw==}
+
+  modern-screenshot@4.7.0:
+    resolution: {integrity: sha512-9YxN+ddPSMMlhylOv25VHzXrl9u67QRxoh7+SEewGtgUw7t6hHTrjptSDJUSne9oG4Xk/h2cwG15nIt4Hc9ujg==}
 
   muggle-string@0.4.1:
     resolution: {integrity: sha512-VNTrAak/KhO2i8dqqnqnAHOa3cYBwXEZe9h+D5h/1ZqFSTEFHdM65lR7RoIqq3tBBYavsOXV84NoHXZ0AkPyqQ==}
@@ -3205,6 +3211,8 @@ snapshots:
   mnemonist@0.40.8:
     dependencies:
       obliterator: 2.0.5
+
+  modern-screenshot@4.7.0: {}
 
   muggle-string@0.4.1: {}
 

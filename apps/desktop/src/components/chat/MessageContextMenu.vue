@@ -21,6 +21,9 @@ const emit = defineEmits<{
   (e: 'pin'): void
   (e: 'recall'): void
   (e: 'copied'): void
+  (e: 'forward'): void
+  (e: 'select'): void
+  (e: 'screenshot'): void
 }>()
 
 const menu = ref<HTMLElement | null>(null)
@@ -44,7 +47,7 @@ function requestClose(): void {
 /** 菜单不能超出视口 */
 const position = computed(() => {
   const width = 168
-  const height = confirming.value ? 116 : 190
+  const height = confirming.value ? 116 : 264
   return {
     left: `${Math.min(props.x, window.innerWidth - width - 12)}px`,
     top: `${Math.min(props.y, window.innerHeight - height - 12)}px`,
@@ -124,6 +127,15 @@ onBeforeUnmount(() => {
         </button>
         <button type="button" :class="itemClass" @click="copyText">
           <Icon name="copy" :size="ui.isMobile ? 17 : 14" /> 复制文本
+        </button>
+        <button type="button" :class="itemClass" @click="emit('forward'); emit('close')">
+          <Icon name="forward" :size="ui.isMobile ? 17 : 14" /> 转发
+        </button>
+        <button type="button" :class="itemClass" @click="emit('select'); emit('close')">
+          <Icon name="check" :size="ui.isMobile ? 17 : 14" /> 多选
+        </button>
+        <button type="button" :class="itemClass" @click="emit('screenshot'); emit('close')">
+          <Icon name="camera" :size="ui.isMobile ? 17 : 14" /> 生成截图
         </button>
         <button
           v-if="canEdit"

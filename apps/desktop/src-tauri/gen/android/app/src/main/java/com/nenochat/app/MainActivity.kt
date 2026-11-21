@@ -1,5 +1,6 @@
 package com.nenochat.app
 
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -7,6 +8,8 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Base64
 import android.view.View
@@ -74,6 +77,8 @@ class MainActivity : TauriActivity() {
     // WebView 里 getUserMedia 需要 WebChromeClient 接管权限弹窗，与 Tauri 自身的
     // chrome client 冲突，所以语音消息的录音走原生 MediaRecorder 桥
     webView.addJavascriptInterface(VoiceBridge(), "NenoVoiceBridge")
+    // 聊天截图等生成的图片通过这座桥写入系统相册
+    webView.addJavascriptInterface(MediaBridge(), "NenoMediaBridge")
   }
 
   private fun supportsLocalNetwork() = Build.VERSION.SDK_INT >= MIN_LOCAL_NETWORK_API
@@ -312,5 +317,52 @@ class MainActivity : TauriActivity() {
     fun cancel() {
       runOnUiThread { cancelVoiceRecording() }
     }
+  }
+
+  /* ------------------------------ 图片保存到相册 ------------------------------ */
+
+  /**
+   * 把 PNG 写入系统相册：
+   * Android 10（API 29）起走 MediaStore 的 Pictures/NenoChat，无需存储权限；
+   * 更低版本写入应用外部私有目录（相册应用不一定收录，但文件管理器与分享可达）。
+   */
+  private fun savePngToGallery(fileName: String, base64: String): JSONObject {
+    val bytes = try {
+      Base64.decode(base64, Base64.NO_WRAP)
+    } catch (e: Exception) {
+      return JSONObject().put("ok", false).put("error", "图片数据无效")
+    }
+    if (bytes.isEmpty()) {
+      return JSONObject().put("ok", false).put("error", "图片数据为空")
+    }
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val values = ContentValues().apply {
+          put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+          put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+          put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/NenoChat")
+        }
+        val uri =
+          contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return JSONObject().put("ok", false).put("error", "无法写入相册")
+        contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+          ?: return JSONObject().put("ok", false).put("error", "无法写入相册")
+        JSONObject().put("ok", true).put("uri", uri.toString())
+      } else {
+        val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+          ?: return JSONObject().put("ok", false).put("error", "无法访问存储")
+        val file = File(dir, fileName)
+        file.writeBytes(bytes)
+        JSONObject().put("ok", true).put("uri", Uri.fromFile(file).toString())
+      }
+    } catch (e: Exception) {
+      JSONObject().put("ok", false).put("error", "保存失败：${e.message ?: "未知错误"}")
+    }
+  }
+
+  /** 暴露给页面的相册保存桥；JS 端探测 window.NenoMediaBridge */
+  private inner class MediaBridge {
+    @JavascriptInterface
+    fun savePng(fileName: String, base64: String): String = savePngToGallery(fileName, base64).toString()
   }
 }

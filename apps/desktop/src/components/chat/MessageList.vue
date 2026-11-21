@@ -5,13 +5,11 @@ import MessageItem from './MessageItem.vue'
 import DecisionStrip from './DecisionStrip.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { smoothScrollBehavior } from '@/composables/motion'
+import { dayKey, dayLabel, useMessageDisplay } from '@/composables/message-display'
 import { describeUsage } from './debug-labels'
 import { useAiStore } from '@/stores/ai'
 import { useAuthStore } from '@/stores/auth'
-import { useConversationsStore } from '@/stores/conversations'
 import { useDebugStore } from '@/stores/debug'
-import { useMembersStore } from '@/stores/members'
-import { messagePreview } from '@/composables/conversation'
 import { collapseAccidentalDuplicates } from '@/composables/message-merge'
 
 const props = defineProps<{
@@ -27,6 +25,10 @@ const props = defineProps<{
   unreadAfterSeq?: number
   /** 从搜索结果跳转过来时要定位的消息 id */
   highlightId?: string | null
+  /** 多选模式：行内显示勾选框，点击切换选中 */
+  selectMode?: boolean
+  /** 已选中的消息 id 集合 */
+  selectedIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -38,16 +40,20 @@ const emit = defineEmits<{
   (e: 'context', payload: { id: string; x: number; y: number }): void
   (e: 'preview', url: string): void
   (e: 'visible-last', seq: number): void
+  (e: 'toggle-select', id: string): void
   /** 引用块指向的消息不在已加载范围时，请求补拉上下文 */
   (e: 'load-around', id: string): void
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
 const auth = useAuthStore()
-const members = useMembersStore()
 const ai = useAiStore()
-const conversations = useConversationsStore()
 const debug = useDebugStore()
+
+/** 发送者名称/头像/seed 与引用摘要：与聊天截图共用同一套解析 */
+const { senderName, senderAvatar, senderSeed, replyViewOf } = useMessageDisplay(
+  () => props.messages,
+)
 
 /** 调试模式开着才拉取/渲染决策与用量 */
 const debugOn = computed(() => ai.globalSettings?.debugMode ?? false)
@@ -85,30 +91,6 @@ const streamingMessage = computed<Message | null>(() => {
     updatedAt: Date.now(),
   }
 })
-
-function dayKey(ts: number): string {
-  const date = new Date(ts)
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-}
-
-function dayLabel(ts: number): string {
-  const date = new Date(ts)
-  const now = new Date()
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  if (sameDay) return '今天'
-  const yesterday = new Date(now.getTime() - 86400000)
-  if (
-    date.getFullYear() === yesterday.getFullYear() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getDate() === yesterday.getDate()
-  ) {
-    return '昨天'
-  }
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
-}
 
 /** 触发消息 id → 该消息后要插入的决策行 */
 const decisionsByTrigger = computed(() => {
@@ -209,81 +191,6 @@ const rows = computed<Row[]>(() => {
 
   return output
 })
-
-/**
- * 消息对应的 AI 角色。
- * 优先看消息自带的 personaId（历史消息可能没有），再退回会话绑定的角色，
- * 这样一个会话里就算换过角色也能显示对的人。
- */
-function personaOfMessage(message: Message): { name: string; avatarUrl: string | null } | null {
-  const byMessage = message.meta?.ai?.personaId
-  if (byMessage) {
-    const found = ai.personas.find((p) => p.id === byMessage)
-    if (found) return { name: found.name, avatarUrl: found.avatarUrl ?? null }
-  }
-  const byConversation = ai.personaOf(message.conversationId)
-  if (byConversation) return { name: byConversation.name, avatarUrl: byConversation.avatarUrl ?? null }
-  return null
-}
-
-function senderName(message: Message): string {
-  if (message.senderType === 'ai') {
-    return (
-      personaOfMessage(message)?.name ??
-      conversations.byId.get(message.conversationId)?.name ??
-      'AI'
-    )
-  }
-  if (message.senderId === auth.user?.id) return auth.user?.displayName ?? '我'
-  // 成员索引是 O(1) 查表：渲染路径每行都会走这里，不能用数组 find 扫
-  const member = members.memberIndex(message.conversationId).get(message.senderId ?? '')
-  if (member) return members.displayName(member)
-  return members.profiles[message.senderId ?? '']?.displayName ?? '未知用户'
-}
-
-function senderAvatar(message: Message): string | null {
-  if (message.senderType === 'ai') {
-    return (
-      personaOfMessage(message)?.avatarUrl ??
-      conversations.byId.get(message.conversationId)?.avatarUrl ??
-      null
-    )
-  }
-  if (message.senderId === auth.user?.id) return auth.user?.avatarUrl ?? null
-  const member = members.memberIndex(message.conversationId).get(message.senderId ?? '')
-  return member?.user?.avatarUrl ?? null
-}
-
-/** 没有头像时用 seed 派生稳定的底色，同一角色/用户永远同一个颜色 */
-function senderSeed(message: Message): string {
-  if (message.senderType === 'ai') {
-    return (
-      message.meta?.ai?.personaId ??
-      conversations.byId.get(message.conversationId)?.aiPersonaId ??
-      message.conversationId
-    )
-  }
-  return message.senderId ?? message.id
-}
-
-/* ------------------------- 引用块内容解析 ------------------------- */
-
-const messageById = computed(() => new Map(props.messages.map((message) => [message.id, message])))
-
-/** 优先用已加载到的原消息（能看到编辑后的内容），否则退回发送时定格的快照 */
-function replyViewOf(message: Message): { id: string; senderName: string; preview: string } | null {
-  if (!message.replyToId) return null
-  const target = messageById.value.get(message.replyToId)
-  if (target) {
-    // 预览文案统一走 conversation 里的 messagePreview，别处（会话列表等）也用它
-    return { id: target.id, senderName: senderName(target), preview: messagePreview(target) }
-  }
-  const snapshot = message.meta?.replyTo
-  if (snapshot) {
-    return { id: snapshot.id, senderName: snapshot.senderName, preview: snapshot.preview }
-  }
-  return { id: message.replyToId, senderName: '某条消息', preview: '原消息不在当前记录里' }
-}
 
 /* --------------------------- 虚拟滚动 --------------------------- */
 
@@ -662,6 +569,8 @@ defineExpose({ scrollToBottom })
         "
         :reply="replyViewOf(row.message)"
         :debug-line="row.debugLine"
+        :select-mode="selectMode"
+        :selected="Boolean(selectMode && selectedIds?.has(row.message.id))"
         @reply="(id) => emit('reply', id)"
         @recall="(id) => emit('recall', id)"
         @edit="(id) => emit('edit', id)"
@@ -669,6 +578,7 @@ defineExpose({ scrollToBottom })
         @jump="jumpTo"
         @context="(payload) => emit('context', payload)"
         @preview="(url) => emit('preview', url)"
+        @toggle-select="(id) => emit('toggle-select', id)"
       />
     </div>
 

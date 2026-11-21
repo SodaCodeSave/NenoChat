@@ -370,6 +370,23 @@ export const useMessagesStore = defineStore('messages', () => {
     await applyUpdated(result.message)
   }
 
+  /**
+   * 批量转发：服务端逐条复制到每个目标会话。
+   * 返回的消息合并进内存与本地镜像；自己的 WS 也会收到 message.created，
+   * 两路按 id 幂等合并，重复到达不会显示两条。
+   */
+  async function forwardMessages(messageIds: string[], targetConversationIds: string[]): Promise<number> {
+    const { results } = await messageApi.forward(messageIds, targetConversationIds)
+    let count = 0
+    for (const result of results) {
+      for (const message of result.messages) {
+        await applyCreated(message)
+        count += 1
+      }
+    }
+    return count
+  }
+
   /** 移除会话时清掉内存与本地消息镜像 */
   async function removeConversation(conversationId: string): Promise<void> {
     const next = { ...buckets.value }
@@ -403,6 +420,7 @@ export const useMessagesStore = defineStore('messages', () => {
     edit,
     recall,
     pin,
+    forwardMessages,
     removeConversation,
     reset,
   }

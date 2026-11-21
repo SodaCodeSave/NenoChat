@@ -7,10 +7,14 @@ import MemberSidebar from '@/components/chat/MemberSidebar.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageContextMenu from '@/components/chat/MessageContextMenu.vue'
+import MessageSelectionBar from '@/components/chat/MessageSelectionBar.vue'
+import ForwardDialog from '@/components/chat/ForwardDialog.vue'
+import ChatScreenshotSheet from '@/components/chat/ChatScreenshotSheet.vue'
 import DebugInfoBar from '@/components/chat/DebugInfoBar.vue'
 import MemoryPanel from '@/components/ai/MemoryPanel.vue'
 import SchedulePanel from '@/components/ai/SchedulePanel.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { useConversationTitle } from '@/composables/conversation'
 import { useAuthStore } from '@/stores/auth'
 import { useAiStore } from '@/stores/ai'
 import { useConversationsStore } from '@/stores/conversations'
@@ -19,6 +23,9 @@ import { useMembersStore } from '@/stores/members'
 import { useMessagesStore } from '@/stores/messages'
 import { useTypingStore } from '@/stores/typing'
 import { useUiStore } from '@/stores/ui'
+
+/** 单次转发条数上限，与服务端 ForwardMessagesSchema 一致 */
+const FORWARD_MAX = 50
 
 const route = useRoute()
 const router = useRouter()
@@ -63,6 +70,77 @@ const contextMenu = ref<{ message: Message; x: number; y: number } | null>(null)
 const previewUrl = ref<string | null>(null)
 const toast = ref<string | null>(null)
 let toastTimer = 0
+
+/* --------------------------- 多选 / 转发 / 截图 --------------------------- */
+
+const selectionMode = ref(false)
+const selectedIds = ref<Set<string>>(new Set())
+
+/** 转发对话框：待转发的消息 id 与开关 */
+const forwardOpen = ref(false)
+const forwardMessageIds = ref<string[]>([])
+/** 截图：参与合成的消息 id 与开关 */
+const screenshotOpen = ref(false)
+const screenshotIds = ref<Set<string>>(new Set())
+
+const titleOf = useConversationTitle()
+const conversationTitle = computed(() =>
+  conversation.value ? titleOf(conversation.value) : '聊天记录',
+)
+
+function enterSelectionMode(messageId?: string): void {
+  selectionMode.value = true
+  selectedIds.value = new Set(messageId ? [messageId] : [])
+}
+
+function exitSelectionMode(): void {
+  selectionMode.value = false
+  selectedIds.value = new Set()
+}
+
+/** 系统与撤回消息不参与多选，点选静默忽略 */
+function toggleSelect(messageId: string): void {
+  const message = allMessages.value.find((m) => m.id === messageId)
+  if (!message || message.deletedAt || message.type === 'system') return
+  const next = new Set(selectedIds.value)
+  if (next.has(messageId)) next.delete(messageId)
+  else next.add(messageId)
+  selectedIds.value = next
+}
+
+/** 打开转发对话框；超出服务端单次上限时直接提示 */
+function openForward(messageIds: string[]): void {
+  if (messageIds.length === 0) return
+  if (messageIds.length > FORWARD_MAX) {
+    showToast(`一次最多转发 ${FORWARD_MAX} 条消息`)
+    return
+  }
+  forwardMessageIds.value = messageIds
+  forwardOpen.value = true
+}
+
+/** 参与截图的消息：按 seq 升序，过滤不可选消息 */
+const screenshotSource = computed(() =>
+  allMessages.value
+    .filter((m) => screenshotIds.value.has(m.id) && !m.deletedAt && m.type !== 'system')
+    .sort((a, b) => a.seq - b.seq),
+)
+
+function openScreenshot(messageIds: string[]): void {
+  if (messageIds.length === 0) return
+  screenshotIds.value = new Set(messageIds)
+  screenshotOpen.value = true
+}
+
+async function performForward(targets: string[]): Promise<void> {
+  await messages.forwardMessages(forwardMessageIds.value, targets)
+  showToast(`已转发到 ${targets.length} 个会话`)
+  exitSelectionMode()
+}
+
+function onScreenshotSaved(target: 'desktop' | 'android' | 'browser'): void {
+  showToast(target === 'android' ? '已保存到相册' : target === 'desktop' ? '已保存' : '已开始下载')
+}
 
 function showToast(text: string): void {
   toast.value = text
@@ -182,6 +260,7 @@ watch(
     activeConversationId = next
     replyTo.value = null
     editing.value = null
+    exitSelectionMode()
     await loadConversation()
   },
   { immediate: true },
@@ -395,7 +474,15 @@ onBeforeUnmount(() => {
   <div class="flex h-full min-h-0">
     <div class="flex min-w-0 flex-1 flex-col">
       <template v-if="conversation">
+        <MessageSelectionBar
+          v-if="selectionMode"
+          :count="selectedIds.size"
+          @cancel="exitSelectionMode"
+          @forward="openForward([...selectedIds])"
+          @screenshot="openScreenshot([...selectedIds])"
+        />
         <ChatHeader
+          v-else
           :conversation="conversation"
           :typing-names="typingNames"
           :member-count="members.of(conversationId).length"
@@ -417,6 +504,8 @@ onBeforeUnmount(() => {
           :has-more-older="hasMoreOlder"
           :highlight-id="highlightId"
           :streaming="aiStreamRow"
+          :select-mode="selectionMode"
+          :selected-ids="selectedIds"
           @load-older="loadOlder"
           @load-around="handleLoadAround"
           @visible-last="handleVisibleLast"
@@ -426,6 +515,7 @@ onBeforeUnmount(() => {
           @pin="handlePin"
           @context="handleContext"
           @preview="(url) => (previewUrl = url)"
+          @toggle-select="toggleSelect"
         />
 
         <p v-if="aiError" class="border-t border-line bg-danger/10 px-4 py-2 text-[12px] text-danger">
@@ -539,6 +629,19 @@ onBeforeUnmount(() => {
       @pin="handlePin(contextMenu!.message.id)"
       @recall="handleRecall(contextMenu!.message.id)"
       @copied="showToast('已复制')"
+      @forward="openForward([contextMenu!.message.id])"
+      @select="enterSelectionMode(contextMenu!.message.id)"
+      @screenshot="openScreenshot([contextMenu!.message.id])"
+    />
+
+    <ForwardDialog v-model:open="forwardOpen" :message-count="forwardMessageIds.length" :perform="performForward" />
+
+    <ChatScreenshotSheet
+      v-model:open="screenshotOpen"
+      :conversation-name="conversationTitle"
+      :messages="screenshotSource"
+      :all-messages="allMessages"
+      @saved="onScreenshotSaved"
     />
 
     <!-- 图片预览 -->

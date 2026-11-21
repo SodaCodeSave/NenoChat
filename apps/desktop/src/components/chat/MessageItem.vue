@@ -39,6 +39,9 @@ const props = defineProps<{
   reply?: { id: string; senderName: string; preview: string } | null
   /** 调试模式：该条 AI 消息的真实用量摘要，空则不显示 */
   debugLine?: string | null
+  /** 多选模式：点击整行切换选中，隐藏菜单与操作条 */
+  selectMode?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -49,9 +52,13 @@ const emit = defineEmits<{
   (e: 'jump', id: string): void
   (e: 'context', payload: { id: string; x: number; y: number }): void
   (e: 'preview', url: string): void
+  (e: 'toggle-select', id: string): void
 }>()
 
 const deleted = computed(() => Boolean(props.message.deletedAt))
+
+/** 系统与撤回消息不参与多选 */
+const selectable = computed(() => !deleted.value && props.message.type !== 'system')
 
 /* ------------------------- 消息样式（Discord / QQ） ------------------------- */
 
@@ -177,11 +184,19 @@ function playVoice(): void {
 }
 
 function openContextMenu(event: MouseEvent): void {
-  // 撤回后的消息没有操作项，临时占位消息也不该有菜单
-  if (deleted.value || props.ephemeral) return
+  // 撤回后的消息没有操作项，临时占位消息也不该有菜单；多选模式点击即选择
+  if (deleted.value || props.ephemeral || props.selectMode) return
   if (ui.isMobile) return
   event.preventDefault()
   emit('context', { id: props.message.id, x: event.clientX, y: event.clientY })
+}
+
+/** 多选模式下任何点击（capture 阶段）都转为切换选中，阻断图片预览、语音播放等原生行为 */
+function onSelectCapture(event: MouseEvent): void {
+  if (!props.selectMode || !selectable.value) return
+  event.stopPropagation()
+  event.preventDefault()
+  emit('toggle-select', props.message.id)
 }
 
 const ui = useUiStore()
@@ -191,8 +206,8 @@ const ui = useUiStore()
 const press = useLongPress((x, y) => emit('context', { id: props.message.id, x, y }))
 
 function onTouchStart(event: TouchEvent): void {
-  // 撤回后的消息与临时占位没有菜单，桌面端也用不到长按
-  if (!ui.isMobile || deleted.value || props.ephemeral) return
+  // 撤回后的消息与临时占位没有菜单，桌面端也用不到长按；多选模式下长按无意义
+  if (!ui.isMobile || deleted.value || props.ephemeral || props.selectMode) return
   press.onTouchStart(event)
 }
 
@@ -253,14 +268,27 @@ const liveConnectorLabel = computed(() => {
     class="group relative px-4 transition-colors"
     :class="[
       mentionMe ? 'bg-mention-soft/50' : '',
+      selectMode && selected ? 'bg-accent-soft/60' : '',
+      selectMode && selectable ? 'pl-10 cursor-pointer' : '',
       showHeader ? 'mt-2 pt-1' : 'py-0',
       ui.isMobile ? 'active:bg-surface-2/70' : 'hover:bg-surface-2/70',
     ]"
+    @click.capture="onSelectCapture"
   >
     <span
       v-if="mentionMe"
       class="absolute top-0 bottom-0 left-0 w-[2px] bg-mention"
     />
+
+    <!-- 多选勾选框：纯指示器，点击行为由整行的 capture 统一处理 -->
+    <span
+      v-if="selectMode && selectable"
+      class="absolute left-2.5 top-1/2 z-10 flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full border transition-colors"
+      :class="selected ? 'border-accent bg-accent text-white' : 'border-muted/60 bg-surface text-transparent'"
+      aria-hidden="true"
+    >
+      <Icon name="check" :size="10" />
+    </span>
 
     <div
       class="flex gap-2.5"
@@ -507,7 +535,7 @@ const liveConnectorLabel = computed(() => {
 
     <!-- hover 操作条 -->
     <div
-      v-if="!ui.isMobile && !deleted && !ephemeral"
+      v-if="!ui.isMobile && !deleted && !ephemeral && !selectMode"
       class="invisible absolute -top-3 flex items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 opacity-0 shadow-[var(--shadow-soft)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
       :class="qqOwn ? 'left-4' : 'right-4'"
     >
