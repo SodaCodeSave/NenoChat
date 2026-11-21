@@ -151,6 +151,14 @@ function setGroupUnlimited(unlimited: boolean): void {
   void commit({ groupRepliesPerDay: form.groupRepliesPerDay })
 }
 
+type QuotaKey = 'momentsPostsPerDay' | 'momentsCommentsPerDay' | 'momentsLikesPerDay' | 'groupAutonomyPerDay'
+
+/** 动态三额度与群主动开口的无上限勾选：勾上存 -1，取消回到默认值 */
+function setQuotaUnlimited(key: QuotaKey, unlimited: boolean, fallback: number): void {
+  form[key] = unlimited ? -1 : fallback
+  void commit({ [key]: form[key] })
+}
+
 /** 一键把所有角色切回跟随全局，省得逐个进角色编辑器 */
 async function followAll(): Promise<void> {
   const targets = ai.personas.filter((persona) => persona.proactiveMode !== 'global')
@@ -331,30 +339,73 @@ onBeforeUnmount(() => {
       class="grid grid-cols-1 gap-3 border-t border-line pt-3 sm:grid-cols-3"
     >
       <Field label="每天发动态">
-        <NumberInput
-          :model-value="form.momentsPostsPerDay"
-          :min="0"
-          :max="10"
-          @update:model-value="setNumber('momentsPostsPerDay', $event, 0, 10, MOMENT_AI_DEFAULTS.postsPerDay)"
-        />
+        <div class="flex items-center gap-2.5">
+          <NumberInput
+            class="min-w-0 flex-1"
+            :model-value="form.momentsPostsPerDay"
+            :min="0"
+            :max="10"
+            :disabled="form.momentsPostsPerDay < 0"
+            @update:model-value="setNumber('momentsPostsPerDay', $event, 0, 10, MOMENT_AI_DEFAULTS.postsPerDay)"
+          />
+          <label class="flex shrink-0 items-center gap-1.5 text-[11.5px] text-muted">
+            <Switch
+              size="sm"
+              :model-value="form.momentsPostsPerDay < 0"
+              aria-label="发动态无上限"
+              @update:model-value="
+                setQuotaUnlimited('momentsPostsPerDay', $event, MOMENT_AI_DEFAULTS.postsPerDay)
+              "
+            />
+            无上限
+          </label>
+        </div>
       </Field>
       <Field label="每天评论">
-        <NumberInput
-          :model-value="form.momentsCommentsPerDay"
-          :min="0"
-          :max="20"
-          @update:model-value="
-            setNumber('momentsCommentsPerDay', $event, 0, 20, MOMENT_AI_DEFAULTS.commentsPerDay)
-          "
-        />
+        <div class="flex items-center gap-2.5">
+          <NumberInput
+            class="min-w-0 flex-1"
+            :model-value="form.momentsCommentsPerDay"
+            :min="0"
+            :max="20"
+            :disabled="form.momentsCommentsPerDay < 0"
+            @update:model-value="
+              setNumber('momentsCommentsPerDay', $event, 0, 20, MOMENT_AI_DEFAULTS.commentsPerDay)
+            "
+          />
+          <label class="flex shrink-0 items-center gap-1.5 text-[11.5px] text-muted">
+            <Switch
+              size="sm"
+              :model-value="form.momentsCommentsPerDay < 0"
+              aria-label="评论无上限"
+              @update:model-value="
+                setQuotaUnlimited('momentsCommentsPerDay', $event, MOMENT_AI_DEFAULTS.commentsPerDay)
+              "
+            />
+            无上限
+          </label>
+        </div>
       </Field>
       <Field label="每天点赞">
-        <NumberInput
-          :model-value="form.momentsLikesPerDay"
-          :min="0"
-          :max="20"
-          @update:model-value="setNumber('momentsLikesPerDay', $event, 0, 20, MOMENT_AI_DEFAULTS.likesPerDay)"
-        />
+        <div class="flex items-center gap-2.5">
+          <NumberInput
+            class="min-w-0 flex-1"
+            :model-value="form.momentsLikesPerDay"
+            :min="0"
+            :max="20"
+            :disabled="form.momentsLikesPerDay < 0"
+            @update:model-value="setNumber('momentsLikesPerDay', $event, 0, 20, MOMENT_AI_DEFAULTS.likesPerDay)"
+          />
+          <label class="flex shrink-0 items-center gap-1.5 text-[11.5px] text-muted">
+            <Switch
+              size="sm"
+              :model-value="form.momentsLikesPerDay < 0"
+              aria-label="点赞无上限"
+              @update:model-value="setQuotaUnlimited('momentsLikesPerDay', $event, MOMENT_AI_DEFAULTS.likesPerDay)"
+            />
+            无上限
+          </label>
+        </div>
       </Field>
     </div>
 
@@ -403,14 +454,29 @@ onBeforeUnmount(() => {
         </div>
       </Field>
       <Field label="每群每天主动开口">
-        <NumberInput
-          :model-value="form.groupAutonomyPerDay"
-          :min="0"
-          :max="10"
-          @update:model-value="
-            setNumber('groupAutonomyPerDay', $event, 0, 10, GROUP_AI_DEFAULTS.autonomyPerDay)
-          "
-        />
+        <div class="flex items-center gap-2.5">
+          <NumberInput
+            class="min-w-0 flex-1"
+            :model-value="form.groupAutonomyPerDay"
+            :min="0"
+            :max="10"
+            :disabled="form.groupAutonomyPerDay < 0"
+            @update:model-value="
+              setNumber('groupAutonomyPerDay', $event, 0, 10, GROUP_AI_DEFAULTS.autonomyPerDay)
+            "
+          />
+          <label class="flex shrink-0 items-center gap-1.5 text-[11.5px] text-muted">
+            <Switch
+              size="sm"
+              :model-value="form.groupAutonomyPerDay < 0"
+              aria-label="群主动开口无上限"
+              @update:model-value="
+                setQuotaUnlimited('groupAutonomyPerDay', $event, GROUP_AI_DEFAULTS.autonomyPerDay)
+              "
+            />
+            无上限
+          </label>
+        </div>
       </Field>
       <Field label="每条消息最多接话角色" hint="角色排队接话，后面的角色能看到前面角色说的话">
         <NumberInput
@@ -448,7 +514,7 @@ onBeforeUnmount(() => {
 
     <p class="mt-3 flex items-start gap-1.5 border-t border-line pt-3 text-[11px] leading-relaxed text-muted">
       <Icon name="sparkles" :size="12" class="mt-0.5 shrink-0 text-mention" />
-      这些是默认值，角色可以在自己的设置里覆盖。改成 0 就是不启用对应的动作。
+      这些是默认值，角色可以在自己的设置里覆盖。改成 0 就是不启用对应的动作，勾上「无上限」则不限每日次数。
     </p>
 
     <Button

@@ -123,15 +123,19 @@ export const AiGlobalSettingsSchema = z.object({
   windowStart: z.string().regex(HHMM).nullable().optional(),
   windowEnd: z.string().regex(HHMM).nullable().optional(),
   momentsEnabled: z.boolean(),
-  momentsPostsPerDay: z.number().int().min(0).max(10),
-  momentsCommentsPerDay: z.number().int().min(0).max(20),
-  momentsLikesPerDay: z.number().int().min(0).max(20),
+  /** -1 表示无上限 */
+  momentsPostsPerDay: z.number().int().min(-1).max(10),
+  /** -1 表示无上限 */
+  momentsCommentsPerDay: z.number().int().min(-1).max(20),
+  /** -1 表示无上限 */
+  momentsLikesPerDay: z.number().int().min(-1).max(20),
   groupEnabled: z.boolean(),
   groupRepliesPerDay: z.number().int().min(-1).max(50),
   groupRepliesPerMessage: z.number().int().min(1).max(5),
   groupReplyProbability: z.number().int().min(0).max(100).nullable().optional(),
   groupReplyCooldownMinutes: z.number().int().min(0).max(1440).nullable().optional(),
-  groupAutonomyPerDay: z.number().int().min(0).max(10),
+  /** -1 表示无上限 */
+  groupAutonomyPerDay: z.number().int().min(-1).max(10),
   segmentEnabled: z.boolean(),
   segmentPattern: z.string().trim().min(1).max(200),
   streamEnabled: z.boolean(),

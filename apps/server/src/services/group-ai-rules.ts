@@ -117,8 +117,9 @@ export interface GroupAutonomyDecisionInput {
 /** 主动开口：比插话更克制，安静够久、体力够、不在免打扰里才考虑 */
 export function decideGroupAutonomy(input: GroupAutonomyDecisionInput): GroupReplyDecision {
   if (!input.enabled) return { fire: false, reason: 'disabled' }
-  if (input.maxAutonomyPerDay <= 0) return { fire: false, reason: 'quota_zero' }
-  if (input.autonomyToday >= input.maxAutonomyPerDay) {
+  if (input.maxAutonomyPerDay === 0) return { fire: false, reason: 'quota_zero' }
+  // -1 表示无上限，跳过配额检查
+  if (input.maxAutonomyPerDay > 0 && input.autonomyToday >= input.maxAutonomyPerDay) {
     return { fire: false, reason: 'quota_exhausted' }
   }
   if (input.inQuietWindow) return { fire: false, reason: 'quiet_window' }

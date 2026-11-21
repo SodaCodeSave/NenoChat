@@ -145,6 +145,19 @@ describe('群聊主动开口判定', () => {
     expect(decision.reason).toBe('quota_exhausted')
   })
 
+  it('配额 0 表示不主动开口', () => {
+    const decision = decideGroupAutonomy(autonomyInput({ maxAutonomyPerDay: 0 }))
+    expect(decision.fire).toBe(false)
+    expect(decision.reason).toBe('quota_zero')
+  })
+
+  it('配额 -1 表示无上限', () => {
+    const decision = decideGroupAutonomy(
+      autonomyInput({ autonomyToday: 999, maxAutonomyPerDay: -1, random: () => 0.01 }),
+    )
+    expect(decision.fire).toBe(true)
+  })
+
   it('安静够久且状态好时会主动开口', () => {
     expect(decideGroupAutonomy(autonomyInput({ random: () => 0.01 })).fire).toBe(true)
   })

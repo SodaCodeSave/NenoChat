@@ -227,4 +227,37 @@ describe('角色在动态广场的自动互动', () => {
     const mine = commentResult.json.comments.find((comment) => comment.author.displayName === '小禾')
     expect(mine).toBeTruthy()
   })
+
+  it('配额 -1 表示无上限：额度用满后仍然继续评论并发动态', async () => {
+    const { getDb, all } = await import('../src/db')
+    const { scanMomentsOnce } = await import('../src/services/moment-ai-service')
+    const db = getDb()
+
+    // 前面的用例已把默认额度（1 条动态 / 2 条评论）用满
+    const settings = await api<{ settings: { momentsPostsPerDay: number; momentsCommentsPerDay: number } }>(
+      'PATCH',
+      '/ai/settings',
+      { momentsPostsPerDay: -1, momentsCommentsPerDay: -1, momentsLikesPerDay: -1 },
+    )
+    expect(settings.json.settings.momentsPostsPerDay).toBe(-1)
+    expect(settings.json.settings.momentsCommentsPerDay).toBe(-1)
+
+    // 补两条没互动过的新动态，评论才有的可挑
+    for (const content of ['给无限额度测试补一条。', '再补一条。']) {
+      await api('POST', '/posts', { content, attachmentIds: [] })
+    }
+
+    const noon = new Date()
+    noon.setHours(12, 0, 0, 0)
+    await scanMomentsOnce(db, silentLog, { random: () => 0, now: noon.getTime() })
+
+    const actions = await all<{ kind: string }>(
+      db,
+      "SELECT kind FROM ai_moment_actions WHERE status IN ('pending', 'done')",
+    )
+    // postsPerDay = 1 早已用满，还能再发一条说明 -1 不受限
+    expect(actions.filter((row) => row.kind === 'post').length).toBeGreaterThanOrEqual(2)
+    // 对新动态多出一条评论，说明评论配额也不受限
+    expect(actions.filter((row) => row.kind === 'comment').length).toBeGreaterThanOrEqual(2)
+  })
 })

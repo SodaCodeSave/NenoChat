@@ -193,6 +193,9 @@ function toggleStickerPack(packId: string): void {
     : [...current, packId]
 }
 
+/** 配额摘要：-1 表示无上限 */
+const describeQuota = (count: number, unit: string): string => (count < 0 ? `不限${unit}` : `每天 ${count} ${unit}`)
+
 /** 跟随全局时把总设置摊开给用户看，免得「为什么它不发」 */
 const globalSummary = computed(() => {
   const settings = ai.globalSettings
@@ -206,7 +209,10 @@ const globalSummary = computed(() => {
         : `空闲 ${settings.minIdleHours} 小时后主动找我，${quota}`
       : '不主动找我',
     settings.momentsEnabled
-      ? `动态：每天 ${settings.momentsPostsPerDay} 条动态 / ${settings.momentsCommentsPerDay} 条评论 / ${settings.momentsLikesPerDay} 个赞`
+      ? `动态：${describeQuota(settings.momentsPostsPerDay, '条动态')} / ${describeQuota(
+          settings.momentsCommentsPerDay,
+          '条评论',
+        )} / ${describeQuota(settings.momentsLikesPerDay, '个赞')}`
       : '不在动态广场活动',
   ]
   return parts.join('；')

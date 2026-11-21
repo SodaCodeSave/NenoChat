@@ -94,8 +94,13 @@ function broadcastLike(postId: string, personaId: string, likeCount: number): vo
 /** 点赞不需要模型，服务端可以直接做，因此不受密钥存放位置影响 */
 async function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.AiPostCandidate[]): Promise<void> {
   const { userId, persona, settings, dayKey, random } = ctx
-  if (settings.momentsLikesPerDay <= 0) return
-  if ((await momentRepo.countToday(db, persona.id, 'like', dayKey)) >= settings.momentsLikesPerDay) return
+  if (settings.momentsLikesPerDay === 0) return
+  // -1 表示无上限，跳过配额检查
+  if (
+    settings.momentsLikesPerDay > 0 &&
+    (await momentRepo.countToday(db, persona.id, 'like', dayKey)) >= settings.momentsLikesPerDay
+  )
+    return
   if (random() >= LIKE_CHANCE) return
 
   const target = pick(candidates, random)
@@ -283,8 +288,10 @@ async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): 
   await likeSomething(db, ctx, candidates)
 
   if (
-    settings.momentsCommentsPerDay > 0 &&
-    (await momentRepo.countToday(db, persona.id, 'comment', dayKey)) < settings.momentsCommentsPerDay &&
+    settings.momentsCommentsPerDay !== 0 &&
+    // -1 表示无上限，跳过配额检查
+    (settings.momentsCommentsPerDay < 0 ||
+      (await momentRepo.countToday(db, persona.id, 'comment', dayKey)) < settings.momentsCommentsPerDay) &&
     random() < COMMENT_CHANCE
   ) {
     const done = await momentRepo.commentedPostIds(
@@ -302,9 +309,11 @@ async function runPersona(db: DB, log: FastifyBaseLogger, ctx: PersonaContext): 
   const hour = Math.floor(minutesOfDay(now, TZ_OFFSET_MIN) / 60)
   const inActiveHours = hour >= MOMENT_AI_DEFAULTS.activeHourStart && hour < MOMENT_AI_DEFAULTS.activeHourEnd
   if (
-    settings.momentsPostsPerDay > 0 &&
+    settings.momentsPostsPerDay !== 0 &&
     inActiveHours &&
-    (await momentRepo.countToday(db, persona.id, 'post', dayKey)) < settings.momentsPostsPerDay &&
+    // -1 表示无上限，跳过配额检查
+    (settings.momentsPostsPerDay < 0 ||
+      (await momentRepo.countToday(db, persona.id, 'post', dayKey)) < settings.momentsPostsPerDay) &&
     random() < POST_CHANCE
   ) {
     await publishMoment(db, log, ctx)

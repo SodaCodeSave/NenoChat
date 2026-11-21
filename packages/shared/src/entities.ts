@@ -405,8 +405,11 @@ export interface AiGlobalSettings {
   windowEnd?: string | null
   /** 动态互动总开关：自动发动态、自动评论、随机点赞都由它控制 */
   momentsEnabled: boolean
+  /** 每个角色每天最多发几条动态；-1 表示无上限，0 表示不发 */
   momentsPostsPerDay: number
+  /** 每个角色每天最多留几条评论；-1 表示无上限，0 表示不评论 */
   momentsCommentsPerDay: number
+  /** 每个角色每天最多点几个赞；-1 表示无上限，0 表示不点赞 */
   momentsLikesPerDay: number
   /** 群聊自动互动总开关：关掉后角色不再插话，也不再主动开口 */
   groupEnabled: boolean
@@ -418,7 +421,7 @@ export interface AiGlobalSettings {
   groupReplyProbability?: number | null
   /** 两次插话最少隔几分钟；不配置用默认 45 秒，0 表示不限制（被点名始终必回） */
   groupReplyCooldownMinutes?: number | null
-  /** 每个角色在每个群里每天最多主动开几次话题 */
+  /** 每个角色在每个群里每天最多主动开几次话题；-1 表示无上限，0 表示不主动开口 */
   groupAutonomyPerDay: number
   /** 是否把 AI 回复拆成多条消息发送 */
   segmentEnabled: boolean
