@@ -121,6 +121,7 @@ const allSections: SettingsSection[] = [
     description: 'AI 角色与主动消息、动态广场、群聊等自动互动',
     anchors: [
       { id: 'personas', label: 'AI 角色', keywords: '人设 角色卡 新建 编辑' },
+      { id: 'relationship', label: '关系系统', keywords: '关系 阶段 亲密度 恋人 好感' },
       { id: 'proactive', label: '自动互动', keywords: '主动消息 动态 群聊 概率 免打扰' },
     ],
   },

@@ -12,6 +12,7 @@ import {
   type AiScheduleItem,
   type AiUsageEntry,
   type Conversation,
+  type PersonaRelationship,
 } from '@nenochat/shared'
 import { http } from './http'
 
@@ -49,6 +50,8 @@ export interface PersonaInput {
   greeting?: string | null
   /** 该角色可用的表情包分组白名单；null = 跟随全局授权 */
   stickerPackIds?: string[] | null
+  /** 与用户的关系；null = 清掉 */
+  relationship?: PersonaRelationship | null
   proactiveMode?: 'global' | 'custom'
   proactive?: {
     enabled: boolean

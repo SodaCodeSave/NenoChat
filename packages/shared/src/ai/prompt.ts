@@ -6,7 +6,9 @@ import type {
   AiSchedule,
   AttachmentRef,
   Message,
+  PersonaRelationship,
 } from '../entities'
+import { RELATIONSHIP_STAGE_LABELS } from '../enums'
 import { currentScheduleItem, formatDayKey, formatLocalTime } from './schedule'
 import { estimateTokens } from './tokens'
 import { renderStickerBlock, type StickerOption } from './sticker-markers'
@@ -51,6 +53,8 @@ export interface BuildContextInput {
   connectorContext?: string | null
   /** 用户消息里链接的网页正文摘要，独立预算，与 connectorContext 同一注入通道 */
   connectorFetchContext?: string | null
+  /** 关系系统总闸；缺省视为开启，关闭时不注入关系块 */
+  relationshipEnabled?: boolean
   now?: number
 }
 
@@ -105,19 +109,42 @@ function historyImageNote(message: Message): string | null {
 }
 
 /**
+ * 关系块：角色存了关系描述才算有，阶段取中文标签。
+ * 只依赖 persona 上的稳定字段，总结前字节不变，前缀缓存友好。
+ */
+function renderRelationshipBlock(persona: AiPersona): string {
+  const relationship = persona.relationship
+  const description = relationship?.description.trim()
+  if (!relationship || !description) return ''
+  const stage = RELATIONSHIP_STAGE_LABELS[relationship.stage] ?? '陌生'
+  return `【与你的关系】\n阶段：${stage}\n${description}`
+}
+
+/**
  * 人设的三块料：提示词（怎么说话）、角色卡（是谁／经历过什么）、兴趣（爱聊什么）。
  * 分开渲染而不是简单拼接，是为了让模型明确哪一段是「行为约束」、哪一段是「设定资料」。
  * 注意：{{time}} 占位符会替换成分钟级时间，含 {{time}} 的人设会让这一块
  * 每轮都不同，等于主动放弃这一段的前缀缓存——是否使用由人设作者自己权衡。
  * 想要日期感知时改用 {{date}}（YYYY-MM-DD，天级），一天只变一次，对缓存友好得多。
  */
-function renderPersonaBlock(persona: AiPersona, userName: string, now: number): string {
+function renderPersonaBlock(
+  persona: AiPersona,
+  userName: string,
+  now: number,
+  relationshipEnabled = true,
+): string {
   const prompt = persona.systemPrompt
     .replace(/\{\{user\}\}/g, userName)
     .replace(/\{\{time\}\}/g, formatLocalTime(now))
     .replace(/\{\{date\}\}/g, formatDayKey(now))
 
   const blocks: string[] = [prompt]
+
+  // 关系放在角色卡之前：长角色卡被截断时，优先保住关系这段行为约束
+  if (relationshipEnabled) {
+    const relationshipBlock = renderRelationshipBlock(persona)
+    if (relationshipBlock) blocks.push(relationshipBlock)
+  }
 
   const card = persona.card?.trim()
   if (card) blocks.push(`【角色卡】\n${card}`)
@@ -178,7 +205,10 @@ export function buildChatMessages(input: BuildContextInput): ChatMessage[] {
 
   messages.push({
     role: 'system',
-    content: truncateByToken(renderPersonaBlock(input.persona, input.userName, now), AI_CONTEXT_BUDGET.system),
+    content: truncateByToken(
+      renderPersonaBlock(input.persona, input.userName, now, input.relationshipEnabled !== false),
+      AI_CONTEXT_BUDGET.system,
+    ),
   })
 
   if (input.facts.length > 0) {
@@ -390,26 +420,43 @@ export function buildSchedulePrompt(input: {
   ]
 }
 
-/** 记忆压缩用的提示词，要求模型输出严格 JSON */
+/** 记忆压缩用的提示词，要求模型输出严格 JSON；关系系统开着时顺带更新关系 */
 export function buildCompactionPrompt(input: {
   previousSummary: string | null
   transcript: string
+  /** 当前关系记录；传入时（关系系统开启）要求模型一并输出更新后的 relationship */
+  currentRelationship?: PersonaRelationship | null
 }): ChatMessage[] {
+  const withRelationship = input.currentRelationship !== undefined
+  const relationshipRule = withRelationship
+    ? 'relationship 描述你与对方现在的关系：stage 从五档里选一个（stranger 陌生、acquaintance 相识、friend 朋友、close_friend 密友、partner 恋人），' +
+      'description 用一两句话概括现在的关系与最近的相处变化；关系没有变化时沿用原来的描述。'
+    : ''
   return [
     {
       role: 'system',
       content:
         '你负责压缩聊天记忆。输出严格 JSON，不要任何多余文字。' +
-        '格式：{"summary":"不超过 300 字的中文摘要","facts":[{"subject":"user|persona|relation|world","key":"简短标识","value":"具体内容","confidence":0.0-1.0}]}。' +
+        (withRelationship
+          ? '格式：{"summary":"不超过 300 字的中文摘要","facts":[{"subject":"user|persona|relation|world","key":"简短标识","value":"具体内容","confidence":0.0-1.0}],"relationship":{"stage":"stranger|acquaintance|friend|close_friend|partner","description":"不超过 150 字"}}。'
+          : '格式：{"summary":"不超过 300 字的中文摘要","facts":[{"subject":"user|persona|relation|world","key":"简短标识","value":"具体内容","confidence":0.0-1.0}]}。') +
         '摘要要保留：聊过的话题、对方的偏好与近况、未完成的事。' +
-        'facts 只抽长期有效且值得记住的信息，短期情绪与客套话不要抽。',
+        'facts 只抽长期有效且值得记住的信息，短期情绪与客套话不要抽。' +
+        relationshipRule,
     },
     {
       role: 'user',
       content: [
         input.previousSummary ? `已有摘要：\n${input.previousSummary}` : '还没有摘要。',
+        withRelationship
+          ? input.currentRelationship
+            ? `当前关系记录：阶段 ${RELATIONSHIP_STAGE_LABELS[input.currentRelationship.stage] ?? '陌生'}；${input.currentRelationship.description || '（还没有描述）'}`
+            : '当前关系记录：还没有，你们刚认识，由你根据这段对话建立第一份关系记录。'
+          : '',
         `下面这段对话需要你去压缩：\n${input.transcript}`,
-      ].join('\n\n'),
+      ]
+        .filter((part) => part.length > 0)
+        .join('\n\n'),
     },
   ]
 }
@@ -427,11 +474,15 @@ export function buildProactivePrompt(input: {
   localTime: string
   schedule?: AiSchedule | null
   scheduleNowMinutes?: number
+  /** 关系系统总闸；缺省视为开启，开启且角色存了关系时带上关系块 */
+  relationshipEnabled?: boolean
   /** 连接器取到的天气资料，属于每轮都变的内容，只进 user 尾行 */
   weather?: string | null
 }): ChatMessage[] {
   const interests = (input.persona.interests ?? []).filter((item) => item.trim().length > 0)
   const card = input.persona.card?.trim()
+  const relationshipBlock =
+    input.relationshipEnabled !== false ? renderRelationshipBlock(input.persona) : ''
   const scheduleLines: string[] = []
   if (input.schedule && input.schedule.items.length > 0) {
     scheduleLines.push(
@@ -445,6 +496,7 @@ export function buildProactivePrompt(input: {
       role: 'system',
       content: [
         input.persona.systemPrompt,
+        relationshipBlock,
         card ? `【角色卡】\n${card}` : '',
         interests.length > 0 ? `【兴趣】${interests.join('、')}` : '',
         PLATFORM_RULES,

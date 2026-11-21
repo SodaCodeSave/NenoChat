@@ -284,6 +284,9 @@ async function fireOnServer(
     return
   }
 
+  // 全局设置提前读：关系开关参与 prompt 组装，分段规则在后面用
+  const settings = await aiRepo.readGlobalSettings(db, candidate.owner_id)
+
   const mapped = aiRepo.mapPersona(persona)
   const schedule = await scheduleService.ensureScheduleQuietly(db, persona)
   let weatherContext: string | null = null
@@ -301,6 +304,7 @@ async function fireOnServer(
     localTime: formatLocalTime(Date.now(), TZ_OFFSET_MIN),
     schedule,
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
+    relationshipEnabled: settings.relationshipEnabled,
     // 天气是每轮都变的内容，走 user 尾行；拼进 system 会让每次主动调用的前缀缓存失效
     weather: weatherContext,
   })
@@ -340,7 +344,6 @@ async function fireOnServer(
   }
 
   // 主动搭话最多两条，多了像刷屏
-  const settings = await aiRepo.readGlobalSettings(db, candidate.owner_id)
   const segments = splitSegments(reply, {
     enabled: settings.segmentEnabled,
     pattern: settings.segmentPattern,

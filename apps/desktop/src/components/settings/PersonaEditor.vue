@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import type { AiPersona, AiProvider } from '@nenochat/shared'
+import type { AiPersona, AiProvider, PersonaRelationship, RelationshipStage } from '@nenochat/shared'
+import { PROACTIVE_DEFAULTS, RELATIONSHIP_STAGE_LABELS } from '@nenochat/shared'
 import AvatarUploader from './AvatarUploader.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Field from '@/components/ui/form/Field.vue'
@@ -14,7 +15,6 @@ import Button from '@/components/ui/form/Button.vue'
 import Alert from '@/components/ui/form/Alert.vue'
 import { aiApi, type PersonaInput } from '@/api/ai'
 import { uploadFile } from '@/api/files'
-import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
 import { useAiStore } from '@/stores/ai'
 import { useStickersStore } from '@/stores/stickers'
 import ModelPicker from './ModelPicker.vue'
@@ -86,6 +86,7 @@ function emptyForm(): PersonaInput {
     replyStyle: 'chatty',
     greeting: null,
     stickerPackIds: null,
+    relationship: null,
     proactiveMode: 'global',
     proactive: { ...EMPTY_PROACTIVE },
   }
@@ -107,6 +108,9 @@ function fromPersona(persona: AiPersona | null | undefined): PersonaInput {
     replyStyle: persona.replyStyle,
     greeting: persona.greeting ?? null,
     stickerPackIds: persona.stickerPackIds ? [...persona.stickerPackIds] : null,
+    relationship: persona.relationship
+      ? { stage: persona.relationship.stage, description: persona.relationship.description }
+      : null,
     proactiveMode: persona.proactiveMode ?? 'global',
     proactive: {
       enabled: persona.proactive.enabled,
@@ -137,6 +141,30 @@ const interests = computed(() => form.value.interests ?? [])
 const proactive = computed(() => form.value.proactive ?? { ...EMPTY_PROACTIVE })
 const chanceMode = computed(() => (proactive.value.triggerMode ?? 'idle') === 'chance')
 const followsGlobal = computed(() => (form.value.proactiveMode ?? 'global') === 'global')
+
+/* --------------------------- 与你的关系 --------------------------- */
+
+/** 关系系统总闸在全局设置里；关掉时提示用户这里的内容不会带进对话 */
+const relationshipEnabled = computed(() => ai.globalSettings?.relationshipEnabled !== false)
+
+/** 描述为空也会保留阶段选择；服务端会把空描述规范成「还没建立关系」 */
+function setRelationshipStage(stage: string): void {
+  form.value.relationship = {
+    stage: stage as RelationshipStage,
+    description: form.value.relationship?.description ?? '',
+  }
+}
+
+function setRelationshipDescription(description: string): void {
+  form.value.relationship = {
+    stage: form.value.relationship?.stage ?? 'stranger',
+    description,
+  }
+}
+
+const relationshipStageOptions = (
+  Object.entries(RELATIONSHIP_STAGE_LABELS) as Array<[RelationshipStage, string]>
+).map(([value, label]) => ({ value, label }))
 
 /* --------------------------- 表情包授权 --------------------------- */
 
@@ -643,6 +671,37 @@ async function save(): Promise<void> {
           动态广场的活动仍然按全局额度来。
         </p>
       </template>
+    </div>
+
+    <div class="rounded-lg border border-line bg-surface-2 p-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[12px] font-medium text-text">与你的关系</span>
+        <span v-if="!relationshipEnabled" class="text-[11px] text-muted">关系系统已关闭</span>
+      </div>
+
+      <div class="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <Field label="阶段">
+          <Select
+            :model-value="form.relationship?.stage ?? 'stranger'"
+            :options="relationshipStageOptions"
+            aria-label="关系阶段"
+            @update:model-value="setRelationshipStage(String($event))"
+          />
+        </Field>
+        <Field label="描述" for-id="persona-relationship" hint="总结记忆时 AI 会自动更新，也可以直接改">
+          <Textarea
+            id="persona-relationship"
+            :model-value="form.relationship?.description ?? ''"
+            :rows="3"
+            placeholder="你们现在是什么关系、最近怎么相处的……"
+            @update:model-value="setRelationshipDescription($event)"
+          />
+        </Field>
+      </div>
+
+      <p v-if="!relationshipEnabled" class="mt-1 text-[11px] leading-relaxed text-muted">
+        总开关在 设置 → 角色与互动；关闭时 AI 不会自动总结关系，这里填的内容也不会带进对话。
+      </p>
     </div>
 
     <div class="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2">

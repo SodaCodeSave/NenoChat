@@ -4,6 +4,7 @@ import type { AiMemoryFact, AiMemorySummary, AiPersona, AiSchedule, Message } fr
 import { ReplyStyle } from '../enums'
 import {
   buildChatMessages,
+  buildCompactionPrompt,
   buildGroupPrompt,
   buildMomentCommentPrompt,
   buildMomentPostPrompt,
@@ -500,6 +501,109 @@ describe('buildGroupPrompt', () => {
     expect(user).toContain('心情「平静」')
     expect(user).toContain('体力 60/100')
     expect(user).toContain('现在时间：')
+  })
+})
+
+describe('关系系统', () => {
+  it('角色存了关系时人设段带【与你的关系】，阶段转中文且排在角色卡之前', () => {
+    const messages = buildChatMessages({
+      persona: persona({
+        relationship: { stage: 'friend', description: '认识半年，经常一起吃饭。' },
+        card: '你住在一间临街旧书店的楼上。',
+      }),
+      facts: [],
+      summary: null,
+      recent: [],
+      userInput: '在吗',
+      userName: '阿岚',
+    })
+    const system = messages.map((m) => m.content).join('\n')
+    expect(system).toContain('【与你的关系】')
+    expect(system).toContain('阶段：朋友')
+    expect(system).toContain('认识半年，经常一起吃饭。')
+    // 长人设被截断时优先保住关系段，所以它必须在角色卡前面
+    expect(system.indexOf('与你的关系')).toBeLessThan(system.indexOf('旧书店的楼上'))
+  })
+
+  it('relationshipEnabled=false 时不注入关系块', () => {
+    const messages = buildChatMessages({
+      persona: persona({ relationship: { stage: 'friend', description: '认识半年。' } }),
+      facts: [],
+      summary: null,
+      recent: [],
+      userInput: '在吗',
+      userName: '阿岚',
+      relationshipEnabled: false,
+    })
+    expect(messages.map((m) => m.content).join('\n')).not.toContain('与你的关系')
+  })
+
+  it('描述为空时不产生空的关系段落', () => {
+    const messages = buildChatMessages({
+      persona: persona({ relationship: { stage: 'friend', description: '' } }),
+      facts: [],
+      summary: null,
+      recent: [],
+      userInput: '在吗',
+      userName: '阿岚',
+    })
+    expect(messages.map((m) => m.content).join('\n')).not.toContain('与你的关系')
+  })
+
+  it('主动消息 system 同样带关系块，关闭开关后去掉', () => {
+    const base = {
+      memoryDigest: '',
+      idleHours: 3,
+      localTime: '12:00',
+    }
+    const withRelationship = buildProactivePrompt({
+      ...base,
+      persona: persona({ relationship: { stage: 'close_friend', description: '已经无话不谈。' } }),
+    })
+    const system = withRelationship.filter((m) => m.role === 'system').map((m) => m.content).join('\n')
+    expect(system).toContain('【与你的关系】')
+    expect(system).toContain('阶段：密友')
+
+    const disabled = buildProactivePrompt({
+      ...base,
+      persona: persona({ relationship: { stage: 'close_friend', description: '已经无话不谈。' } }),
+      relationshipEnabled: false,
+    })
+    expect(disabled.filter((m) => m.role === 'system').map((m) => m.content).join('\n')).not.toContain(
+      '与你的关系',
+    )
+  })
+
+  it('压缩提示词带当前关系时要求输出 relationship 字段并附上当前记录', () => {
+    const messages = buildCompactionPrompt({
+      previousSummary: null,
+      transcript: '我：今天加班好累\n小禾：辛苦啦，早点休息',
+      currentRelationship: { stage: 'friend', description: '认识半年，经常一起吃饭。' },
+    })
+    const system = messages[0]!.content as string
+    expect(system).toContain('"relationship"')
+    expect(system).toContain('stranger|acquaintance|friend|close_friend|partner')
+    const user = messages[1]!.content as string
+    expect(user).toContain('当前关系记录：阶段 朋友')
+    expect(user).toContain('认识半年，经常一起吃饭。')
+  })
+
+  it('还没建立关系时提示模型建立第一份关系记录', () => {
+    const messages = buildCompactionPrompt({
+      previousSummary: null,
+      transcript: '我：你好',
+      currentRelationship: null,
+    })
+    expect(messages[0]!.content).toContain('"relationship"')
+    expect(messages[1]!.content).toContain('还没有，你们刚认识')
+  })
+
+  it('压缩提示词不带 currentRelationship 时（总闸关闭）格式不含 relationship 字段', () => {
+    const messages = buildCompactionPrompt({
+      previousSummary: null,
+      transcript: '我：在吗',
+    })
+    expect(messages[0]!.content).not.toContain('relationship')
   })
 })
 

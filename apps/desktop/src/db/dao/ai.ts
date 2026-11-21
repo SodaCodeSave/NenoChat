@@ -1,5 +1,5 @@
-import type { AiPersona, ReplyStyle } from '@nenochat/shared'
-import { PROACTIVE_DEFAULTS } from '@nenochat/shared'
+import type { AiPersona, PersonaRelationship, RelationshipStage, ReplyStyle } from '@nenochat/shared'
+import { PROACTIVE_DEFAULTS, RELATIONSHIP_STAGE_LABELS } from '@nenochat/shared'
 import { dbExecute, dbSelect } from '@/platform/db'
 
 /**
@@ -26,6 +26,8 @@ export interface PersonaRow {
   proactive_enabled: number | null
   proactive_mode: string | null
   sticker_pack_ids: string | null
+  relationship_stage: string | null
+  relationship_description: string | null
   last_proactive_at: number | null
 }
 
@@ -82,6 +84,16 @@ function parseStickerPackIds(raw: string | null): string[] | null {
   }
 }
 
+/** relationship_stage 列的容错解析：没存过的旧值一律回退陌生；描述为空表示还没建立关系 */
+function parseRelationship(row: PersonaRow): PersonaRelationship | null {
+  const description = row.relationship_description?.trim() ?? ''
+  if (!description) return null
+  const stage = (row.relationship_stage ?? 'stranger') in RELATIONSHIP_STAGE_LABELS
+    ? (row.relationship_stage as RelationshipStage)
+    : 'stranger'
+  return { stage, description }
+}
+
 export function mapPersona(row: PersonaRow): AiPersona {
   const proactive = parseProactive(row)
   return {
@@ -102,6 +114,7 @@ export function mapPersona(row: PersonaRow): AiPersona {
     temperature: null,
     replyStyle: row.reply_style as ReplyStyle,
     stickerPackIds: parseStickerPackIds(row.sticker_pack_ids),
+    relationship: parseRelationship(row),
     proactive,
     proactiveMode: row.proactive_mode === 'custom' ? 'custom' : 'global',
     lastProactiveAt: row.last_proactive_at,
@@ -115,8 +128,9 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
     `INSERT INTO ai_personas
        (server_id, id, name, avatar_url, system_prompt, greeting, provider_id, model_override,
         reply_style, proactive, updated_at, interests, card, card_url, card_filename,
-        in_contacts, proactive_enabled, proactive_mode, sticker_pack_ids, last_proactive_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        in_contacts, proactive_enabled, proactive_mode, sticker_pack_ids,
+        relationship_stage, relationship_description, last_proactive_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      ON CONFLICT(server_id, id) DO UPDATE SET
        name = excluded.name,
        avatar_url = excluded.avatar_url,
@@ -135,6 +149,8 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
        proactive_enabled = excluded.proactive_enabled,
        proactive_mode = excluded.proactive_mode,
        sticker_pack_ids = excluded.sticker_pack_ids,
+       relationship_stage = excluded.relationship_stage,
+       relationship_description = excluded.relationship_description,
        last_proactive_at = excluded.last_proactive_at`,
     [
       serverId,
@@ -156,6 +172,8 @@ export async function upsertPersona(serverId: string, persona: AiPersona): Promi
       persona.proactive.enabled ? 1 : 0,
       persona.proactiveMode,
       persona.stickerPackIds?.length ? JSON.stringify(persona.stickerPackIds) : null,
+      persona.relationship?.stage ?? 'stranger',
+      persona.relationship?.description ?? '',
       persona.lastProactiveAt ?? null,
     ],
   )

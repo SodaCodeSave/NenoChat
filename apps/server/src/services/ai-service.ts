@@ -2,7 +2,11 @@ import {
   ContactRelation,
   ConversationType,
   Role,
+  MEMORY_COMPACT,
+  RELATIONSHIP_STAGE_LABELS,
+  RelationshipStage,
   buildChatMessages,
+  buildCompactionPrompt,
   cutStreamingSegments,
   estimateTokens,
   extractStickerMarker,
@@ -24,6 +28,7 @@ import {
   type AttachmentRef,
   type Message,
   type MessageMeta,
+  type PersonaRelationship,
   type ReplyStyle,
   type SegmentRule,
   type SenderType,
@@ -193,6 +198,8 @@ export interface PersonaPayload {
   greeting?: string | null
   /** 该角色可用的表情包分组白名单；null / 空 = 跟随全局授权 */
   stickerPackIds?: string[] | null
+  /** 与用户的关系；null = 清掉 */
+  relationship?: PersonaRelationship | null
   proactive?: {
     enabled: boolean
     minIdleHours: number
@@ -285,6 +292,7 @@ export async function createPersona(db: DB, ownerId: string, input: PersonaPaylo
       replyStyle: input.replyStyle,
       greeting: input.greeting ?? null,
       stickerPackIds: input.stickerPackIds ?? null,
+      relationship: input.relationship ?? null,
       proactive: input.proactive,
     })
 
@@ -837,6 +845,114 @@ export async function writeMemory(db: DB, userId: string, conversationId: string
   })
 }
 
+/**
+ * 生成结束后的服务端记忆压缩：未压缩的 AI 发言攒够阈值，就把旧对话压成
+ * 摘要 + 事实落库（滚动链与覆盖链都走 writeMemory）；关系系统开着时顺带
+ * 让模型更新与用户的关系并写回角色。整个函数自吞错误，失败等下次生成再试。
+ */
+async function compactMemoryAfterGeneration(
+  db: DB,
+  input: {
+    conversationId: string
+    userId: string
+    persona: aiRepo.PersonaRow
+    provider: aiRepo.ProviderRow
+    userName: string
+  },
+): Promise<void> {
+  try {
+    const session = await aiRepo.findSession(db, input.conversationId)
+    if (!session || session.messages_since_compact < MEMORY_COMPACT.messagesSinceCompact) return
+
+    const summaries = await aiRepo.listSummaries(db, input.conversationId)
+    const lastCompactedSeq = summaries.reduce((max, s) => Math.max(max, s.toSeq), 0)
+    const pendingRows = await all<{ seq: number; sender_type: string; content: string }>(
+      db,
+      `SELECT seq, sender_type, content FROM messages
+         WHERE conversation_id = ? AND seq > ? AND deleted_at IS NULL
+         ORDER BY seq ASC LIMIT ?`,
+      [input.conversationId, lastCompactedSeq, MEMORY_COMPACT.batchMessages],
+    )
+    if (pendingRows.length < MEMORY_COMPACT.messagesSinceCompact) return
+
+    const personaEntity = aiRepo.mapPersona(input.persona)
+    const settings = await aiRepo.readGlobalSettings(db, input.userId)
+    const model = input.persona.model_override ?? input.provider.model
+
+    const prompt = buildCompactionPrompt({
+      previousSummary: summaries[0]?.summary ?? null,
+      transcript: pendingRows
+        .map((row) => `${row.sender_type === 'ai' ? personaEntity.name : input.userName}：${row.content}`)
+        .join('\n'),
+      // 关系系统关闭时不传，提示词里就不出现关系更新要求
+      currentRelationship: settings.relationshipEnabled ? personaEntity.relationship ?? null : undefined,
+    })
+
+    const result = await callUpstream({
+      baseUrl: input.provider.base_url,
+      apiKey: resolveServerApiKey(input.provider),
+      model,
+      temperature: 0.2,
+      maxTokens: 900,
+      messages: prompt,
+      record: {
+        db,
+        ownerId: input.userId,
+        conversationId: input.conversationId,
+        personaId: input.persona.id,
+        providerId: input.provider.id,
+        kind: 'summary',
+        refId: input.conversationId,
+      },
+    })
+
+    const parsed = JSON.parse(result.content) as {
+      summary?: string
+      facts?: Array<{ subject?: string; key?: string; value?: string; confidence?: number }>
+      relationship?: { stage?: string; description?: string }
+    }
+
+    const lastMessage = pendingRows[pendingRows.length - 1]!
+    await writeMemory(db, input.userId, input.conversationId, {
+      summary: parsed.summary?.trim()
+        ? {
+            fromSeq: lastCompactedSeq,
+            toSeq: lastMessage.seq,
+            text: parsed.summary.trim(),
+            model,
+          }
+        : undefined,
+      facts: (parsed.facts ?? [])
+        .filter((fact) => Boolean(fact.key?.trim() && fact.value?.trim()))
+        .map((fact) => ({
+          subject: (['user', 'persona', 'relation', 'world'].includes(fact.subject ?? '')
+            ? fact.subject
+            : 'user') as 'user' | 'persona' | 'relation' | 'world',
+          key: fact.key!.trim(),
+          value: fact.value!.trim(),
+          confidence: fact.confidence,
+        })),
+    })
+
+    // 关系写回角色：只有阶段或描述真的变了才动库，免得每轮都发 persona 变更事件
+    if (settings.relationshipEnabled && parsed.relationship?.description?.trim()) {
+      const stage = (parsed.relationship.stage ?? '') in RELATIONSHIP_STAGE_LABELS
+        ? (parsed.relationship.stage as RelationshipStage)
+        : RelationshipStage.Stranger
+      const next: PersonaRelationship = {
+        stage,
+        description: parsed.relationship.description.trim().slice(0, 500),
+      }
+      const current = personaEntity.relationship
+      if (current?.stage !== next.stage || current?.description !== next.description) {
+        await updatePersona(db, input.userId, input.persona.id, { relationship: next })
+      }
+    }
+  } catch {
+    /* 压缩失败不影响主流程，下次对话继续尝试 */
+  }
+}
+
 async function assertOwned(db: DB, userId: string, conversationId: string): Promise<void> {
   const conv = await conversationsRepo.findById(db, conversationId)
   if (!conv || conv.type !== 'ai') throw err.notFound('AI 会话不存在')
@@ -1013,6 +1129,9 @@ async function runGenerationOnServer(
     },
   })
 
+  // 全局设置提前读：关系开关要参与 prompt 组装，分段/流式规则在后面用
+  const settings = await aiRepo.readGlobalSettings(db, input.userId)
+
   const chatMessages = buildChatMessages({
     persona: aiRepo.mapPersona(persona),
     facts,
@@ -1028,9 +1147,9 @@ async function runGenerationOnServer(
     scheduleNowMinutes: minutesOfDay(Date.now(), TZ_OFFSET_MIN),
     connectorContext: connector.context,
     connectorFetchContext: connector.fetchContext,
+    relationshipEnabled: settings.relationshipEnabled,
   })
 
-  const settings = await aiRepo.readGlobalSettings(db, input.userId)
   const rule: SegmentRule = {
     enabled: settings.segmentEnabled,
     pattern: settings.segmentPattern,
@@ -1119,6 +1238,14 @@ async function runGenerationOnServer(
                 conversationId: input.conversationId,
                 messageIds: deliveredIds,
                 model,
+              })
+              // 全部段落落库后异步压缩记忆；失败不影响这轮回复
+              void compactMemoryAfterGeneration(db, {
+                conversationId: input.conversationId,
+                userId: input.userId,
+                persona,
+                provider,
+                userName: owner?.display_name ?? '用户',
               })
             }
           } catch (e) {
@@ -1260,6 +1387,14 @@ async function runGenerationOnServer(
       completionTokens: usage?.completionTokens ?? null,
     })
     await emitAiDone(db, { generationId, conversationId: input.conversationId, messageIds, model })
+    // 全部段落落库后异步压缩记忆；失败不影响这轮回复
+    void compactMemoryAfterGeneration(db, {
+      conversationId: input.conversationId,
+      userId: input.userId,
+      persona,
+      provider,
+      userName: owner?.display_name ?? '用户',
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : '上游失败'
     await aiRepo.finishGeneration(db, generationId, { status: 'error', error: message })

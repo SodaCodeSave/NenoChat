@@ -279,6 +279,82 @@ describe('角色自动进入消息与通讯录', () => {
     expect(found.cardFilename).toBe('card.md')
   })
 
+  it('关系阶段与描述可往返读写，null 清空、缺省保留', async () => {
+    const created = await api<{ persona: { id: string; relationship: { stage: string; description: string } | null } }>(
+      'POST',
+      '/ai/personas',
+      {
+        token,
+        body: {
+          name: '关系测试',
+          systemPrompt: '你是朋友。',
+          relationship: { stage: 'friend', description: '认识半年，经常一起吃饭。' },
+        },
+      },
+    )
+    expect(created.status).toBe(200)
+    expect(created.json.persona.relationship).toEqual({
+      stage: 'friend',
+      description: '认识半年，经常一起吃饭。',
+    })
+
+    // 更新阶段与描述
+    const patched = await api<{ persona: { relationship: { stage: string; description: string } | null } }>(
+      'PATCH',
+      `/ai/personas/${created.json.persona.id}`,
+      { token, body: { relationship: { stage: 'close_friend', description: '已经无话不谈。' } } },
+    )
+    expect(patched.status).toBe(200)
+    expect(patched.json.persona.relationship).toEqual({
+      stage: 'close_friend',
+      description: '已经无话不谈。',
+    })
+
+    // 不传 relationship 的 PATCH 不动关系
+    const untouched = await api<{ persona: { relationship: { stage: string } | null } }>(
+      'PATCH',
+      `/ai/personas/${created.json.persona.id}`,
+      { token, body: { name: '关系改名' } },
+    )
+    expect(untouched.status).toBe(200)
+    expect(untouched.json.persona.relationship?.stage).toBe('close_friend')
+
+    // null 清掉关系；空描述等价于清掉
+    const cleared = await api<{ persona: { relationship: unknown } }>(
+      'PATCH',
+      `/ai/personas/${created.json.persona.id}`,
+      { token, body: { relationship: null } },
+    )
+    expect(cleared.status).toBe(200)
+    expect(cleared.json.persona.relationship).toBeNull()
+
+    const blanked = await api<{ persona: { relationship: unknown } }>(
+      'PATCH',
+      `/ai/personas/${created.json.persona.id}`,
+      { token, body: { relationship: { stage: 'partner', description: '   ' } } },
+    )
+    expect(blanked.json.persona.relationship).toBeNull()
+  })
+
+  it('关系系统总闸默认开启，可即时关闭再打开', async () => {
+    const read = await api<{ settings: { relationshipEnabled: boolean } }>('GET', '/ai/settings', { token })
+    expect(read.status).toBe(200)
+    expect(read.json.settings.relationshipEnabled).toBe(true)
+
+    const off = await api<{ settings: { relationshipEnabled: boolean } }>('PATCH', '/ai/settings', {
+      token,
+      body: { relationshipEnabled: false },
+    })
+    expect(off.status).toBe(200)
+    expect(off.json.settings.relationshipEnabled).toBe(false)
+
+    const on = await api<{ settings: { relationshipEnabled: boolean } }>('PATCH', '/ai/settings', {
+      token,
+      body: { relationshipEnabled: true },
+    })
+    expect(on.json.settings.relationshipEnabled).toBe(true)
+  })
+
   it('inContacts=false 不建会话', async () => {
     const created = await api<{ persona: { id: string } }>('POST', '/ai/personas', {
       token,

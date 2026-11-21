@@ -6,11 +6,20 @@ import type {
   AiProviderModel,
   AiSession,
   MemoryFactSubject,
+  PersonaRelationship,
   ProactiveConfig,
   ProactiveMode,
+  RelationshipStage,
   ReplyStyle,
 } from '@nenochat/shared'
-import { GROUP_AI_DEFAULTS, MOMENT_AI_DEFAULTS, PROACTIVE_DEFAULTS, SEGMENT_REPLY_DEFAULTS, ulid } from '@nenochat/shared'
+import {
+  GROUP_AI_DEFAULTS,
+  MOMENT_AI_DEFAULTS,
+  PROACTIVE_DEFAULTS,
+  RELATIONSHIP_STAGE_LABELS,
+  SEGMENT_REPLY_DEFAULTS,
+  ulid,
+} from '@nenochat/shared'
 import { all, one, run, type Executor } from '../index'
 import { now } from '../../util/clock'
 
@@ -250,6 +259,9 @@ export interface PersonaRow {
   reply_style: string
   /** 角色级表情包白名单 JSON 数组；NULL = 跟随全局授权 */
   sticker_pack_ids: string | null
+  /** 与用户的关系阶段；描述为空表示还没建立关系 */
+  relationship_stage: string
+  relationship_description: string
   proactive_enabled: number
   proactive_config: string | null
   proactive_mode: string
@@ -313,6 +325,18 @@ export function parseStickerPackIds(raw: string | null): string[] | null {
   }
 }
 
+/** relationship_stage 列的容错解析：没存过的旧值一律回退陌生 */
+function parseRelationshipStage(raw: string): RelationshipStage {
+  return (raw in RELATIONSHIP_STAGE_LABELS ? raw : 'stranger') as RelationshipStage
+}
+
+/** 描述为空表示还没建立关系，统一映射成 null */
+function parseRelationship(row: PersonaRow): PersonaRelationship | null {
+  const description = row.relationship_description?.trim() ?? ''
+  if (!description) return null
+  return { stage: parseRelationshipStage(row.relationship_stage), description }
+}
+
 export function mapPersona(row: PersonaRow): AiPersona {
   return {
     id: row.id,
@@ -332,6 +356,7 @@ export function mapPersona(row: PersonaRow): AiPersona {
     temperature: row.temperature,
     replyStyle: row.reply_style as ReplyStyle,
     stickerPackIds: parseStickerPackIds(row.sticker_pack_ids),
+    relationship: parseRelationship(row),
     proactive: parseProactive(row),
     proactiveMode: row.proactive_mode === 'custom' ? 'custom' : 'global',
     lastProactiveAt: row.last_proactive_at,
@@ -368,6 +393,8 @@ export interface CreatePersonaInput {
   replyStyle?: ReplyStyle
   greeting?: string | null
   stickerPackIds?: string[] | null
+  /** 初始关系；不传或 null 表示还没建立关系 */
+  relationship?: PersonaRelationship | null
   proactive?: Partial<ProactiveConfig>
   proactiveMode?: ProactiveMode
 }
@@ -388,15 +415,22 @@ export async function createPersona(db: Executor, input: CreatePersonaInput): Pr
   }
   // 显式开了主动消息却没说是哪种模式，按「没打算跟随全局」处理
   const mode: ProactiveMode = input.proactiveMode ?? (proactive.enabled ? 'custom' : 'global')
+  const relationship = input.relationship?.description.trim()
+    ? {
+        stage: parseRelationshipStage(input.relationship.stage),
+        description: input.relationship.description.trim(),
+      }
+    : null
 
   const row = await one<PersonaRow>(
     db,
     `INSERT INTO ai_personas
        (id, owner_id, name, avatar_url, system_prompt, greeting, interests, card, card_url,
         card_filename, in_contacts, provider_id, model_override, temperature, reply_style,
-        sticker_pack_ids, proactive_enabled, proactive_config, proactive_mode,
+        sticker_pack_ids, relationship_stage, relationship_description,
+        proactive_enabled, proactive_config, proactive_mode,
         last_proactive_at, created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
      RETURNING *`,
     [
       id,
@@ -415,6 +449,8 @@ export async function createPersona(db: Executor, input: CreatePersonaInput): Pr
       input.temperature ?? null,
       input.replyStyle ?? 'chatty',
       input.stickerPackIds?.length ? JSON.stringify(input.stickerPackIds) : null,
+      relationship?.stage ?? 'stranger',
+      relationship?.description ?? '',
       proactive.enabled ? 1 : 0,
       JSON.stringify(proactive),
       mode,
@@ -441,6 +477,8 @@ export interface UpdatePersonaInput {
   replyStyle?: ReplyStyle
   greeting?: string | null
   stickerPackIds?: string[] | null
+  /** undefined = 不改；null = 清掉关系；对象 = 整体覆盖阶段与描述 */
+  relationship?: PersonaRelationship | null
   proactive?: Partial<ProactiveConfig>
   proactiveMode?: ProactiveMode
 }
@@ -461,6 +499,12 @@ export async function updatePersona(db: Executor, id: string, patch: UpdatePerso
       : current.proactive_mode === 'custom'
         ? 'custom'
         : 'global')
+  const nextRelationship = patch.relationship?.description.trim()
+    ? {
+        stage: parseRelationshipStage(patch.relationship.stage),
+        description: patch.relationship.description.trim(),
+      }
+    : null
 
   const row = await one<PersonaRow>(
     db,
@@ -468,6 +512,7 @@ export async function updatePersona(db: Executor, id: string, patch: UpdatePerso
      SET name = ?, avatar_url = ?, system_prompt = ?, greeting = ?, interests = ?, card = ?,
          card_url = ?, card_filename = ?, in_contacts = ?, provider_id = ?,
          model_override = ?, temperature = ?, reply_style = ?, sticker_pack_ids = ?,
+         relationship_stage = ?, relationship_description = ?,
          proactive_enabled = ?, proactive_config = ?, proactive_mode = ?, updated_at = ?
      WHERE id = ?
      RETURNING *`,
@@ -491,6 +536,9 @@ export async function updatePersona(db: Executor, id: string, patch: UpdatePerso
         : patch.stickerPackIds?.length
           ? JSON.stringify(patch.stickerPackIds)
           : null,
+      // undefined = 不改，null 或空描述 = 清掉关系回到「还没建立」
+      patch.relationship === undefined ? current.relationship_stage : (nextRelationship?.stage ?? 'stranger'),
+      patch.relationship === undefined ? current.relationship_description : (nextRelationship?.description ?? ''),
       nextProactive.enabled ? 1 : 0,
       JSON.stringify(nextProactive),
       nextMode,
@@ -535,6 +583,7 @@ export interface GlobalSettingsRow {
   segment_enabled: number
   segment_pattern: string
   stream_enabled: number
+  relationship_enabled: number
   debug_mode: number
   updated_at: number
 }
@@ -572,7 +621,7 @@ export async function readGlobalSettings(db: Executor, userId: string): Promise<
     segmentEnabled: SEGMENT_REPLY_DEFAULTS.enabled,
     segmentPattern: SEGMENT_REPLY_DEFAULTS.pattern,
     streamEnabled: false,
-    relationshipEnabled: false,
+    relationshipEnabled: true,
     debugMode: false,
     updatedAt: 0,
   }
@@ -608,7 +657,7 @@ export async function readGlobalSettings(db: Executor, userId: string): Promise<
     segmentEnabled: row.segment_enabled === 1,
     segmentPattern: row.segment_pattern || fallback.segmentPattern,
     streamEnabled: row.stream_enabled === 1,
-    relationshipEnabled: false,
+    relationshipEnabled: row.relationship_enabled === 1,
     debugMode: row.debug_mode === 1,
     updatedAt: row.updated_at,
   }
@@ -629,8 +678,9 @@ export async function writeGlobalSettings(
        (user_id, proactive_enabled, proactive_config, moments_enabled, moments_posts_per_day,
         moments_comments_per_day, moments_likes_per_day, group_enabled, group_replies_per_day,
         group_replies_per_message, group_reply_probability, group_reply_cooldown_minutes,
-        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled, debug_mode, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        group_autonomy_per_day, segment_enabled, segment_pattern, stream_enabled,
+        relationship_enabled, debug_mode, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        proactive_enabled = excluded.proactive_enabled,
        proactive_config = excluded.proactive_config,
@@ -647,6 +697,7 @@ export async function writeGlobalSettings(
        segment_enabled = excluded.segment_enabled,
        segment_pattern = excluded.segment_pattern,
        stream_enabled = excluded.stream_enabled,
+       relationship_enabled = excluded.relationship_enabled,
        debug_mode = excluded.debug_mode,
        updated_at = excluded.updated_at`,
     [
@@ -675,6 +726,7 @@ export async function writeGlobalSettings(
       next.segmentEnabled ? 1 : 0,
       next.segmentPattern,
       next.streamEnabled ? 1 : 0,
+      next.relationshipEnabled ? 1 : 0,
       next.debugMode ? 1 : 0,
       ts,
     ],

@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { AiPersona, AiProvider } from '@nenochat/shared'
+import { RELATIONSHIP_STAGE_LABELS } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import SettingsCard from '@/components/ui/form/SettingsCard.vue'
+import SettingRow from '@/components/ui/form/SettingRow.vue'
+import Switch from '@/components/ui/form/Switch.vue'
 import Button from '@/components/ui/form/Button.vue'
 import Alert from '@/components/ui/form/Alert.vue'
 import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
@@ -25,6 +28,45 @@ const showPersonaForm = ref(false)
 const editingPersona = ref<AiPersona | null>(null)
 const pendingRemovePersona = ref<AiPersona | null>(null)
 const removingPersona = ref(false)
+
+/** 关系系统总闸跟随全局设置；读不到时按默认开启展示 */
+const RELATIONSHIP_FALLBACK = true
+const relationshipEnabled = ref(RELATIONSHIP_FALLBACK)
+const relationshipSaving = ref(false)
+const relationshipSaved = ref(false)
+const relationshipError = ref<string | null>(null)
+let relationshipTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => ai.globalSettings,
+  (value) => {
+    relationshipEnabled.value = value?.relationshipEnabled ?? RELATIONSHIP_FALLBACK
+  },
+  { immediate: true },
+)
+
+/** 总闸即时保存：关掉后 AI 不再总结关系，已有关系也不再注入对话 */
+async function saveRelationshipEnabled(): Promise<void> {
+  relationshipError.value = null
+  relationshipSaving.value = true
+  try {
+    await ai.saveSettings({ relationshipEnabled: relationshipEnabled.value })
+    relationshipSaved.value = true
+    if (relationshipTimer) clearTimeout(relationshipTimer)
+    relationshipTimer = setTimeout(() => {
+      relationshipSaved.value = false
+    }, 1600)
+  } catch (e) {
+    relationshipError.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    relationshipSaving.value = false
+  }
+}
+
+// 「已保存」的闪现定时器随组件清掉，避免切走设置页后还回来改状态
+onBeforeUnmount(() => {
+  if (relationshipTimer) clearTimeout(relationshipTimer)
+})
 
 /** 角色列表以 ai store 为准，通讯录与消息分区读的是同一份 */
 const personas = computed(() => ai.personas)
@@ -155,6 +197,12 @@ onMounted(() => {
             <p class="flex flex-wrap items-center gap-1.5 truncate text-[12.5px] font-medium text-text-strong">
               {{ persona.name }}
               <span
+                v-if="persona.relationship"
+                class="rounded bg-mention/10 px-1 text-[10px] font-normal text-mention"
+              >
+                {{ RELATIONSHIP_STAGE_LABELS[persona.relationship.stage] }}
+              </span>
+              <span
                 v-if="proactiveActive(persona)"
                 class="rounded bg-accent/12 px-1 text-[10px] font-normal text-accent"
               >
@@ -191,6 +239,34 @@ onMounted(() => {
           />
         </div>
       </div>
+    </SettingsCard>
+
+    <SettingsCard
+      id="relationship"
+      title="关系系统"
+      description="AI 总结记忆时同步更新与你的关系（阶段 + 描述），关系会写进角色的提示词"
+      icon="users"
+    >
+      <SettingRow
+        label="启用关系系统"
+        description="开启后每次记忆总结都会让 AI 顺手更新关系；关闭后不再自动总结，已有关系也不会带进对话。"
+      >
+        <template #hint>
+          <p v-if="relationshipError" class="mt-1 text-[11px] text-danger">{{ relationshipError }}</p>
+          <p v-else-if="relationshipSaving" class="mt-1 text-[11px] text-muted">保存中…</p>
+          <p v-else-if="relationshipSaved" class="mt-1 text-[11px] text-success">已保存</p>
+        </template>
+        <Switch
+          :model-value="relationshipEnabled"
+          aria-label="启用关系系统"
+          @update:model-value="
+            (value) => {
+              relationshipEnabled = value
+              saveRelationshipEnabled()
+            }
+          "
+        />
+      </SettingRow>
     </SettingsCard>
 
     <ProactiveSettings />
