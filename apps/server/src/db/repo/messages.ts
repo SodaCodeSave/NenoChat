@@ -60,6 +60,13 @@ export function findById(db: Executor, id: string): Promise<MessageRow | undefin
   return one<MessageRow>(db, 'SELECT * FROM messages WHERE id = ?', [id])
 }
 
+/** 批量按 id 加载（转发用），返回顺序不作保证，调用方按需排序 */
+export async function findByIds(db: Executor, ids: string[]): Promise<MessageRow[]> {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(', ')
+  return all<MessageRow>(db, `SELECT * FROM messages WHERE id IN (${placeholders})`, ids)
+}
+
 /** 引用回复时展示的摘要：非文本消息收敛成占位词，撤回后统一提示 */
 export function previewOf(row: MessageRow, max = 80): string {
   if (row.deleted_at) return '消息已撤回'

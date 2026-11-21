@@ -1,6 +1,7 @@
 import {
   Permission,
   SenderType,
+  ulid,
   type Message,
   type MessageMeta,
   type MessageType,
@@ -9,6 +10,7 @@ import {
 import type { Executor } from '../db'
 import { withTx } from '../db/tx'
 import * as messagesRepo from '../db/repo/messages'
+import type { MessageRow } from '../db/repo/messages'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as membersRepo from '../db/repo/members'
 import * as readCursorsRepo from '../db/repo/read-cursors'
@@ -147,6 +149,134 @@ export async function send(db: Executor, input: SendMessageInput): Promise<SendM
     await emitMessageCreated(db, result.message, input.clientNonce)
   }
   return result
+}
+
+export interface ForwardResultItem {
+  conversationId: string
+  messages: Message[]
+}
+
+/**
+ * 转发消息的 meta：保留附件、贴纸等展示信息，
+ * 剥掉引用快照 / 提及 / 幂等键 / AI 元数据（目标会话里这些都不再成立），盖上转发来源。
+ */
+function buildForwardMeta(source: MessageRow, sourceLabel: string): MessageMeta {
+  let meta: MessageMeta = {}
+  if (source.meta) {
+    try {
+      meta = { ...(JSON.parse(source.meta) as MessageMeta) }
+    } catch {
+      meta = {}
+    }
+  }
+  delete meta.mentions
+  delete meta.mentionAll
+  delete meta.replyTo
+  delete meta.clientNonce
+  delete meta.ai
+  meta.forwardedFrom = sourceLabel
+  return meta
+}
+
+/** 转发来源会话的展示名：群/AI 用会话名，私聊用对方昵称兜底 */
+async function sourceConversationLabel(
+  db: Executor,
+  conversationId: string,
+  viewerId: string,
+): Promise<string> {
+  const conversation = await conversationsRepo.findById(db, conversationId)
+  if (!conversation) return '未知会话'
+  if (conversation.name && conversation.name.trim().length > 0) return conversation.name
+  if (conversation.type === 'direct') {
+    const members = await membersRepo.listActive(db, conversationId)
+    const partner = members.find((m) => m.user_id !== viewerId)
+    if (partner) {
+      const user = await usersRepo.findById(db, partner.user_id)
+      if (user?.display_name) return user.display_name
+    }
+  }
+  return '会话'
+}
+
+/**
+ * 批量转发：把若干条消息原样复制到若干个目标会话。
+ * 源会话要求可读（成员资格），目标会话逐个校验发送权限；
+ * 每个目标会话独立事务，部分目标失败不影响其余；
+ * 附件不复制文件，meta 里的 URL 引用即让附件 GC 认为仍被引用。
+ * 广播放在事务提交之后，避免「已广播但回滚」。
+ */
+export async function forward(
+  db: Executor,
+  input: {
+    userId: string
+    messageIds: string[]
+    targetConversationIds: string[]
+    deviceId?: string | null
+  },
+): Promise<{ results: ForwardResultItem[] }> {
+  const rows = await messagesRepo.findByIds(db, input.messageIds)
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const sources = input.messageIds
+    .map((id) => byId.get(id))
+    .filter((row): row is MessageRow => Boolean(row) && row.deleted_at === null && row.type !== 'system')
+  if (sources.length === 0) throw err.validation('没有可转发的消息')
+
+  const sourceConversations = [...new Set(sources.map((row) => row.conversation_id))]
+  for (const conversationId of sourceConversations) {
+    await assertMember(db, conversationId, input.userId)
+  }
+  const sourceLabels = new Map<string, string>()
+  for (const conversationId of sourceConversations) {
+    sourceLabels.set(conversationId, await sourceConversationLabel(db, conversationId, input.userId))
+  }
+
+  const results: ForwardResultItem[] = []
+  for (const targetId of input.targetConversationIds) {
+    const messages = await withTx(db, async (tx) => {
+      const member = await assertPermission(tx, targetId, input.userId, Permission.SEND_MESSAGE)
+      if (isMuted(member)) throw err.forbidden('你已被禁言')
+
+      const created: Message[] = []
+      for (const source of sources) {
+        const meta = buildForwardMeta(source, sourceLabels.get(source.conversation_id) ?? '会话')
+        const seq = await conversationsRepo.nextSeq(tx, targetId)
+        const ts = now()
+        const row = await messagesRepo.insert(tx, {
+          conversationId: targetId,
+          senderId: input.userId,
+          senderType: SenderType.User,
+          type: source.type as MessageType,
+          content: source.content,
+          meta,
+          replyToId: null,
+          seq,
+          // 转发行的幂等键由服务端生成，客户端没有乐观行需要对账
+          clientNonce: ulid(),
+          createdAt: ts,
+          updatedByDevice: input.deviceId ?? null,
+        })
+        await conversationsRepo.touchLastMessage(tx, targetId, row.id, ts)
+        const mapped = messagesRepo.mapMessage(row)
+        await writeChange(tx, {
+          entity: 'message',
+          entityId: row.id,
+          op: 'upsert',
+          conversationId: targetId,
+          payload: mapped,
+          actorId: input.userId,
+        })
+        created.push(mapped)
+      }
+      return created
+    })
+
+    for (const message of messages) {
+      await emitMessageCreated(db, message, null)
+    }
+    results.push({ conversationId: targetId, messages })
+  }
+
+  return { results }
 }
 
 /** 由系统或 AI 产生的消息，跳过权限但走同一套落库与广播 */

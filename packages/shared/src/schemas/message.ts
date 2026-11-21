@@ -37,7 +37,15 @@ export const MessageMetaSchema = z
         type: z.enum(['text', 'image', 'file', 'sticker', 'voice', 'system']).optional(),
       })
       .optional(),
+    forwardedFrom: z.string().max(120).optional(),
   })
+
+/** 批量转发：把若干条消息复制到若干个目标会话 */
+export const ForwardMessagesSchema = z.object({
+  messageIds: z.array(z.string().min(1)).min(1).max(50),
+  targetConversationIds: z.array(z.string().min(1)).min(1).max(10),
+})
+export type ForwardMessagesInput = z.infer<typeof ForwardMessagesSchema>
 
 export const SendMessageSchema = z.object({
   conversationId: z.string().min(1),

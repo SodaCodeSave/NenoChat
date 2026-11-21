@@ -138,6 +138,8 @@ export interface MessageMeta {
   ai?: AiMessageMeta
   /** 被回复消息的快照，由服务端落库时写入 */
   replyTo?: ReplyPreview
+  /** 转发来源会话名，由服务端转发时写入，UI 据此显示「转发」标记 */
+  forwardedFrom?: string
 }
 
 export interface Message {

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import {
   EditMessageSchema,
+  ForwardMessagesSchema,
   MarkReadSchema,
   MessagePageQuerySchema,
   PinMessageSchema,
@@ -76,6 +77,17 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return result
+  })
+
+  app.post('/messages/forward', async (request) => {
+    const userId = await requireUserId(request)
+    const input = parse(ForwardMessagesSchema, request.body)
+    return await messageService.forward(db, {
+      userId,
+      messageIds: input.messageIds,
+      targetConversationIds: input.targetConversationIds,
+      deviceId: deviceIdOf(request),
+    })
   })
 
   app.patch<{ Params: { id: string } }>('/messages/:id', async (request) => {
