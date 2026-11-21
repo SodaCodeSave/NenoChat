@@ -22,7 +22,14 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const userId = await requireUserId(request)
       const rawKind = request.query.kind
-      const kind = rawKind === 'avatar' ? 'avatar' : rawKind === 'sticker' ? 'sticker' : 'file'
+      const kind =
+        rawKind === 'avatar'
+          ? 'avatar'
+          : rawKind === 'sticker'
+            ? 'sticker'
+            : rawKind === 'background'
+              ? 'background'
+              : 'file'
 
       let part: Awaited<ReturnType<typeof request.file>> | undefined
       try {

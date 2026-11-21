@@ -34,6 +34,14 @@ export const AUDIO_MIME = new Map<string, string>([
   ['audio/aac', '.aac'],
 ])
 
+/** 各上传类别在 files 根目录下的落盘子目录 */
+const KIND_FOLDERS: Record<SaveUploadInput['kind'], string> = {
+  avatar: 'avatars',
+  sticker: 'stickers',
+  background: 'backgrounds',
+  file: 'files',
+}
+
 /**
  * 魔数校验：光看 Content-Type 与扩展名都能伪造，
  * 头像这类会直接进 <img> 的文件至少确认内容真的是图片。
@@ -71,7 +79,7 @@ export interface SaveUploadInput {
   buffer: Buffer
   filename: string
   mime: string
-  kind: 'avatar' | 'file' | 'sticker'
+  kind: 'avatar' | 'file' | 'sticker' | 'background'
 }
 
 /**
@@ -84,8 +92,8 @@ export async function saveUpload(db: DB, input: SaveUploadInput): Promise<Attach
   const ext = IMAGE_MIME.get(mime) ?? TEXT_MIME.get(mime) ?? AUDIO_MIME.get(mime)
   if (!ext) throw err.validation(`不支持的文件类型：${input.mime}`)
 
-  if (input.kind === 'avatar' || input.kind === 'sticker') {
-    const label = input.kind === 'avatar' ? '头像' : '表情'
+  if (input.kind === 'avatar' || input.kind === 'sticker' || input.kind === 'background') {
+    const label = input.kind === 'avatar' ? '头像' : input.kind === 'sticker' ? '表情' : '背景图'
     if (!IMAGE_MIME.has(mime)) throw err.validation(`${label}只支持 PNG / JPEG / WEBP / GIF`)
     if (input.buffer.length > MAX_UPLOAD_IMAGE_BYTES) {
       throw err.tooLarge(`${label}不能超过 ${Math.round(MAX_UPLOAD_IMAGE_BYTES / 1048576)}MB`)
@@ -114,7 +122,7 @@ export async function saveUpload(db: DB, input: SaveUploadInput): Promise<Attach
     return attachmentsRepo.mapAttachment(existing)
   }
 
-  const folder = input.kind === 'avatar' ? 'avatars' : input.kind === 'sticker' ? 'stickers' : 'files'
+  const folder = KIND_FOLDERS[input.kind]
   const storageKey = `${folder}/${sha256.slice(0, 2)}/${sha256.slice(2, 4)}/${sha256}${ext}`
   const absolute = path.join(dataDir(), 'files', storageKey)
   fs.mkdirSync(path.dirname(absolute), { recursive: true })

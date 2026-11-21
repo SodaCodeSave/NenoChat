@@ -11,6 +11,8 @@ export interface UserSettingsRow {
   send_key: string
   locale: string
   reduce_motion: number
+  chat_bg_url: string | null
+  chat_bg_accent: string | null
   updated_at: number
 }
 
@@ -37,6 +39,8 @@ export function mapUserSettings(row: UserSettingsRow): UserSettings {
     sendKey: row.send_key === 'ctrl+enter' ? 'ctrl+enter' : 'enter',
     locale: row.locale,
     reduceMotion: row.reduce_motion === 1,
+    chatBgUrl: row.chat_bg_url,
+    chatBgAccent: row.chat_bg_accent,
   }
 }
 
@@ -95,7 +99,7 @@ export async function updateUserSettings(db: DB, userId: string, patch: Partial<
     db,
     `UPDATE user_settings
      SET theme = ?, accent = ?, font_scale = ?, density = ?, send_key = ?, locale = ?,
-         reduce_motion = ?, updated_at = ?
+         reduce_motion = ?, chat_bg_url = ?, chat_bg_accent = ?, updated_at = ?
      WHERE user_id = ?
      RETURNING *`,
     [
@@ -106,6 +110,9 @@ export async function updateUserSettings(db: DB, userId: string, patch: Partial<
       patch.sendKey ?? current.send_key,
       patch.locale ?? current.locale,
       patch.reduceMotion === undefined ? current.reduce_motion : patch.reduceMotion ? 1 : 0,
+      // 背景两列可空：显式区分「未传（保持原值）」与「传 null（清除）」，不能用 ??
+      patch.chatBgUrl === undefined ? current.chat_bg_url : patch.chatBgUrl,
+      patch.chatBgAccent === undefined ? current.chat_bg_accent : patch.chatBgAccent,
       now(),
       userId,
     ],

@@ -163,6 +163,13 @@ export async function collectReferencedKeys(db: DB): Promise<Set<string>> {
   )
   for (const row of avatarRows) addKey(keys, row.url)
 
+  // 用户设置的聊天背景图也是「URL 存在设置列里」的引用，漏扫会被 GC 当孤儿删掉
+  const bgRows = await all<{ url: string | null }>(
+    db,
+    "SELECT chat_bg_url AS url FROM user_settings WHERE chat_bg_url LIKE '/files/%'",
+  )
+  for (const row of bgRows) addKey(keys, row.url)
+
   const personaRows = await all<{ avatar: string | null; card: string | null }>(
     db,
     `SELECT avatar_url AS avatar, card_url AS card FROM ai_personas

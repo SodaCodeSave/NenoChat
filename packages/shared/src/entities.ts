@@ -188,7 +188,7 @@ export interface Attachment {
   ownerId: string
   conversationId?: string | null
   messageId?: string | null
-  kind: 'image' | 'file' | 'sticker' | 'avatar'
+  kind: 'image' | 'file' | 'sticker' | 'avatar' | 'background'
   filename: string
   mime: string
   size: number
@@ -580,6 +580,10 @@ export interface UserSettings {
   sendKey: 'enter' | 'ctrl+enter'
   locale: string
   reduceMotion: boolean
+  /** 自定义聊天背景图的 /files/... 相对 URL；未设置为 null */
+  chatBgUrl: string | null
+  /** 客户端从背景图提取的主色（#rrggbb），存库让各设备共用一份、启动即时生效 */
+  chatBgAccent: string | null
 }
 
 export interface NotificationSettings {
