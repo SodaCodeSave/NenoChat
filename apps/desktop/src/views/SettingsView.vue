@@ -11,6 +11,7 @@ import ServerSettings from '@/components/settings/sections/ServerSettings.vue'
 import MobilePairing from '@/components/settings/sections/MobilePairing.vue'
 import AboutSettings from '@/components/settings/sections/AboutSettings.vue'
 import AiSettings from '@/components/settings/AiSettings.vue'
+import UsageStatsSettings from '@/components/settings/UsageStatsSettings.vue'
 import PersonaSettings from '@/components/settings/PersonaSettings.vue'
 import ConnectorSettings from '@/components/settings/ConnectorSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
@@ -28,6 +29,7 @@ type SectionKey =
   | 'server'
   | 'mobile'
   | 'ai'
+  | 'usage-stats'
   | 'persona'
   | 'connectors'
   | 'stickers'
@@ -116,6 +118,17 @@ const allSections: SettingsSection[] = [
     ],
   },
   {
+    key: 'usage-stats',
+    label: '用量统计',
+    icon: 'chart',
+    description: 'AI token 消耗：按角色、按模型、按功能与时间趋势',
+    anchors: [
+      { id: 'overview', label: '用量总览', keywords: 'token 统计 用量 消耗 图表 趋势' },
+      { id: 'by-ai', label: '按 AI 统计', keywords: '角色 模型 token 排行' },
+      { id: 'by-kind', label: '按功能统计', keywords: '功能 场景 对话 记忆 识图' },
+    ],
+  },
+  {
     key: 'persona',
     label: '角色与互动',
     icon: 'users',
@@ -169,7 +182,7 @@ const allSections: SettingsSection[] = [
 
 const groups: { label: string; keys: SectionKey[] }[] = [
   { label: '通用', keys: ['account', 'appearance', 'notification', 'server'] },
-  { label: '智能', keys: ['ai', 'persona', 'connectors', 'stickers'] },
+  { label: '智能', keys: ['ai', 'usage-stats', 'persona', 'connectors', 'stickers'] },
   { label: '系统', keys: ['mobile', 'storage', 'about'] },
 ]
 
@@ -180,6 +193,7 @@ const sectionComponents = {
   server: ServerSettings,
   mobile: MobilePairing,
   ai: AiSettings,
+  'usage-stats': UsageStatsSettings,
   persona: PersonaSettings,
   connectors: ConnectorSettings,
   stickers: StickerSettings,

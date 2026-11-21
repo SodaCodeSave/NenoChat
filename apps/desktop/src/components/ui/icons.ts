@@ -59,6 +59,7 @@ export const iconPaths = {
   smartphone: 'M8.5 3h7A1.5 1.5 0 0 1 17 4.5v15A1.5 1.5 0 0 1 15.5 21h-7A1.5 1.5 0 0 1 7 19.5v-15A1.5 1.5 0 0 1 8.5 3ZM10.5 18h3',
   volume: 'M11 5 6 9H3a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h3l5 4V5ZM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9.5 9.5 0 0 1 0 13',
   mic: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3',
+  chart: 'M3 3v16a2 2 0 0 0 2 2h16M7 15v-4M12 15V7M17 15v-6',
 } as const
 
 export type IconName = keyof typeof iconPaths

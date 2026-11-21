@@ -11,6 +11,8 @@ import {
   type AiSchedule,
   type AiScheduleItem,
   type AiUsageEntry,
+  type AiUsageStats,
+  type AiUsageWindow,
   type Conversation,
   type PersonaRelationship,
 } from '@nenochat/shared'
@@ -155,6 +157,16 @@ export const aiApi = {
   /** 按 refId 批量查最近一次 usage（消息内联调试条） */
   usageByRefs: (refIds: string[]) =>
     http.post<{ usage: Record<string, AiUsageEntry> }>(p('/ai/debug/usage-batch'), { refIds }),
+
+  /** 主人的 token 用量统计：24h/7d/30d 窗口作用于总览、时间序列与模型/功能/角色聚合 */
+  usageStats: (window: AiUsageWindow, tzOffset?: number) =>
+    http.get<{ stats: AiUsageStats }>(
+      p(
+        `/ai/usage/stats?window=${window}${
+          tzOffset !== undefined ? `&tzOffset=${tzOffset}` : ''
+        }`,
+      ),
+    ),
 
   writeMemory: (
     conversationId: string,
