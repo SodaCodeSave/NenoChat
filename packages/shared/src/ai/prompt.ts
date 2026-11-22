@@ -19,8 +19,33 @@ export type ChatContentPart =
   | { type: 'image_url'; image_url: { url: string } }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | ChatContentPart[]
+  /**
+   * role='tool' 时对应的调用 id。ChatMessage 会原样 JSON.stringify 进上游请求体，
+   * 所以这里用 OpenAI 线上格式（snake_case），与 image_url 同理。
+   */
+  tool_call_id?: string
+  /** role='assistant' 的工具中转轮次携带的待执行调用 */
+  tool_calls?: ChatToolCall[]
+}
+
+/** OpenAI 兼容的工具定义，直接透传给上游的 tools 字段 */
+export interface ChatToolDef {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    /** JSON Schema 参数描述 */
+    parameters: Record<string, unknown>
+  }
+}
+
+/** 上游返回的一次工具调用（arguments 是尚未解析的 JSON 字符串） */
+export interface ChatToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
 }
 
 /** 本次输入携带的一张图片：识图后有 description，直传模式有 dataUrl */

@@ -16,6 +16,7 @@
     "@fastify/multipart": "^10.1.8",
     "@fastify/static": "^10.1.11",
     "@fastify/websocket": "^11.3.7",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@nenochat/shared": "workspace:*",
     "@node-rs/argon2": "^2.2.2",
     "croner": "^11.0.1",

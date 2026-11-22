@@ -119,6 +119,12 @@ export interface ServerEventPayloads {
     kind: ConnectorActionMeta['kind']
     phase: 'start' | 'done'
   }
+  /** 工具调用（MCP / read_skill）的实时进度：生成中的每一轮推送 */
+  'ai.tool.status': {
+    conversationId: string
+    tool: string
+    phase: 'start' | 'done'
+  }
   'ai.done': {
     generationId: string
     conversationId: string

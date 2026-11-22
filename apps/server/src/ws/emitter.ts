@@ -149,6 +149,17 @@ export async function emitAiConnectorStatus(
   hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.connector.status', payload)
 }
 
+export async function emitAiToolStatus(
+  db: DB,
+  payload: {
+    conversationId: AiConversationId
+    tool: string
+    phase: 'start' | 'done'
+  },
+): Promise<void> {
+  hub().sendToUsers(await memberIds(db, payload.conversationId), 'ai.tool.status', payload)
+}
+
 export async function emitAiDone(
   db: DB,
   payload: {

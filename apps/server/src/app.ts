@@ -25,6 +25,8 @@ import { searchRoutes } from './http/routes/search'
 import { contactRoutes } from './http/routes/contacts'
 import { settingsRoutes } from './http/routes/settings'
 import { connectorRoutes } from './http/routes/connectors'
+import { mcpServerRoutes } from './http/routes/mcp-servers'
+import { skillRoutes } from './http/routes/skills'
 import { adminRoutes } from './http/routes/admin'
 import { registerWs } from './ws/server'
 import { startProactiveScheduler } from './services/proactive-service'
@@ -130,6 +132,8 @@ export async function buildApp(): Promise<FastifyInstance> {
       await scope.register(contactRoutes)
       await scope.register(settingsRoutes)
       await scope.register(connectorRoutes)
+      await scope.register(mcpServerRoutes)
+      await scope.register(skillRoutes)
       await scope.register(adminRoutes)
     },
     { prefix: API_PREFIX },

@@ -801,3 +801,46 @@ export interface LinkPreview {
   hasSummary?: boolean
   fetchedAt: number
 }
+
+/* -------------------------- MCP 服务器与技能 -------------------------- */
+
+/** MCP 服务器非敏感配置，随实体一起下发 */
+export interface McpServerConfig {
+  /** 工具调用超时（毫秒），空则用服务端默认值 */
+  timeoutMs?: number | null
+}
+
+/** 敏感配置（自定义请求头，常放鉴权 token）只回掩码，明文永远不上客户端 */
+export interface McpServerSecretMask {
+  headers?: Record<string, string> | null
+}
+
+export interface McpServer {
+  id: string
+  ownerId: string
+  name: string
+  /** MCP 端点地址（Streamable HTTP，兼容旧 SSE） */
+  url: string
+  enabled: boolean
+  config: McpServerConfig
+  secretMasked: McpServerSecretMask
+  lastTestAt?: number | null
+  lastTestOk?: boolean | null
+  /** 测试成功时展示发现的工具数，失败时展示原因 */
+  lastTestMessage?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** 技能提示词包：目录进系统提示词，AI 需要时用 read_skill 工具取全文 */
+export interface Skill {
+  id: string
+  ownerId: string
+  name: string
+  description: string
+  /** Markdown 正文 */
+  content: string
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+}

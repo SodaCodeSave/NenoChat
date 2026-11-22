@@ -27,6 +27,8 @@ import {
   type AiUsageStats,
   type AiUsageWindow,
   type ChatMessage,
+  type ChatToolCall,
+  type ChatToolDef,
   type ConnectorActionMeta,
   type Conversation,
   type AttachmentRef,
@@ -56,6 +58,9 @@ import * as stickersRepo from '../db/repo/stickers'
 import { localDayKey, minutesOfDay, serverTzOffsetMinutes } from './proactive-rules'
 import { buildConnectorContext } from './connector-context'
 import * as connectorService from './connector-service'
+import * as mcpService from './mcp-service'
+import * as skillsRepo from '../db/repo/skills'
+import * as skillService from './skill-service'
 import * as usersRepo from '../db/repo/users'
 import { IMAGE_MIME } from './file-service'
 import { writeChange } from './change-log'
@@ -65,6 +70,7 @@ import { appendSystemMessage } from './message-service'
 import * as voiceService from './voice-service'
 import {
   emitAiConnectorStatus,
+  emitAiToolStatus,
   emitAiDelta,
   emitAiDone,
   emitAiError,
@@ -1213,6 +1219,39 @@ async function runGenerationOnServer(
     if (voiceTool) chatMessages.push({ role: 'system', content: renderVoiceBlock() })
   }
 
+  /* ----------------- MCP 工具与技能目录（function calling） ----------------- */
+
+  // MCP 工具集：逐服务器连接列工具，失败的服务器静默跳过
+  const mcpToolset = await mcpService.buildToolset(db, input.userId)
+  // 技能目录只注入名字+描述，正文留给 read_skill 按需读取
+  const enabledSkills = await skillsRepo.listEnabledSkills(db, input.userId)
+  if (enabledSkills.length > 0) {
+    chatMessages.push({ role: 'system', content: skillService.renderSkillCatalog(enabledSkills) })
+  }
+  const genTools: ChatToolDef[] = [...mcpToolset.tools]
+  if (enabledSkills.length > 0) genTools.push(skillService.READ_SKILL_TOOL_DEF)
+
+  // 内置 read_skill 与 MCP 工具统一走这一个执行入口
+  const executeTool = async (name: string, argsJson: string): Promise<string> => {
+    if (name === skillService.READ_SKILL_TOOL_DEF.function.name) {
+      let wanted = ''
+      try {
+        wanted = String((JSON.parse(argsJson || '{}') as { name?: unknown }).name ?? '')
+      } catch {
+        /* 参数不合法时保持空串，走未找到分支 */
+      }
+      const content = await skillService.resolveSkillContent(db, input.userId, wanted)
+      return content ?? `没有找到名为「${wanted.trim() || '（空）'}」的技能，可用技能以系统提示词目录为准`
+    }
+    return mcpToolset.call(name, argsJson)
+  }
+  const onToolStatus = (tool: string, phase: 'start' | 'done'): void => {
+    // 推给客户端的是展示名：read_skill 用中文，MCP 工具用服务器上的原始名
+    const label =
+      tool === skillService.READ_SKILL_TOOL_DEF.function.name ? '读取技能' : mcpToolset.labelOf(tool)
+    void emitAiToolStatus(db, { conversationId: input.conversationId, tool: label, phase }).catch(() => {})
+  }
+
   const rule: SegmentRule = {
     enabled: settings.segmentEnabled,
     pattern: settings.segmentPattern,
@@ -1234,13 +1273,16 @@ async function runGenerationOnServer(
   if (!settings.streamEnabled && !settings.segmentEnabled) {
     let result: UpstreamResult
     try {
-      result = await callUpstream({
+      result = await runToolLoop({
         baseUrl: provider.base_url,
         apiKey,
         model,
         temperature: persona.temperature ?? provider.temperature,
         maxTokens: provider.max_tokens,
         messages: chatMessages,
+        tools: genTools,
+        executeTool,
+        onToolStatus,
         record: {
           db,
           ownerId: input.userId,
@@ -1417,13 +1459,16 @@ async function runGenerationOnServer(
   }
 
   try {
-    const { usage } = await callUpstreamStream({
+    const { usage } = await runToolLoop({
       baseUrl: provider.base_url,
       apiKey,
       model,
       temperature: persona.temperature ?? provider.temperature,
       maxTokens: provider.max_tokens,
       messages: chatMessages,
+      tools: genTools,
+      executeTool,
+      onToolStatus,
       onDelta: (delta) => {
         pending += delta
         if (settings.streamEnabled) emitDelta(delta)
@@ -1807,6 +1852,8 @@ async function assertAiUpstreamUrl(raw: string): Promise<void> {
 export interface UpstreamResult {
   content: string
   usage: UpstreamUsage | null
+  /** 上游要求执行的函数调用；空（含 undefined）表示这是最终回复 */
+  toolCalls?: ChatToolCall[]
 }
 
 /** 传入后这次调用的 usage 会写进 ai_usage_log，供调试模式聚合 */
@@ -1880,6 +1927,8 @@ export async function callUpstream(input: {
   temperature: number
   maxTokens: number
   messages: ChatMessage[]
+  /** 传入后走 function calling，上游可能回 tool_calls 而不是最终回复 */
+  tools?: ChatToolDef[]
   record?: UpstreamRecordContext
 }): Promise<UpstreamResult> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
@@ -1901,6 +1950,7 @@ export async function callUpstream(input: {
         temperature: input.temperature,
         max_tokens: input.maxTokens,
         stream: false,
+        ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
       }),
       signal: controller.signal,
     })
@@ -1911,19 +1961,43 @@ export async function callUpstream(input: {
     }
 
     const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>
+      choices?: Array<{ message?: { content?: string; tool_calls?: UpstreamToolCallPayload[] } }>
     } & UpstreamUsagePayload
-    const content = payload.choices?.[0]?.message?.content
-    if (!content) throw err.upstreamAi('上游没有返回内容')
+    const message = payload.choices?.[0]?.message
+    const content = message?.content
+    const toolCalls = normalizeToolCalls(message?.tool_calls)
+    if (!content && toolCalls.length === 0) throw err.upstreamAi('上游没有返回内容')
 
     const usage = parseUpstreamUsage(payload)
     if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
-    return { content, usage }
+    return { content: content ?? '', usage, ...(toolCalls.length > 0 ? { toolCalls } : {}) }
   } catch (e) {
     throw wrapUpstreamTransportError(e, '上游请求超时')
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** 上游 tool_calls 的原始分片形态：字段可能残缺，收集完再归一化 */
+interface UpstreamToolCallPayload {
+  id?: string
+  type?: string
+  function?: { name?: string; arguments?: string }
+}
+
+/** 剔除缺 name 的残片，id 缺失时按序补一个 */
+function normalizeToolCalls(raw: UpstreamToolCallPayload[] | undefined): ChatToolCall[] {
+  if (!raw || raw.length === 0) return []
+  const calls: ChatToolCall[] = []
+  raw.forEach((item, index) => {
+    if (!item.function?.name) return
+    calls.push({
+      id: item.id || `call_${index}`,
+      type: 'function',
+      function: { name: item.function.name, arguments: item.function.arguments ?? '' },
+    })
+  })
+  return calls
 }
 
 /**
@@ -1937,6 +2011,8 @@ export async function callUpstreamStream(input: {
   temperature: number
   maxTokens: number
   messages: ChatMessage[]
+  /** 传入后走 function calling，上游可能回 tool_calls 而不是最终回复 */
+  tools?: ChatToolDef[]
   onDelta: (delta: string) => void
   record?: UpstreamRecordContext
 }): Promise<UpstreamResult> {
@@ -1968,6 +2044,7 @@ export async function callUpstreamStream(input: {
         max_tokens: input.maxTokens,
         stream: true,
         stream_options: { include_usage: true },
+        ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
       }),
       signal: controller.signal,
     })
@@ -1981,14 +2058,16 @@ export async function callUpstreamStream(input: {
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.includes('text/event-stream')) {
       const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>
+        choices?: Array<{ message?: { content?: string; tool_calls?: UpstreamToolCallPayload[] } }>
       } & UpstreamUsagePayload
-      const content = payload.choices?.[0]?.message?.content
-      if (!content) throw err.upstreamAi('上游没有返回内容')
-      input.onDelta(content)
+      const message = payload.choices?.[0]?.message
+      const content = message?.content
+      const toolCalls = normalizeToolCalls(message?.tool_calls)
+      if (!content && toolCalls.length === 0) throw err.upstreamAi('上游没有返回内容')
+      if (content) input.onDelta(content)
       const usage = parseUpstreamUsage(payload)
       if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
-      return { content, usage }
+      return { content: content ?? '', usage, ...(toolCalls.length > 0 ? { toolCalls } : {}) }
     }
 
     if (!response.body) throw err.upstreamAi('上游没有返回流式内容')
@@ -1998,6 +2077,8 @@ export async function callUpstreamStream(input: {
     let sseBuffer = ''
     let full = ''
     let usage: UpstreamUsage | null = null
+    // delta.tool_calls 按 index 分片到达，逐个累积到齐再归一化
+    const toolAcc: Array<{ id?: string; name?: string; arguments: string }> = []
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -2016,15 +2097,25 @@ export async function callUpstreamStream(input: {
         if (!data || data === '[DONE]') continue
         try {
           const payload = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string } }>
+            choices?: Array<{
+              delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }
+            }>
           } & UpstreamUsagePayload
           // usage 通常在最后一个 chunk；出现就覆盖，拿到的永远是最新一份
           const parsedUsage = parseUpstreamUsage(payload)
           if (parsedUsage) usage = parsedUsage
-          const piece = payload.choices?.[0]?.delta?.content
+          const choice = payload.choices?.[0]
+          const piece = choice?.delta?.content
           if (piece) {
             full += piece
             input.onDelta(piece)
+          }
+          for (const fragment of choice?.delta?.tool_calls ?? []) {
+            const idx = Math.max(0, fragment.index ?? 0)
+            const acc = (toolAcc[idx] ??= { arguments: '' })
+            if (fragment.id) acc.id = fragment.id
+            if (fragment.function?.name) acc.name = fragment.function.name
+            if (fragment.function?.arguments) acc.arguments += fragment.function.arguments
           }
         } catch {
           /* 忽略解析不了的行，上游偶尔会混入注释或心跳 */
@@ -2032,14 +2123,96 @@ export async function callUpstreamStream(input: {
       }
     }
 
-    if (!full.trim()) throw err.upstreamAi('上游没有返回内容')
+    const toolCalls = normalizeToolCalls(
+      toolAcc.filter((acc) => acc.name).map((acc) => ({ id: acc.id, function: { name: acc.name!, arguments: acc.arguments } })),
+    )
+    if (!full.trim() && toolCalls.length === 0) throw err.upstreamAi('上游没有返回内容')
     if (input.record) await recordUpstreamUsage(input.record, usage, input.model)
-    return { content: full, usage }
+    return { content: full, usage, ...(toolCalls.length > 0 ? { toolCalls } : {}) }
   } catch (e) {
     throw wrapUpstreamTransportError(e, '上游请求超时')
   } finally {
     if (timer !== null) clearTimeout(timer)
   }
+}
+
+/** 工具调用轮数上限：防止模型反复调用工具不放 */
+const MAX_TOOL_ROUNDS = 8
+
+export interface ToolLoopInput {
+  baseUrl: string
+  apiKey: string
+  model: string
+  temperature: number
+  maxTokens: number
+  messages: ChatMessage[]
+  /** 空数组/缺省时直接单轮调用，行为与无工具链路完全一致 */
+  tools?: ChatToolDef[]
+  /** 执行一个工具调用，返回给上游的文本结果 */
+  executeTool: (name: string, argsJson: string) => Promise<string>
+  /** 工具调用的实时进度回调（WS 推送用） */
+  onToolStatus?: (tool: string, phase: 'start' | 'done') => void
+  /** 流式模式：每轮增量走这里；不传则整轮非流式 */
+  onDelta?: (delta: string) => void
+  record?: UpstreamRecordContext
+}
+
+/**
+ * function calling 主循环：上游要求执行工具就执行并回填结果，直到给出最终回复。
+ * 达到轮数上限后去掉工具再要一次，强制收口；各轮 usage 由底层逐轮落库，
+ * 汇总后挂在最终结果上供 finishGeneration 记总账。
+ */
+export async function runToolLoop(input: ToolLoopInput): Promise<UpstreamResult> {
+  const tools = input.tools && input.tools.length > 0 ? input.tools : undefined
+  const callOnce = (messages: ChatMessage[], withTools: boolean): Promise<UpstreamResult> => {
+    const common = {
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      model: input.model,
+      temperature: input.temperature,
+      maxTokens: input.maxTokens,
+      messages,
+      ...(withTools && tools ? { tools } : {}),
+      record: input.record,
+    }
+    return input.onDelta ? callUpstreamStream({ ...common, onDelta: input.onDelta }) : callUpstream(common)
+  }
+
+  if (!tools) return await callOnce(input.messages, true)
+
+  const messages = [...input.messages]
+  let usageSum: UpstreamUsage | null = null
+  const addUsage = (usage: UpstreamUsage | null): void => {
+    if (!usage) return
+    usageSum = usageSum
+      ? {
+          promptTokens: (usageSum.promptTokens ?? 0) + (usage.promptTokens ?? 0),
+          completionTokens: (usageSum.completionTokens ?? 0) + (usage.completionTokens ?? 0),
+          cachedTokens: (usageSum.cachedTokens ?? 0) + (usage.cachedTokens ?? 0),
+        }
+      : usage
+  }
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const result = await callOnce(messages, true)
+    addUsage(result.usage)
+    if (!result.toolCalls || result.toolCalls.length === 0) {
+      return { ...result, usage: usageSum ?? result.usage }
+    }
+    // 工具中转轮次：原样回填 assistant 的 tool_calls，再逐个补 tool 结果
+    messages.push({ role: 'assistant', content: result.content, tool_calls: result.toolCalls })
+    for (const call of result.toolCalls) {
+      input.onToolStatus?.(call.function.name, 'start')
+      const output = await input.executeTool(call.function.name, call.function.arguments)
+      input.onToolStatus?.(call.function.name, 'done')
+      messages.push({ role: 'tool', tool_call_id: call.id, content: output })
+    }
+  }
+
+  // 轮数用尽：去掉工具再要一次最终回复
+  const final = await callOnce(messages, false)
+  addUsage(final.usage)
+  return { ...final, usage: usageSum ?? final.usage }
 }
 
 /** 拉取 OpenAI 兼容端点的模型列表，只回传 id，供前端下拉选择 */
