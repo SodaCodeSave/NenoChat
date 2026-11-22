@@ -29,7 +29,7 @@ import * as aiRepo from '../../db/repo/ai'
 import * as conversationsRepo from '../../db/repo/conversations'
 import * as aiService from '../../services/ai-service'
 import * as billing from '../../services/ai-billing-service'
-import { getAiRechargeUrl, getSharedAiMode } from '../../services/server-settings-service'
+import { getAiRechargeUrl, getProviderAd, getSharedAiMode } from '../../services/server-settings-service'
 import * as groupAiService from '../../services/group-ai-service'
 import * as scheduleService from '../../services/schedule-service'
 import { emitConversationUpdated } from '../../ws/emitter'
@@ -45,12 +45,18 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { providers: await aiService.listProviders(db, userId) }
   })
 
-  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接 */
+  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接、设置页推广横幅 */
   app.get('/ai/balance', async (request) => {
     const userId = await requireUserId(request)
     const enabled = await getSharedAiMode(db)
+    // 推广横幅两种模式下都随本接口下发；未开启时为 null，客户端不渲染
+    const storedAd = await getProviderAd(db)
+    const ad =
+      storedAd.enabled && storedAd.text.trim()
+        ? { title: storedAd.title, text: storedAd.text, link: storedAd.link, iconUrl: storedAd.iconUrl }
+        : null
     if (!enabled) {
-      return { enabled: false, balance: await billing.getBalance(db, userId), rechargeUrl: null, models: [] }
+      return { enabled: false, balance: await billing.getBalance(db, userId), rechargeUrl: null, models: [], ad }
     }
     // 汇总所有服务器供应商的启用模型（同名取先配置的），供客户端展示可用 AI 与单价
     const seen = new Set<string>()
@@ -67,6 +73,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       balance: await billing.getBalance(db, userId),
       rechargeUrl: rechargeUrl || null,
       models,
+      ad,
     }
   })
 

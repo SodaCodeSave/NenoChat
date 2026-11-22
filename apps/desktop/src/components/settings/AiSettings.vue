@@ -17,8 +17,9 @@ import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { aiApi, type ProviderInput } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 import { AI_PROVIDER_PRESETS, matchProviderIcon } from '@/config/ai-providers'
+import type { ProviderAdData } from '@/config/provider-ad'
 import { isTauri } from '@/platform/device'
-import TokenRouterAdBanner from '@/components/settings/TokenRouterAdBanner.vue'
+import ProviderAdBanner from '@/components/settings/ProviderAdBanner.vue'
 import ModelPicker from '@/components/settings/ModelPicker.vue'
 
 const ai = useAiStore()
@@ -30,6 +31,8 @@ const serverAi = ref<{
   balance: number
   rechargeUrl: string | null
   models: AiProviderModel[]
+  /** 设置页推广横幅；null = 后台未开启（默认） */
+  ad: ProviderAdData | null
 } | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -530,6 +533,9 @@ onBeforeUnmount(() => {
         </Button>
       </template>
 
+      <!-- 推广横幅：后台配置开关/文案/图标，默认关闭；两种模式下都显示在卡片顶部 -->
+      <ProviderAdBanner v-if="serverAi?.ad" :ad="serverAi.ad" />
+
       <!-- 服务器统一供 AI：大字余额 + 充值 + 可用模型价格，自定义供应商停用 -->
       <div v-if="serverAi?.enabled" class="space-y-4">
         <div class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3.5">
@@ -574,8 +580,6 @@ onBeforeUnmount(() => {
         <Alert tone="info">当前由服务器统一提供 AI 服务，自定义服务商已停用。</Alert>
       </div>
       <template v-else>
-        <TokenRouterAdBanner />
-
       <div v-if="showProviderForm" class="mb-3 space-y-3 rounded-lg border border-line bg-surface-2 p-3">
         <p v-if="editingProvider" class="text-[12px] text-muted">
           正在编辑 <span class="font-medium text-text-strong">{{ editingProvider.name }}</span>

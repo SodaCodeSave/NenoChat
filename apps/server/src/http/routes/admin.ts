@@ -23,10 +23,12 @@ import * as usersRepo from '../../db/repo/users'
 import {
   REGISTRATION_MODES,
   getAiRechargeUrl,
+  getProviderAd,
   getRegistrationMode,
   getServerName,
   getSharedAiMode,
   setAiRechargeUrl,
+  setProviderAd,
   setRegistrationMode,
   setServerName,
   setSharedAiMode,
@@ -85,6 +87,22 @@ const RechargeUrlBody = z.object({
     .trim()
     .max(512)
     .refine((v) => v === '' || /^https?:\/\//i.test(v), '充值链接必须是 http(s) 地址'),
+})
+/** 模型设置页推广横幅：文案里的 {甲|乙|丙} 段由客户端滚动轮换 */
+const ProviderAdBody = z.object({
+  enabled: z.boolean(),
+  title: z.string().trim().max(60, '标题过长'),
+  text: z.string().trim().max(200, '文案过长'),
+  link: z
+    .string()
+    .trim()
+    .max(512)
+    .refine((v) => v === '' || /^https?:\/\//i.test(v), '跳转链接必须是 http(s) 地址'),
+  iconUrl: z
+    .string()
+    .trim()
+    .max(512)
+    .refine((v) => v === '' || /^https?:\/\//i.test(v), '图标地址必须是 http(s) URL'),
 })
 const BalanceAdjustBody = z.object({
   delta: z.number().refine((v) => v !== 0, '调整金额不能为 0').refine(
@@ -338,8 +356,28 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return {
       sharedMode: await getSharedAiMode(db),
       rechargeUrl: await getAiRechargeUrl(db),
+      providerAd: await getProviderAd(db),
       providers: await aiService.listProviders(db, billing.SYSTEM_AI_OWNER_ID),
     }
+  })
+
+  app.patch('/admin/ai/provider-ad', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(ProviderAdBody, request.body)
+    if (input.enabled && !input.text) throw err.validation('开启广告前先填写文案')
+    const providerAd = {
+      enabled: input.enabled,
+      title: input.title,
+      text: input.text,
+      link: input.link,
+      iconUrl: input.iconUrl,
+    }
+    await setProviderAd(db, providerAd)
+    await recordAudit(db, admin, 'ai.provider_ad', 'server_settings', null, {
+      enabled: providerAd.enabled,
+      title: providerAd.title || null,
+    })
+    return { providerAd }
   })
 
   app.patch('/admin/ai/shared-mode', async (request) => {

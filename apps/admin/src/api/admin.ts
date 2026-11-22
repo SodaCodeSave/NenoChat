@@ -183,6 +183,15 @@ export interface AdminBalanceItem {
   updatedAt: number | null
 }
 
+/** 模型设置页推广横幅配置；文案里的 {甲|乙|丙} 段由客户端滚动轮换 */
+export interface AdminProviderAd {
+  enabled: boolean
+  title: string
+  text: string
+  link: string
+  iconUrl: string
+}
+
 export interface AdminAuditEntry {
   id: string
   actorId: string
@@ -266,13 +275,18 @@ export const adminApi = {
 
   aiConfig: {
     providers: () =>
-      http.get<{ sharedMode: boolean; rechargeUrl: string; providers: AdminAiProvider[] }>(
-        '/admin/ai/providers',
-      ),
+      http.get<{
+        sharedMode: boolean
+        rechargeUrl: string
+        providerAd: AdminProviderAd
+        providers: AdminAiProvider[]
+      }>('/admin/ai/providers'),
     setSharedMode: (enabled: boolean) =>
       http.patch<{ sharedMode: boolean }>('/admin/ai/shared-mode', { enabled }),
     setRechargeUrl: (url: string) =>
       http.patch<{ rechargeUrl: string }>('/admin/ai/recharge-url', { url }),
+    setProviderAd: (body: AdminProviderAd) =>
+      http.patch<{ providerAd: AdminProviderAd }>('/admin/ai/provider-ad', body),
     createProvider: (body: Record<string, unknown>) =>
       http.post<{ provider: AdminAiProvider }>('/admin/ai/providers', body),
     updateProvider: (id: string, body: Record<string, unknown>) =>

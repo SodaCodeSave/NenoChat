@@ -145,10 +145,23 @@ describe('管理面板结构', () => {
     expect(aiConfigSource).toContain('AI_PROVIDER_PRESETS')
   })
 
+  it('AI 配置视图：模型设置页广告可开关并自定义文案与图标，默认关闭', () => {
+    expect(aiConfigSource).toContain('模型设置页广告')
+    expect(aiConfigSource).toContain('默认关闭')
+    expect(aiConfigSource).toContain('setProviderAd')
+    expect(aiConfigSource).toContain('adForm.enabled')
+    expect(aiConfigSource).toContain('adForm.text')
+    expect(aiConfigSource).toContain('adForm.iconUrl')
+    // 开启但没文案要被拦下，链接与图标地址校验 http(s)
+    expect(aiConfigSource).toContain('开启广告前先填写文案')
+    expect(aiConfigSource).toContain('/^https?:\\/\\//i')
+  })
+
   it('AI 配置端点覆盖 /admin/ai 家族', () => {
     const endpoints = [
       '/admin/ai/providers',
       '/admin/ai/shared-mode',
+      '/admin/ai/provider-ad',
       '/admin/ai/providers/models',
       '/admin/ai/providers/test',
       '/admin/ai/balances',

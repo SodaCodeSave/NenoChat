@@ -5,6 +5,7 @@ import {
   type AdminAiProvider,
   type AdminAiProviderModel,
   type AdminBalanceItem,
+  type AdminProviderAd,
 } from '@/api/admin'
 import Pagination from '@/components/Pagination.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -36,6 +37,12 @@ const loading = ref(true)
 const errorMessage = ref('')
 const notice = ref('')
 
+/* ------------------------------ 设置页广告 ------------------------------ */
+
+/** 广告表单草稿：开关随「保存」一起生效，默认关闭 */
+const adForm = ref<AdminProviderAd>({ enabled: false, title: '', text: '', link: '', iconUrl: '' })
+const savingAd = ref(false)
+
 async function load(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
@@ -44,12 +51,47 @@ async function load(): Promise<void> {
     sharedMode.value = res.sharedMode
     rechargeUrl.value = res.rechargeUrl
     rechargeDraft.value = res.rechargeUrl
+    adForm.value = { ...res.providerAd }
     providers.value = res.providers
     await loadBalances(balancePage.value)
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function saveAd(): Promise<void> {
+  const draft = adForm.value
+  const text = draft.text.trim()
+  if (draft.enabled && !text) {
+    errorMessage.value = '开启广告前先填写文案'
+    return
+  }
+  const link = draft.link.trim()
+  const iconUrl = draft.iconUrl.trim()
+  if ((link && !/^https?:\/\//i.test(link)) || (iconUrl && !/^https?:\/\//i.test(iconUrl))) {
+    errorMessage.value = '链接与图标地址必须是 http(s) URL'
+    return
+  }
+  savingAd.value = true
+  errorMessage.value = ''
+  try {
+    const res = await adminApi.aiConfig.setProviderAd({
+      enabled: draft.enabled,
+      title: draft.title.trim(),
+      text,
+      link,
+      iconUrl,
+    })
+    adForm.value = { ...res.providerAd }
+    notice.value = res.providerAd.enabled
+      ? '广告已开启并保存，客户端模型设置页将展示横幅'
+      : '广告已关闭'
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    savingAd.value = false
   }
 }
 
@@ -451,6 +493,40 @@ onMounted(load)
             </Button>
           </div>
         </SettingRow>
+      </SettingsCard>
+
+      <SettingsCard
+        id="ad"
+        class="mt-3"
+        title="模型设置页广告"
+        description="客户端 AI 服务商设置顶部的推广横幅，默认关闭；文案里的 {甲|乙|丙} 段会上下滚动轮换，多段同步滚动"
+        icon="megaphone"
+      >
+        <SettingRow
+          label="启用广告"
+          :description="adForm.enabled ? '已开启：保存后客户端模型设置页展示横幅' : '已关闭：客户端不展示横幅'"
+        >
+          <Switch v-model="adForm.enabled" />
+        </SettingRow>
+        <SettingRow label="广告内容" description="标题与文案都可留空；开启前必须填写文案" stacked>
+          <div class="grid w-full gap-3 md:grid-cols-2">
+            <Field label="标题" hint="横幅首行的品牌名，可留空">
+              <TextInput v-model="adForm.title" placeholder="如 TokenRouter" />
+            </Field>
+            <Field label="文案" hint="{甲|乙|丙} 为滚动段；不带大括号则是静态文案">
+              <TextInput v-model="adForm.text" placeholder="低价AI中转站，{GLM 5.3 Flash|DeepSeek v4.1} 输出仅 ¥{0.56/1M|1.6/1M}" />
+            </Field>
+            <Field label="跳转链接" hint="留空则横幅不可点击">
+              <TextInput v-model="adForm.link" type="url" placeholder="https://ai.example.com/sign-up?aff=xxx" />
+            </Field>
+            <Field label="图标 URL" hint="留空用内置喇叭图标">
+              <TextInput v-model="adForm.iconUrl" type="url" placeholder="https://cdn.example.com/icon.svg" />
+            </Field>
+          </div>
+        </SettingRow>
+        <div class="flex justify-end">
+          <Button variant="primary" size="sm" :loading="savingAd" @click="saveAd">保存</Button>
+        </div>
       </SettingsCard>
 
       <SettingsCard

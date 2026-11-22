@@ -89,13 +89,20 @@ export const aiApi = {
   providerBalance: (id: string) =>
     http.post<{ provider: AiProvider }>(p(`/ai/providers/${id}/balance`), {}),
 
-  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接（enabled=false 时后两项无意义） */
+  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接、设置页推广横幅（enabled=false 时后两项无意义） */
   balance: () =>
     http.get<{
       enabled: boolean
       balance: number
       rechargeUrl: string | null
       models: AiProviderModel[]
+      /** 推广横幅配置；null = 后台未开启（默认） */
+      ad: {
+        title: string
+        text: string
+        link: string
+        iconUrl: string
+      } | null
     }>(p('/ai/balance')),
 
   personas: () => http.get<{ personas: AiPersona[] }>(p('/ai/personas')),

@@ -114,6 +114,9 @@ describe('管理面板·AI 配置守卫', () => {
       (await api('PATCH', '/admin/ai/shared-mode', { token: plainToken, body: { enabled: true } })).status,
     ).toBe(403)
     expect(
+      (await api('PATCH', '/admin/ai/provider-ad', { token: plainToken, body: { enabled: false } })).status,
+    ).toBe(403)
+    expect(
       (await api('POST', '/admin/ai/balances/whatever', { token: plainToken, body: { delta: 1 } })).status,
     ).toBe(403)
   })
@@ -135,6 +138,102 @@ describe('全服共享模式开关', () => {
 
     const audit = await api('GET', '/admin/audit', { token: adminToken })
     expect(audit.json.items.some((a: any) => a.action === 'ai.shared_mode')).toBe(true)
+  })
+})
+
+describe('模型设置页广告配置', () => {
+  it('默认关闭：没配置过时读回出厂默认', async () => {
+    const res = await api('GET', '/admin/ai/providers', { token: adminToken })
+    expect(res.status).toBe(200)
+    expect(res.json.providerAd).toEqual({
+      enabled: false,
+      title: '',
+      text: '',
+      link: '',
+      iconUrl: '',
+    })
+    // 默认关闭时普通用户的余额接口不下发横幅
+    const balance = await api('GET', '/ai/balance', { token: plainToken })
+    expect(balance.status).toBe(200)
+    expect(balance.json.ad).toBeNull()
+  })
+
+  it('校验：非法链接与开启但文案为空都被拒绝', async () => {
+    expect(
+      (
+        await api('PATCH', '/admin/ai/provider-ad', {
+          token: adminToken,
+          body: { enabled: true, title: '', text: 'x', link: 'ftp://bad', iconUrl: '' },
+        })
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await api('PATCH', '/admin/ai/provider-ad', {
+          token: adminToken,
+          body: { enabled: true, title: '', text: '  ', link: '', iconUrl: '' },
+        })
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await api('PATCH', '/admin/ai/provider-ad', {
+          token: adminToken,
+          body: { enabled: false, title: '', text: 'x', iconUrl: 'javascript:alert(1)' },
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('保存后回读一致，客户端余额接口随之下发横幅，写审计', async () => {
+    const patch = await api('PATCH', '/admin/ai/provider-ad', {
+      token: adminToken,
+      body: {
+        enabled: true,
+        title: 'TokenRouter',
+        text: '低价AI中转站，{GLM 5.3 Flash|DeepSeek v4.1 Flash} 输出仅 ¥{0.56/1M|1.6/1M}',
+        link: 'https://ai.anmc.cn/sign-up?aff=u0pn',
+        iconUrl: 'https://cdn.example.com/icon.svg',
+      },
+    })
+    expect(patch.status).toBe(200)
+    expect(patch.json.providerAd).toMatchObject({ enabled: true, title: 'TokenRouter' })
+
+    const again = await api('GET', '/admin/ai/providers', { token: adminToken })
+    expect(again.json.providerAd.enabled).toBe(true)
+    expect(again.json.providerAd.text).toContain('{GLM 5.3 Flash|DeepSeek v4.1 Flash}')
+
+    const balance = await api('GET', '/ai/balance', { token: plainToken })
+    expect(balance.json.ad).toEqual({
+      title: 'TokenRouter',
+      text: '低价AI中转站，{GLM 5.3 Flash|DeepSeek v4.1 Flash} 输出仅 ¥{0.56/1M|1.6/1M}',
+      link: 'https://ai.anmc.cn/sign-up?aff=u0pn',
+      iconUrl: 'https://cdn.example.com/icon.svg',
+    })
+
+    const audit = await api('GET', '/admin/audit', { token: adminToken })
+    expect(audit.json.items.some((a: any) => a.action === 'ai.provider_ad')).toBe(true)
+  })
+
+  it('关闭后客户端不再下发横幅，字段保留以便下次开启', async () => {
+    const off = await api('PATCH', '/admin/ai/provider-ad', {
+      token: adminToken,
+      body: {
+        enabled: false,
+        title: 'TokenRouter',
+        text: '低价AI中转站',
+        link: 'https://ai.anmc.cn/sign-up?aff=u0pn',
+        iconUrl: '',
+      },
+    })
+    expect(off.status).toBe(200)
+
+    const balance = await api('GET', '/ai/balance', { token: plainToken })
+    expect(balance.json.ad).toBeNull()
+
+    const again = await api('GET', '/admin/ai/providers', { token: adminToken })
+    expect(again.json.providerAd.enabled).toBe(false)
+    expect(again.json.providerAd.title).toBe('TokenRouter')
   })
 })
 

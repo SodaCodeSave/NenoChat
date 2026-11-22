@@ -2,17 +2,19 @@ import { describe, expect, it } from 'vitest'
 import source from './AiSettings.vue?raw'
 
 describe('AiSettings', () => {
-  it('在 AI 服务商卡片内展示 TokenRouter 推广横幅', () => {
+  it('在 AI 服务商卡片顶部展示后台可配置的推广横幅，默认不渲染', () => {
     expect(source).toContain(
-      "import TokenRouterAdBanner from '@/components/settings/TokenRouterAdBanner.vue'",
+      "import ProviderAdBanner from '@/components/settings/ProviderAdBanner.vue'",
     )
-    expect(source).toContain('<TokenRouterAdBanner />')
+    expect(source).toContain('<ProviderAdBanner v-if="serverAi?.ad" :ad="serverAi.ad" />')
 
     const providersAt = source.indexOf('id="providers"')
-    const bannerAt = source.indexOf('<TokenRouterAdBanner />')
+    const bannerAt = source.indexOf('<ProviderAdBanner')
     const replyAt = source.indexOf('id="reply"')
     expect(bannerAt).toBeGreaterThan(providersAt)
     expect(bannerAt).toBeLessThan(replyAt)
+    // 横幅数据来自 /ai/balance 的 ad 字段，后台没开启（null）时不渲染
+    expect(source).toContain('ad: ProviderAdData | null')
   })
 
   it('服务商列表提供编辑入口，编辑态复用保存表单', () => {

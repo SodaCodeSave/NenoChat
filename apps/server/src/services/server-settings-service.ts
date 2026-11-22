@@ -14,6 +14,7 @@ const KEY_SERVER_NAME = 'server_name'
 const KEY_REGISTRATION_MODE = 'registration_mode'
 const KEY_SHARED_AI_MODE = 'ai_shared_mode'
 const KEY_AI_RECHARGE_URL = 'ai_recharge_url'
+const KEY_PROVIDER_AD = 'provider_ad'
 
 export type RegistrationMode = 'open' | 'invite' | 'closed'
 
@@ -105,4 +106,58 @@ export async function getAiRechargeUrl(db: Executor): Promise<string> {
 
 export async function setAiRechargeUrl(db: DB, url: string): Promise<void> {
   await writeRaw(db, KEY_AI_RECHARGE_URL, url)
+}
+
+/** 模型设置页推广横幅配置；iconUrl 为空表示用客户端内置图标 */
+export interface ProviderAdConfig {
+  enabled: boolean
+  title: string
+  /** 文案模板：{甲|乙|丙} 段落由客户端上下滚动轮换，多段同步 */
+  text: string
+  /** 跳转链接；空串表示横幅不可点击 */
+  link: string
+  iconUrl: string
+}
+
+/** 出厂默认：广告关闭且无内容，老库没这一行时行为与旧版一致 */
+export const DEFAULT_PROVIDER_AD: ProviderAdConfig = {
+  enabled: false,
+  title: '',
+  text: '',
+  link: '',
+  iconUrl: '',
+}
+
+function normalizeProviderAd(raw: unknown): ProviderAdConfig {
+  if (!raw || typeof raw !== 'object') return DEFAULT_PROVIDER_AD
+  const obj = raw as Record<string, unknown>
+  const str = (value: unknown): string => (typeof value === 'string' ? value : '')
+  return {
+    enabled: obj.enabled === true,
+    title: str(obj.title),
+    text: str(obj.text),
+    link: str(obj.link),
+    iconUrl: str(obj.iconUrl),
+  }
+}
+
+export async function getProviderAd(db: Executor): Promise<ProviderAdConfig> {
+  const row = await one<{ value: string }>(db, 'SELECT value FROM server_settings WHERE key = ?', [
+    KEY_PROVIDER_AD,
+  ])
+  if (!row) return DEFAULT_PROVIDER_AD
+  try {
+    return normalizeProviderAd(JSON.parse(row.value))
+  } catch {
+    return DEFAULT_PROVIDER_AD
+  }
+}
+
+export async function setProviderAd(db: Executor, config: ProviderAdConfig): Promise<void> {
+  await run(
+    db,
+    `INSERT INTO server_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [KEY_PROVIDER_AD, JSON.stringify(config), now()],
+  )
 }
