@@ -55,6 +55,7 @@ import * as membersRepo from '../db/repo/members'
 import * as messagesRepo from '../db/repo/messages'
 import * as scheduleRepo from '../db/repo/schedule'
 import * as stickersRepo from '../db/repo/stickers'
+import * as billing from './ai-billing-service'
 import { localDayKey, minutesOfDay, serverTzOffsetMinutes } from './proactive-rules'
 import { buildConnectorContext } from './connector-context'
 import * as connectorService from './connector-service'
@@ -586,11 +587,15 @@ export async function openConversation(
   const persona = await aiRepo.findPersona(db, input.personaId)
   if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
 
-  const providerId = input.providerId ?? persona.provider_id ?? (await aiRepo.defaultProvider(db, userId))?.id
+  const providerId =
+    input.providerId ?? persona.provider_id ?? (await aiRepo.defaultProviderWithShared(db, userId))?.id
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
   const provider = await aiRepo.findProvider(db, providerId)
-  if (!provider || provider.owner_id !== userId) throw err.notFound('服务商不存在')
+  // 共享模式回退到服务器供应商时 owner 是影子账号，放行；其余必须是自己名下的
+  if (!provider || (provider.owner_id !== userId && provider.owner_id !== aiRepo.SYSTEM_AI_OWNER_ID)) {
+    throw err.notFound('服务商不存在')
+  }
 
   const ensured = await ensureAiConversation(db, {
     userId,
@@ -1077,7 +1082,7 @@ async function runGenerationOnServer(
     input.providerId ??
     session?.provider_id ??
     persona.provider_id ??
-    (await aiRepo.defaultProvider(db, input.userId))?.id
+    (await aiRepo.defaultProviderWithShared(db, input.userId))?.id
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
   const provider = await aiRepo.findProvider(db, providerId)
@@ -1781,9 +1786,9 @@ export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: 
   const attachment = await attachmentsRepo.findById(db, sticker.attachment_id)
   if (!attachment) throw err.notFound('表情文件不存在')
 
-  const provider = (await aiRepo.listProviders(db, userId)).find(
-    (row) => row.vision_model && row.api_key_enc,
-  )
+  const provider =
+    (await aiRepo.listProviders(db, userId)).find((row) => row.vision_model && row.api_key_enc) ??
+    (await aiRepo.listSharedProvidersIfEnabled(db)).find((row) => row.vision_model && row.api_key_enc)
   if (!provider) {
     throw err.validation('没有可用的识图模型：请给服务商配置识图模型')
   }
@@ -1907,6 +1912,32 @@ async function recordUpstreamUsage(
     completionTokens: usage.completionTokens ?? 0,
     cachedTokens: usage.cachedTokens ?? 0,
   })
+  await chargeIfBilled(context, model, usage)
+}
+
+/** 共享模式门禁：走服务器供应商的调用，余额耗尽直接拒绝 */
+async function gateSharedBalance(context: UpstreamRecordContext | undefined): Promise<void> {
+  if (!context?.providerId) return
+  const provider = await aiRepo.findProvider(context.db, context.providerId)
+  if (!provider) return
+  await billing.assertSharedBalance(context.db, context.ownerId, provider)
+}
+
+/** 用量落库后按模型单价扣个人余额；只对服务器供应商计费 */
+async function chargeIfBilled(
+  context: UpstreamRecordContext,
+  model: string,
+  usage: UpstreamUsage | null,
+): Promise<void> {
+  if (!usage || !context.providerId) return
+  const provider = await aiRepo.findProvider(context.db, context.providerId)
+  if (!provider || !billing.isBilledProvider(provider)) return
+  // 计费是旁路：扣费出错不回滚已成功的生成，账务差异由管理员在余额页修正
+  try {
+    await billing.chargeUsage(context.db, context.ownerId, provider, model, usage)
+  } catch {
+    /* 余额扣减失败不影响本次回复 */
+  }
 }
 
 /**
@@ -1933,6 +1964,7 @@ export async function callUpstream(input: {
 }): Promise<UpstreamResult> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+  await gateSharedBalance(input.record)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 120000)
@@ -2018,6 +2050,7 @@ export async function callUpstreamStream(input: {
 }): Promise<UpstreamResult> {
   const base = input.baseUrl.trimEnd().replace(/\/$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+  await gateSharedBalance(input.record)
 
   const controller = new AbortController()
   // 空闲超时：每收到一段数据就重置，长回复不会被总时长掐断

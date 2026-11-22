@@ -124,7 +124,7 @@ async function resolvePersonaProvider(db: DB, persona: aiRepo.PersonaRow): Promi
     const provider = await aiRepo.findProvider(db, persona.provider_id)
     if (provider) return provider
   }
-  return (await aiRepo.defaultProvider(db, persona.owner_id)) ?? null
+  return (await aiRepo.defaultProviderWithShared(db, persona.owner_id)) ?? null
 }
 
 async function readState(db: DB, conversationId: string, personaId: string): Promise<GroupState> {

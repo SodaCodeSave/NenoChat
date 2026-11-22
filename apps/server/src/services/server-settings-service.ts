@@ -12,6 +12,7 @@ import { now } from '../util/clock'
 
 const KEY_SERVER_NAME = 'server_name'
 const KEY_REGISTRATION_MODE = 'registration_mode'
+const KEY_SHARED_AI_MODE = 'ai_shared_mode'
 
 export type RegistrationMode = 'open' | 'invite' | 'closed'
 
@@ -63,4 +64,26 @@ export async function setServerName(db: DB, name: string): Promise<void> {
 
 export async function setRegistrationMode(db: DB, mode: RegistrationMode): Promise<void> {
   await writeRaw(db, KEY_REGISTRATION_MODE, mode)
+}
+
+/** 全服共享 AI 模式：开启后成员没配供应商时回退到服务器供应商并计费扣余额 */
+export async function getSharedAiMode(db: Executor): Promise<boolean> {
+  const row = await one<{ value: string }>(db, 'SELECT value FROM server_settings WHERE key = ?', [
+    KEY_SHARED_AI_MODE,
+  ])
+  if (!row) return false
+  try {
+    return JSON.parse(row.value) === true
+  } catch {
+    return false
+  }
+}
+
+export async function setSharedAiMode(db: DB, enabled: boolean): Promise<void> {
+  await run(
+    db,
+    `INSERT INTO server_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [KEY_SHARED_AI_MODE, JSON.stringify(enabled), now()],
+  )
 }

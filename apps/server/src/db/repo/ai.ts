@@ -237,6 +237,42 @@ export async function defaultProvider(db: Executor, ownerId: string): Promise<Pr
   )
 }
 
+/** 管理面板配置的服务器供应商统一挂在这个影子账号名下（0039 迁移种入） */
+export const SYSTEM_AI_OWNER_ID = 'system-ai'
+
+/** 共享开关存 server_settings（JSON 编码）；键没出现或解析失败一律视为关 */
+async function sharedModeEnabled(db: Executor): Promise<boolean> {
+  const row = await one<{ value: string }>(db, 'SELECT value FROM server_settings WHERE key = ?', [
+    'ai_shared_mode',
+  ])
+  if (!row) return false
+  try {
+    return JSON.parse(row.value) === true
+  } catch {
+    return false
+  }
+}
+
+/** 共享模式开启时返回服务器供应商列表，否则空数组（识图等按条件扫描的场景用） */
+export async function listSharedProvidersIfEnabled(db: Executor): Promise<ProviderRow[]> {
+  if (!(await sharedModeEnabled(db))) return []
+  return listProviders(db, SYSTEM_AI_OWNER_ID)
+}
+
+/**
+ * 生成时的默认供应商解析：先用用户自己的；没有且全服共享模式开启时，
+ * 回退到服务器供应商。
+ */
+export async function defaultProviderWithShared(
+  db: Executor,
+  ownerId: string,
+): Promise<ProviderRow | undefined> {
+  const own = await defaultProvider(db, ownerId)
+  if (own) return own
+  const shared = await listSharedProvidersIfEnabled(db)
+  return shared.find((row) => row.is_default === 1) ?? shared[0]
+}
+
 /* -------------------------------- 人设 -------------------------------- */
 
 export interface PersonaRow {

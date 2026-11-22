@@ -28,6 +28,8 @@ import { rateLimit } from '../plugins/rate-limit'
 import * as aiRepo from '../../db/repo/ai'
 import * as conversationsRepo from '../../db/repo/conversations'
 import * as aiService from '../../services/ai-service'
+import * as billing from '../../services/ai-billing-service'
+import { getSharedAiMode } from '../../services/server-settings-service'
 import * as groupAiService from '../../services/group-ai-service'
 import * as scheduleService from '../../services/schedule-service'
 import { emitConversationUpdated } from '../../ws/emitter'
@@ -41,6 +43,12 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.get('/ai/providers', async (request) => {
     const userId = await requireUserId(request)
     return { providers: await aiService.listProviders(db, userId) }
+  })
+
+  /** 共享模式的个人余额：桌面端设置页据此展示剩余额度 */
+  app.get('/ai/balance', async (request) => {
+    const userId = await requireUserId(request)
+    return { sharedMode: await getSharedAiMode(db), balance: await billing.getBalance(db, userId) }
   })
 
   app.post('/ai/providers', async (request) => {

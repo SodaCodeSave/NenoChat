@@ -57,7 +57,8 @@ export async function saveSchedule(
 /**
  * 角色当前实际使用的服务商。
  * 与客户端的 providerOf 保持一致：角色指定的服务商可能已被删除，
- * 这时要回退到默认服务商，再回退到最早创建的那个。
+ * 这时要回退到默认服务商，再回退到最早创建的那个；
+ * 用户名下完全没有供应商时，共享模式再回退到服务器供应商。
  */
 async function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
   if (persona.provider_id) {
@@ -66,7 +67,8 @@ async function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
   }
   return (
     (await aiRepo.defaultProvider(db, persona.owner_id)) ??
-    (await aiRepo.listProviders(db, persona.owner_id))[0]
+    (await aiRepo.listProviders(db, persona.owner_id))[0] ??
+    (await aiRepo.defaultProviderWithShared(db, persona.owner_id))
   )
 }
 

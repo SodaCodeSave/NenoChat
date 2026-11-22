@@ -88,7 +88,9 @@ async function assertRegistrationAllowed(db: DB, inviteCode?: string): Promise<v
 
 /** 首个注册的用户自动成为管理员，方便自建服务器开箱即可运维 */
 async function isFirstUser(db: DB): Promise<boolean> {
-  const row = await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM users')
+  // 影子账号（AI 角色与系统共享 AI）不算数，否则 0039 种入的系统账号
+  // 会让新装服务器的首个人类用户拿不到管理员
+  const row = await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM users WHERE is_bot = 0')
   return (row?.c ?? 0) === 0
 }
 
