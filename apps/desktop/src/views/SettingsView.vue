@@ -14,6 +14,7 @@ import AiSettings from '@/components/settings/AiSettings.vue'
 import UsageStatsSettings from '@/components/settings/UsageStatsSettings.vue'
 import PersonaSettings from '@/components/settings/PersonaSettings.vue'
 import ConnectorSettings from '@/components/settings/ConnectorSettings.vue'
+import McpSkillSettings from '@/components/settings/McpSkillSettings.vue'
 import StickerSettings from '@/components/settings/StickerSettings.vue'
 import NotificationSettings from '@/components/settings/NotificationSettings.vue'
 import StorageSettings from '@/components/settings/StorageSettings.vue'
@@ -33,6 +34,7 @@ type SectionKey =
   | 'usage-stats'
   | 'persona'
   | 'connectors'
+  | 'mcpSkill'
   | 'stickers'
   | 'storage'
   | 'about'
@@ -147,6 +149,16 @@ const allSections: SettingsSection[] = [
     ],
   },
   {
+    key: 'mcpSkill',
+    label: 'MCP & Skill',
+    icon: 'memory',
+    description: '接入 MCP 工具服务器与技能提示词包，扩展 AI 的能力',
+    anchors: [
+      { id: 'mcp', label: 'MCP 服务器', keywords: 'mcp 工具 function calling 外部扩展' },
+      { id: 'skills', label: '技能', keywords: 'skill 技能 提示词包 markdown' },
+    ],
+  },
+  {
     key: 'stickers',
     label: '表情包',
     icon: 'smile',
@@ -180,7 +192,7 @@ const allSections: SettingsSection[] = [
 
 const groups: { label: string; keys: SectionKey[] }[] = [
   { label: '通用', keys: ['account', 'appearance', 'notification', 'server'] },
-  { label: '智能', keys: ['ai', 'usage-stats', 'persona', 'connectors', 'stickers'] },
+  { label: '智能', keys: ['ai', 'usage-stats', 'persona', 'connectors', 'mcpSkill', 'stickers'] },
   { label: '系统', keys: ['mobile', 'storage', 'about'] },
 ]
 
@@ -194,6 +206,7 @@ const sectionComponents = {
   'usage-stats': UsageStatsSettings,
   persona: PersonaSettings,
   connectors: ConnectorSettings,
+  mcpSkill: McpSkillSettings,
   stickers: StickerSettings,
   storage: StorageSettings,
   about: AboutSettings,

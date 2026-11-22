@@ -65,6 +65,8 @@ export const useAiStore = defineStore('ai', () => {
   const generating = ref<Record<string, boolean>>({})
   /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索 / 天气），用于占位气泡的实时提示 */
   const connectorLive = ref<Record<string, ConnectorActionMeta['kind'] | null>>({})
+  /** 生成中正在调用的 MCP / 技能工具（人类可读名），占位气泡实时提示 */
+  const toolLive = ref<Record<string, string | null>>({})
   const lastError = ref<string | null>(null)
   /** 各服务商的模型列表缓存；刷新后由设置页重新拉取 */
   const modelsByProvider = ref<Record<string, string[]>>({})
@@ -81,6 +83,12 @@ export const useAiStore = defineStore('ai', () => {
   function setConnectorLive(conversationId: string, kind: ConnectorActionMeta['kind'] | null): void {
     if (kind) connectorLive.value = { ...connectorLive.value, [conversationId]: kind }
     else delete connectorLive.value[conversationId]
+  }
+
+  /** 记录/清除某会话正在调用的工具；tool 传 null 表示结束 */
+  function setToolLive(conversationId: string, tool: string | null): void {
+    if (tool) toolLive.value = { ...toolLive.value, [conversationId]: tool }
+    else delete toolLive.value[conversationId]
   }
 
   /** 从服务端拉取并缓存某个服务商的模型列表；失败时保留旧列表 */
@@ -418,6 +426,7 @@ export const useAiStore = defineStore('ai', () => {
     delete streaming.value[payload.conversationId]
     generating.value[payload.conversationId] = false
     setConnectorLive(payload.conversationId, null)
+    setToolLive(payload.conversationId, null)
   }
 
   function applyServerError(payload: { generationId: string; conversationId: string; message: string }): void {
@@ -511,6 +520,8 @@ export const useAiStore = defineStore('ai', () => {
     generating,
     connectorLive,
     setConnectorLive,
+    toolLive,
+    setToolLive,
     lastError,
     modelsByProvider,
     loadingModels,

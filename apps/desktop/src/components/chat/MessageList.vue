@@ -590,6 +590,11 @@ defineExpose({ scrollToBottom })
             ? (ai.connectorLive[props.conversationId] ?? null)
             : null
         "
+        :live-tool="
+          row.message.id === STREAMING_MESSAGE_ID
+            ? (ai.toolLive[props.conversationId] ?? null)
+            : null
+        "
         :reply="replyViewOf(row.message)"
         :debug-line="row.debugLine"
         :select-mode="selectMode"

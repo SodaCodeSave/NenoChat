@@ -31,6 +31,8 @@ const props = defineProps<{
   aiGroupStart?: boolean
   /** 生成中正在执行的连接器动作，用于占位气泡的实时提示 */
   liveConnector?: ConnectorActionMeta['kind'] | null
+  /** 正在调用的 MCP / 技能工具（人类可读名），与 liveConnector 同一展示位 */
+  liveTool?: string | null
   /** 生成中的占位行：还没出字时正文按灰字显示 */
   thinking?: boolean
   /** 生成中的临时占位：不出右键菜单与 hover 操作条 */
@@ -250,9 +252,11 @@ const connectorHints = computed(() => {
   }))
 })
 
-/** 实时提示：占位气泡阶段正在执行的连接器动作 */
+/** 实时提示：占位气泡阶段正在执行的连接器动作或工具调用 */
 const liveConnectorLabel = computed(() => {
-  if (!props.liveConnector || !props.thinking || !ui.showConnectorHints) return ''
+  if (!props.thinking || !ui.showConnectorHints) return ''
+  if (props.liveTool) return `正在调用工具 ${props.liveTool}…`
+  if (!props.liveConnector) return ''
   return props.liveConnector === 'web_search'
     ? '正在联网搜索…'
     : props.liveConnector === 'fetch'

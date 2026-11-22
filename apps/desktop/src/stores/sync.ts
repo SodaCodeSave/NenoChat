@@ -285,6 +285,11 @@ export const useSyncStore = defineStore('sync', () => {
         ai.setConnectorLive(payload.conversationId, payload.phase === 'start' ? payload.kind : null)
       }),
 
+      // MCP / 技能工具调用的实时进度：function calling 循环里逐次推送
+      wsClient.on('ai.tool.status', (payload) => {
+        ai.setToolLive(payload.conversationId, payload.phase === 'start' ? payload.tool : null)
+      }),
+
       // 调试模式：群聊成员决策过程实时推送
       wsClient.on('ai.debug.decision', (payload) => {
         useDebugStore().applyDecision(payload.decision)
