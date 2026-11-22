@@ -14,6 +14,7 @@ import * as postsRepo from '../db/repo/posts'
 import * as attachmentsRepo from '../db/repo/attachments'
 import * as adminAuditRepo from '../db/repo/admin-audit'
 import * as authService from './auth-service'
+import * as billingService from './ai-billing-service'
 import { writeChange } from './change-log'
 import { hub } from '../ws/hub'
 import { emitMessageUpdated, emitPostRemoved, emitPostUpdated } from '../ws/emitter'
@@ -159,13 +160,15 @@ export interface AdminUserDetail {
   messageCount: number
   postCount: number
   sessionCount: number
+  /** 全服共享 AI 的个人余额（元）；无余额行为 0 */
+  aiBalance: number
 }
 
 export async function getUserDetail(db: DB, userId: string): Promise<AdminUserDetail> {
   const row = await usersRepo.findById(db, userId)
   if (!row) throw err.notFound('用户不存在')
 
-  const [devices, convRow, msgRow, postRow, sessionRow] = await Promise.all([
+  const [devices, convRow, msgRow, postRow, sessionRow, balance] = await Promise.all([
     devicesRepo.list(db, userId),
     one<{ c: number }>(
       db,
@@ -177,6 +180,7 @@ export async function getUserDetail(db: DB, userId: string): Promise<AdminUserDe
     one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL', [
       userId,
     ]),
+    billingService.getBalance(db, userId),
   ])
 
   return {
@@ -186,6 +190,7 @@ export async function getUserDetail(db: DB, userId: string): Promise<AdminUserDe
     messageCount: msgRow?.c ?? 0,
     postCount: postRow?.c ?? 0,
     sessionCount: sessionRow?.c ?? 0,
+    aiBalance: balance,
   }
 }
 

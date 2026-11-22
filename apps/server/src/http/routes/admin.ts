@@ -1,21 +1,36 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { MAX_UPLOAD_IMAGE_BYTES, PASSWORD_MIN_LENGTH } from '@nenochat/shared'
+import {
+  MAX_UPLOAD_IMAGE_BYTES,
+  PASSWORD_MIN_LENGTH,
+  ProviderModelsSchema,
+  ProviderPatchSchema,
+  ProviderSchema,
+  ProviderStoredTestSchema,
+  TestProviderSchema,
+} from '@nenochat/shared'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireAdmin, type AdminIdentity } from '../plugins/auth'
+import { rateLimit } from '../plugins/rate-limit'
 import { env } from '../../env'
 import { APP_VERSION, BUILD_STAMP, MIN_CLIENT_VERSION } from '../../version'
 import * as adminService from '../../services/admin-service'
 import * as postService from '../../services/post-service'
+import * as aiService from '../../services/ai-service'
+import * as billing from '../../services/ai-billing-service'
+import * as usersRepo from '../../db/repo/users'
 import {
   REGISTRATION_MODES,
   getRegistrationMode,
   getServerName,
+  getSharedAiMode,
   setRegistrationMode,
   setServerName,
+  setSharedAiMode,
 } from '../../services/server-settings-service'
 import * as adminAuditRepo from '../../db/repo/admin-audit'
+import * as aiRepo from '../../db/repo/ai'
 import { err } from '../../util/errors'
 
 /**
@@ -60,6 +75,13 @@ const AiUsageQuery = z.object({ window: z.enum(['24h', '7d', '30d']).default('7d
 const UpdateSettingsBody = z.object({
   serverName: z.string().trim().min(1, '服务器名不能为空').max(50, '服务器名过长').optional(),
   registrationMode: z.enum(['open', 'invite', 'closed']).optional(),
+})
+const SharedModeBody = z.object({ enabled: z.boolean() })
+const BalanceAdjustBody = z.object({
+  delta: z.number().refine((v) => v !== 0, '调整金额不能为 0').refine(
+    (v) => Math.abs(v) <= 1_000_000,
+    '单次调整上限 100 万',
+  ),
 })
 
 async function recordAudit(
@@ -298,6 +320,124 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       getRegistrationMode(db),
     ])
     return { serverName, registrationMode }
+  })
+
+  /* ------------------------ AI 配置（全服共享供应商与余额） ------------------------ */
+
+  app.get('/admin/ai/providers', async (request) => {
+    await requireAdmin(request)
+    return {
+      sharedMode: await getSharedAiMode(db),
+      providers: await aiService.listProviders(db, billing.SYSTEM_AI_OWNER_ID),
+    }
+  })
+
+  app.patch('/admin/ai/shared-mode', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(SharedModeBody, request.body)
+    await setSharedAiMode(db, input.enabled)
+    await recordAudit(db, admin, 'ai.shared_mode', 'server_settings', null, { enabled: input.enabled })
+    return { sharedMode: input.enabled }
+  })
+
+  app.post('/admin/ai/providers', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(ProviderSchema, request.body)
+    const provider = await aiService.createProvider(db, billing.SYSTEM_AI_OWNER_ID, input)
+    await recordAudit(db, admin, 'ai.provider.create', 'ai_provider', provider.id, {
+      name: provider.name,
+      model: provider.model,
+    })
+    return { provider }
+  })
+
+  app.patch<{ Params: { id: string } }>('/admin/ai/providers/:id', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(ProviderPatchSchema, request.body)
+    const provider = await aiService.updateProvider(db, billing.SYSTEM_AI_OWNER_ID, request.params.id, input)
+    await recordAudit(db, admin, 'ai.provider.update', 'ai_provider', request.params.id, {
+      name: provider.name,
+    })
+    return { provider }
+  })
+
+  app.delete<{ Params: { id: string } }>('/admin/ai/providers/:id', async (request) => {
+    const admin = await requireAdmin(request)
+    await aiService.deleteProvider(db, billing.SYSTEM_AI_OWNER_ID, request.params.id)
+    await recordAudit(db, admin, 'ai.provider.delete', 'ai_provider', request.params.id)
+    return { ok: true }
+  })
+
+  app.post(
+    '/admin/ai/providers/models',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      await requireAdmin(request)
+      const input = parse(ProviderModelsSchema, request.body)
+      return { models: await aiService.listProviderModels(input) }
+    },
+  )
+
+  app.get<{ Params: { id: string } }>('/admin/ai/providers/:id/models', async (request) => {
+    await requireAdmin(request)
+    const row = await aiRepo.findProvider(db, request.params.id)
+    if (!row || row.owner_id !== billing.SYSTEM_AI_OWNER_ID) throw err.notFound('服务商不存在')
+    return {
+      models: await aiService.listProviderModels({
+        baseUrl: row.base_url,
+        apiKey: row.api_key_enc ? aiService.resolveServerApiKey(row) : '',
+      }),
+    }
+  })
+
+  app.post(
+    '/admin/ai/providers/test',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      await requireAdmin(request)
+      const input = parse(TestProviderSchema, request.body)
+      return await aiService.testProvider(input)
+    },
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/admin/ai/providers/:id/test',
+    { preHandler: rateLimit({ max: 20, windowMs: 60_000 }) },
+    async (request) => {
+      await requireAdmin(request)
+      const input = parse(ProviderStoredTestSchema, request.body)
+      return await aiService.testStoredProvider(db, billing.SYSTEM_AI_OWNER_ID, request.params.id, {
+        baseUrl: input.baseUrl,
+        model: input.model,
+      })
+    },
+  )
+
+  app.post<{ Params: { id: string } }>('/admin/ai/providers/:id/balance', async (request) => {
+    await requireAdmin(request)
+    return {
+      provider: await aiService.refreshProviderBalance(db, billing.SYSTEM_AI_OWNER_ID, request.params.id),
+    }
+  })
+
+  app.get('/admin/ai/balances', async (request) => {
+    await requireAdmin(request)
+    const query = parse(PageQuery, request.query)
+    return await billing.listBalances(db, query.page, adminService.PAGE_SIZE)
+  })
+
+  app.post<{ Params: { userId: string } }>('/admin/ai/balances/:userId', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(BalanceAdjustBody, request.body)
+    const user = await usersRepo.findById(db, request.params.userId)
+    if (!user || user.is_bot === 1) throw err.notFound('用户不存在')
+    const balance = await billing.adjustBalance(db, user.id, input.delta)
+    await recordAudit(db, admin, 'ai.balance.adjust', 'user', user.id, {
+      delta: input.delta,
+      balance,
+      username: user.username,
+    })
+    return { userId: user.id, balance }
   })
 
   /* ------------------------------ AI 用量 ------------------------------ */
