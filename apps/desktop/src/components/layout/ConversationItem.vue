@@ -10,6 +10,7 @@ import {
   formatListTime,
   useConversationTitle,
   messagePreview,
+  messagePreviewFromSummary,
 } from '@/composables/conversation'
 import { useLongPress } from '@/composables/use-long-press'
 import { useMessagesStore } from '@/stores/messages'
@@ -26,8 +27,11 @@ const ui = useUiStore()
 const titleOf = useConversationTitle()
 const title = computed(() => titleOf(props.conversation))
 const preview = computed(() => {
+  // 已加载的消息桶优先（实时最新），没加载则用列表接口带的摘要，启动时全部会话都有预览
   const last = messages.lastMessageOf(props.conversation.id)
   if (last) return messagePreview(last)
+  const fromSummary = messagePreviewFromSummary(props.conversation.lastMessageSummary)
+  if (fromSummary) return fromSummary
   return props.conversation.type === 'ai' ? '开始和 AI 聊天吧' : '还没有消息'
 })
 

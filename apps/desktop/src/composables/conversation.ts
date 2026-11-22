@@ -1,6 +1,6 @@
 import { computed } from 'vue'
 import type { ConversationSummary } from '@/api/endpoints'
-import type { Message } from '@nenochat/shared'
+import type { LastMessageSummary, Message } from '@nenochat/shared'
 import { useContactsStore } from '@/stores/contacts'
 
 /**
@@ -57,6 +57,26 @@ export function messagePreview(message: Message | null | undefined): string {
       return message.content
     default:
       return message.content.replace(/\s+/g, ' ').slice(0, 60)
+  }
+}
+
+/** 会话列表摘要版预览：消息桶没加载时用列表接口带的 lastMessageSummary 兜底 */
+export function messagePreviewFromSummary(summary: LastMessageSummary | null | undefined): string {
+  if (!summary) return ''
+  if (summary.deleted) return '[消息已撤回]'
+  switch (summary.type) {
+    case 'image':
+      return '[图片]'
+    case 'file':
+      return `[文件] ${summary.attachmentName ?? ''}`.trim()
+    case 'sticker':
+      return '[表情]'
+    case 'voice':
+      return '[语音]'
+    case 'system':
+      return summary.content
+    default:
+      return summary.content.replace(/\s+/g, ' ').slice(0, 60)
   }
 }
 

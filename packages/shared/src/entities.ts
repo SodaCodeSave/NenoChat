@@ -44,6 +44,19 @@ export interface Device {
   lastActiveAt?: number | null
 }
 
+/**
+ * 侧边栏最后一条消息的轻量摘要：随会话列表一并下发，客户端不必为每个会话
+ * 拉一页消息才能渲染预览。只带展示所需字段，正文截断、meta 不下发。
+ */
+export interface LastMessageSummary {
+  senderId: string | null
+  type: MessageType
+  content: string
+  /** 附件消息仅取首个文件名供「[文件] xx」预览用 */
+  attachmentName: string | null
+  deleted: boolean
+}
+
 export interface Conversation {
   id: string
   type: ConversationType
@@ -62,6 +75,21 @@ export interface Conversation {
   createdAt: number
   updatedAt: number
   deletedAt?: number | null
+  /** 最后一条消息摘要，仅会话列表接口与客户端内存态携带，实体同步增量不带 */
+  lastMessageSummary?: LastMessageSummary | null
+}
+
+/** 从一条完整消息提取列表摘要；服务端下发与客户端 WS 增量更新共用 */
+export function lastMessageSummaryOf(
+  message: Pick<Message, 'senderId' | 'type' | 'content' | 'meta' | 'deletedAt'>,
+): LastMessageSummary {
+  return {
+    senderId: message.senderId ?? null,
+    type: message.type,
+    content: message.content.slice(0, 200),
+    attachmentName: message.meta?.attachments?.[0]?.filename ?? null,
+    deleted: message.deletedAt != null,
+  }
 }
 
 export interface Member {

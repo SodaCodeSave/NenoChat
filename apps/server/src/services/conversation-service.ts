@@ -3,6 +3,7 @@ import {
   Permission,
   Role,
   dmKey,
+  lastMessageSummaryOf,
   ulid,
   type Conversation,
   type Member,
@@ -12,6 +13,7 @@ import { withTx } from '../db/tx'
 import * as aiRepo from '../db/repo/ai'
 import * as conversationsRepo from '../db/repo/conversations'
 import * as membersRepo from '../db/repo/members'
+import * as messagesRepo from '../db/repo/messages'
 import * as usersRepo from '../db/repo/users'
 import { writeChange } from './change-log'
 import { assertMember, assertOutranks, assertPermission } from './permission-service'
@@ -34,7 +36,7 @@ export interface ConversationSummary extends Conversation {
 
 export async function list(db: DB, userId: string): Promise<ConversationSummary[]> {
   const rows = await conversationsRepo.listForUser(db, userId)
-  return rows.map((row) => ({
+  const summaries = rows.map((row) => ({
     ...conversationsRepo.mapConversation(row),
     pinnedAt: row.pinned_at,
     notificationLevel: row.notification_level,
@@ -46,6 +48,17 @@ export async function list(db: DB, userId: string): Promise<ConversationSummary[
     partnerName: row.partner_name,
     partnerAvatarUrl: row.partner_avatar_url,
   }))
+  // 侧边栏预览：批量取各会话最后一条消息做成轻量摘要，客户端不必逐会话拉消息页
+  const lastMessageIds = [...new Set(rows.map((row) => row.last_message_id).filter((id): id is string => id != null))]
+  if (lastMessageIds.length > 0) {
+    const lastMessages = await messagesRepo.findByIds(db, lastMessageIds)
+    const byId = new Map(lastMessages.map((row) => [row.id, row]))
+    for (const summary of summaries) {
+      const row = summary.lastMessageId ? byId.get(summary.lastMessageId) : undefined
+      if (row) summary.lastMessageSummary = lastMessageSummaryOf(messagesRepo.mapMessage(row))
+    }
+  }
+  return summaries
 }
 
 export interface DetailResult {

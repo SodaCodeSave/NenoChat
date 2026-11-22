@@ -333,6 +333,46 @@ describe('会话与消息', () => {
     })
     expect(denied.status).toBe(403)
   })
+
+  it('会话列表带最后一条消息摘要，撤回后摘要标记已撤回', async () => {
+    const group = await api<{ conversation: { id: string } }>('POST', '/conversations', {
+      token: alice.accessToken,
+      body: { type: 'group', name: '列表摘要', memberIds: [bob.user.id] },
+    })
+    const conversationId = group.json.conversation.id
+
+    const sent = await api<{ message: { id: string } }>('POST', '/messages', {
+      token: alice.accessToken,
+      body: { conversationId, clientNonce: 'preview-1', type: 'text', content: '侧边栏预览测试' },
+    })
+    expect(sent.status).toBe(200)
+
+    const list = await api<{
+      conversations: Array<{
+        id: string
+        lastMessageSummary: { senderId: string; type: string; content: string; deleted: boolean } | null
+      }>
+    }>('GET', '/conversations', { token: alice.accessToken })
+    const target = list.json.conversations.find((c) => c.id === conversationId)
+    expect(target?.lastMessageSummary).toMatchObject({
+      senderId: alice.user.id,
+      type: 'text',
+      content: '侧边栏预览测试',
+      deleted: false,
+    })
+
+    // 撤回最后一条消息后，列表摘要应同步标记，客户端才能显示「消息已撤回」
+    const recalled = await api('DELETE', `/messages/${sent.json.message.id}`, {
+      token: alice.accessToken,
+    })
+    expect(recalled.status).toBe(200)
+
+    const refreshed = await api<{
+      conversations: Array<{ id: string; lastMessageSummary: { content: string; deleted: boolean } | null }>
+    }>('GET', '/conversations', { token: bob.accessToken })
+    const after = refreshed.json.conversations.find((c) => c.id === conversationId)
+    expect(after?.lastMessageSummary).toMatchObject({ deleted: true })
+  })
 })
 
 describe('同步变更日志', () => {

@@ -200,15 +200,12 @@ export const useSyncStore = defineStore('sync', () => {
           conversations.bumpUnread(payload.conversationId, mentioned)
         }
         void useSystemNotificationsStore().onMessageCreated(payload.message as Message)
-        const target = conversations.byId.get(payload.conversationId)
-        if (target) {
-          target.lastMessageAt = payload.message.createdAt
-          target.lastMessageId = payload.message.id
-        }
+        conversations.noteLastMessage(payload.message as Message)
       }),
 
       wsClient.on('message.updated', (payload) => {
         void messages.applyUpdated(payload.message as Message)
+        conversations.noteUpdatedMessage(payload.message as Message)
       }),
 
       wsClient.on('conversation.updated', (payload) => {

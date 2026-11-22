@@ -6,15 +6,21 @@ import {
   applyConversationSummaries,
   deleteConversation,
   listConversations,
+  listLastMessageSummaries,
   patchConversationUnread,
   upsertConversation,
 } from '@/db/dao/conversations'
+import { lastMessageSummaryOf, type Message } from '@nenochat/shared'
 import { hasLocalDb } from '@/platform/db'
 import { useServersStore } from './servers'
 
-/** 字段级相等比较；ConversationSummary 全是原始值字段，逐键 Object.is 即可 */
+/** 字段级相等比较；原始值字段逐键 Object.is，最后一条消息摘要按内容比较 */
 function sameSummary(a: ConversationSummary, b: ConversationSummary): boolean {
   for (const key of Object.keys(a) as Array<keyof ConversationSummary>) {
+    if (key === 'lastMessageSummary') {
+      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false
+      continue
+    }
     if (!Object.is(a[key], b[key])) return false
   }
   return true
@@ -61,6 +67,12 @@ export const useConversationsStore = defineStore('conversations', () => {
   async function hydrate(): Promise<void> {
     if (!hasLocalDb() || !serverId.value) return
     items.value = await listConversations(serverId.value)
+    // 本地镜像推导侧边栏预览，冷启动/断网也能直接看到最后一条消息
+    const summaries = await listLastMessageSummaries(serverId.value)
+    for (const item of items.value) {
+      const summary = summaries.get(item.id)
+      if (summary) item.lastMessageSummary = summary
+    }
   }
 
   async function refresh(): Promise<void> {
@@ -148,6 +160,22 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (mentioned) target.mentionCount = (target.mentionCount ?? 0) + 1
   }
 
+  /** 新消息到达时同步列表摘要，侧边栏预览不依赖消息桶是否加载 */
+  function noteLastMessage(message: Message): void {
+    const target = byId.value.get(message.conversationId)
+    if (!target) return
+    target.lastMessageAt = message.createdAt
+    target.lastMessageId = message.id
+    target.lastMessageSummary = lastMessageSummaryOf(message)
+  }
+
+  /** 消息被编辑/撤回时只影响列表摘要，若它已不是最后一条则不动 */
+  function noteUpdatedMessage(message: Message): void {
+    const target = byId.value.get(message.conversationId)
+    if (!target || target.lastMessageId !== message.id) return
+    target.lastMessageSummary = lastMessageSummaryOf(message)
+  }
+
   async function pin(conversationId: string, pinned: boolean): Promise<void> {
     const result = await conversationApi.pin(conversationId, pinned)
     const target = byId.value.get(conversationId)
@@ -185,6 +213,8 @@ export const useConversationsStore = defineStore('conversations', () => {
     removeForever,
     markRead,
     bumpUnread,
+    noteLastMessage,
+    noteUpdatedMessage,
     pin,
     reset,
   }

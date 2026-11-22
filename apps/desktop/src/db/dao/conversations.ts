@@ -1,4 +1,4 @@
-import type { Conversation, Member } from '@nenochat/shared'
+import type { Conversation, LastMessageSummary, Member, Message } from '@nenochat/shared'
 import { dbExecute, dbExecuteMany, dbSelect, rowPlaceholders } from '../../platform/db'
 import type { ConversationSummary } from '../../api/endpoints'
 
@@ -65,6 +65,48 @@ export async function listConversations(serverId: string): Promise<ConversationS
     [serverId],
   )
   return rows.map(mapConversation)
+}
+
+interface LastMessageMirrorRow {
+  conversation_id: string
+  sender_id: string | null
+  type: string
+  content: string
+  meta: string | null
+  deleted_at: number | null
+}
+
+/**
+ * 从本地镜像推导各会话最后一条消息的轻量摘要：启动 hydrate 时一次查询补齐侧边栏预览，
+ * 不必等列表刷新回来。镜像里没有的消息行（未拉过页）返回不到，由后续网络刷新兜底。
+ */
+export async function listLastMessageSummaries(serverId: string): Promise<Map<string, LastMessageSummary>> {
+  const rows = await dbSelect<LastMessageMirrorRow>(
+    `SELECT m.conversation_id, m.sender_id, m.type, m.content, m.meta, m.deleted_at
+     FROM messages m
+     JOIN conversations c ON c.server_id = m.server_id AND c.id = m.conversation_id
+     WHERE m.server_id = $1 AND m.id = c.last_message_id`,
+    [serverId],
+  )
+  const result = new Map<string, LastMessageSummary>()
+  for (const row of rows) {
+    let meta: Message['meta'] = null
+    if (row.meta) {
+      try {
+        meta = JSON.parse(row.meta)
+      } catch {
+        meta = null
+      }
+    }
+    result.set(row.conversation_id, {
+      senderId: row.sender_id,
+      type: row.type as Message['type'],
+      content: row.content.slice(0, 200),
+      attachmentName: meta?.attachments?.[0]?.filename ?? null,
+      deleted: row.deleted_at != null,
+    })
+  }
+  return result
 }
 
 /* 会话 upsert 语句的公共部件。实体列与聚合列分开拼：
