@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import { MemoryFactSubject, ReplyStyle } from '../enums'
 
-/** 供应商下的单个 AI：模型名 + 开关 + 预留价格（元 / 百万 token） */
+/** 供应商下的单个 AI：模型名 + 开关 + 计费价格（元 / 百万 token） */
 export const ProviderModelSchema = z.object({
   model: z.string().trim().min(1).max(128),
   enabled: z.boolean().default(true),
   priceInput: z.number().min(0).max(100000).nullable().default(null),
   priceOutput: z.number().min(0).max(100000).nullable().default(null),
+  priceCached: z.number().min(0).max(100000).nullable().default(null),
 })
 
 export const ProviderSchema = z.object({

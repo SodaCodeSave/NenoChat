@@ -155,6 +155,7 @@ export interface AdminAiProviderModel {
   enabled: boolean
   priceInput: number | null
   priceOutput: number | null
+  priceCached: number | null
 }
 
 export interface AdminAiProvider {

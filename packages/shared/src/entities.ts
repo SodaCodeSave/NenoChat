@@ -270,7 +270,7 @@ export interface Sticker {
   updatedAt: number
 }
 
-/** 供应商下的单个 AI（模型）配置：开关与价格，价格预留给后续成本统计类功能 */
+/** 供应商下的单个 AI（模型）配置：开关与价格；价格用于共享模式的余额计费 */
 export interface AiProviderModel {
   model: string
   /** 关闭后该模型不可被角色或会话选用 */
@@ -279,6 +279,8 @@ export interface AiProviderModel {
   priceInput: number | null
   /** 输出价格（元 / 百万 token）；null 表示未配置 */
   priceOutput: number | null
+  /** 缓存命中价格（元 / 百万 token）；null 表示缓存部分按输入价计 */
+  priceCached: number | null
 }
 
 export interface AiProvider {

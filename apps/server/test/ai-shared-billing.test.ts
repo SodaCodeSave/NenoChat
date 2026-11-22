@@ -91,7 +91,7 @@ beforeAll(async () => {
     res.end(
       JSON.stringify({
         choices: [{ message: { content: '在的。' } }],
-        usage: { prompt_tokens: 1000, completion_tokens: 500 },
+        usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_tokens_details: { cached_tokens: 400 } },
       }),
     )
   })
@@ -221,9 +221,41 @@ describe('全服共享 AI 模式', () => {
     expect(conv.json.error.message).toContain('AI 服务商')
   })
 
+  it('配置缓存价后按缓存单价计费', async () => {
+    // mock usage: prompt 1000（其中缓存 400）/ completion 500
+    // 未配缓存价时：600/1e6×1.5 + 400/1e6×1.5 + 500/1e6×3 = 0.003
+    // 配缓存价 0.75 后：600/1e6×1.5 + 400/1e6×0.75 + 500/1e6×3 = 0.0027
+    const providers = await api('GET', '/admin/ai/providers', { token: adminToken })
+    const providerId = providers.json.providers[0].id
+    const patch = await api('PATCH', `/admin/ai/providers/${providerId}`, {
+      token: adminToken,
+      body: {
+        models: [{ model: 'shared-model', enabled: true, priceInput: 1.5, priceOutput: 3, priceCached: 0.75 }],
+      },
+    })
+    expect(patch.status).toBe(200)
+    expect(patch.json.provider.models[0].priceCached).toBe(0.75)
+
+    const before = await api('GET', '/ai/balance', { token: bobToken })
+    expect(before.json.balance).toBeCloseTo(4.997, 6)
+
+    const persona = await api<{ persona: { id: string } }>('POST', '/ai/personas', {
+      token: bobToken,
+      body: { name: '缓存计费角色', systemPrompt: '你是朋友。' },
+    })
+    // 共享已关（上一用例关闭），重开共享再走一次计费。
+    // bob 此时已有自有供应商（自有优先），必须显式指定服务器供应商才会触发计费
+    await api('PATCH', '/admin/ai/shared-mode', { token: adminToken, body: { enabled: true } })
+    const { res } = await generate(bobToken, persona.json.persona.id, providerId)
+    expect(res?.status).toBe(200)
+
+    const after = await api('GET', '/ai/balance', { token: bobToken })
+    expect(after.json.balance).toBeCloseTo(4.9943, 6)
+  })
+
   it('管理员用户详情携带余额字段', async () => {
     const detail = await api('GET', `/admin/users/${bobId}`, { token: adminToken })
     expect(detail.status).toBe(200)
-    expect(detail.json.aiBalance).toBeCloseTo(4.997, 6)
+    expect(detail.json.aiBalance).toBeCloseTo(4.9943, 6)
   })
 })

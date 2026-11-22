@@ -156,7 +156,7 @@ function addManualModel(): void {
     manualModelName.value = ''
     return
   }
-  providerForm.value.models.push({ model: name, enabled: true, priceInput: null, priceOutput: null })
+  providerForm.value.models.push({ model: name, enabled: true, priceInput: null, priceOutput: null, priceCached: null })
   manualModelName.value = ''
 }
 
@@ -176,7 +176,7 @@ async function importFormModels(): Promise<void> {
     const existing = new Map(providerForm.value.models.map((m) => [m.model, m]))
     providerForm.value.models = res.models.map(
       (model) =>
-        existing.get(model) ?? { model, enabled: true, priceInput: null, priceOutput: null },
+        existing.get(model) ?? { model, enabled: true, priceInput: null, priceOutput: null, priceCached: null },
     )
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '拉取模型列表失败'
@@ -540,8 +540,9 @@ onMounted(load)
                 class="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5"
               >
                 <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-text">{{ m.model }}</span>
-                <NumberInput v-model="m.priceInput" :min="0" :step="0.1" :integer="false" allow-empty size="sm" class="w-28" suffix="入价" />
-                <NumberInput v-model="m.priceOutput" :min="0" :step="0.1" :integer="false" allow-empty size="sm" class="w-28" suffix="出价" />
+                <NumberInput v-model="m.priceInput" :min="0" :step="0.1" :integer="false" allow-empty size="sm" class="w-28" placeholder="输入价" />
+                <NumberInput v-model="m.priceCached" :min="0" :step="0.1" :integer="false" allow-empty size="sm" class="w-28" placeholder="缓存价" />
+                <NumberInput v-model="m.priceOutput" :min="0" :step="0.1" :integer="false" allow-empty size="sm" class="w-28" placeholder="输出价" />
                 <Switch v-model="m.enabled" size="sm" />
                 <Button size="sm" variant="danger-ghost" @click="providerForm.models.splice(i, 1)">移除</Button>
               </div>

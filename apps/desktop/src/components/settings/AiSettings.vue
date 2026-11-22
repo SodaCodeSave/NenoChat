@@ -275,7 +275,7 @@ function addFormModel(model: string): void {
   if ((providerForm.value.models ?? []).some((m) => m.model === name)) return
   providerForm.value.models = [
     ...(providerForm.value.models ?? []),
-    { model: name, enabled: true, priceInput: null, priceOutput: null },
+    { model: name, enabled: true, priceInput: null, priceOutput: null, priceCached: null },
   ]
 }
 
@@ -291,7 +291,7 @@ function importFormModels(): void {
   if (fetched.length === 0) return
   const existing = new Map((providerForm.value.models ?? []).map((m) => [m.model, m]))
   providerForm.value.models = fetched.map(
-    (model) => existing.get(model) ?? { model, enabled: true, priceInput: null, priceOutput: null },
+    (model) => existing.get(model) ?? { model, enabled: true, priceInput: null, priceOutput: null, priceCached: null },
   )
 }
 
@@ -636,7 +636,7 @@ onBeforeUnmount(() => {
             </Button>
           </div>
           <p class="mb-2 text-[11px] text-muted">
-            关闭的 AI 不可被角色或会话选用；价格（元 / 百万 token）仅作记录，预留给后续功能。
+            关闭的 AI 不可被角色或会话选用；价格（元 / 百万 token）用于共享模式计费，缓存价未配置时缓存部分按输入价计。
           </p>
           <div v-if="(providerForm.models ?? []).length > 0" class="space-y-1.5">
             <div
@@ -660,8 +660,20 @@ onBeforeUnmount(() => {
                 allow-empty
                 :model-value="entry.priceInput"
                 placeholder="输入价"
-                title="输入价格（元 / 百万 token），预留给后续功能"
+                title="输入价格（元 / 百万 token），用于共享模式计费"
                 @update:model-value="entry.priceInput = $event"
+              />
+              <NumberInput
+                class="w-28"
+                size="sm"
+                :integer="false"
+                :min="0"
+                :step="0.1"
+                allow-empty
+                :model-value="entry.priceCached"
+                placeholder="缓存价"
+                title="缓存命中价格（元 / 百万 token），未配置时缓存部分按输入价计"
+                @update:model-value="entry.priceCached = $event"
               />
               <NumberInput
                 class="w-28"
@@ -672,7 +684,7 @@ onBeforeUnmount(() => {
                 allow-empty
                 :model-value="entry.priceOutput"
                 placeholder="输出价"
-                title="输出价格（元 / 百万 token），预留给后续功能"
+                title="输出价格（元 / 百万 token），用于共享模式计费"
                 @update:model-value="entry.priceOutput = $event"
               />
               <Switch

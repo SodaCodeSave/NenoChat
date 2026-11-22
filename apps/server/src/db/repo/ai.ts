@@ -54,13 +54,16 @@ export function parseProviderModels(raw: string | null): AiProviderModel[] {
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(
-      (item): item is AiProviderModel =>
-        typeof item === 'object' &&
-        item !== null &&
-        typeof (item as AiProviderModel).model === 'string' &&
-        (item as AiProviderModel).model.length > 0,
-    )
+    return parsed
+      .filter(
+        (item): item is AiProviderModel =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as AiProviderModel).model === 'string' &&
+          (item as AiProviderModel).model.length > 0,
+      )
+      // 旧数据没有 priceCached 字段，规范成 null，避免透传 undefined
+      .map((item) => ({ ...item, priceCached: item.priceCached ?? null }))
   } catch {
     return []
   }

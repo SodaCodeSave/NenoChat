@@ -45,15 +45,24 @@ export async function assertSharedBalance(db: Executor, userId: string, provider
   }
 }
 
-/** 按模型单价计算费用（元）；未配置价格的模型返回 0 */
+/**
+ * 按模型单价计算费用（元）；未配置价格的模型返回 0。
+ * 缓存命中的 prompt 部分按缓存价计（未配缓存价则按输入价），
+ * 剩余部分按输入价，completion 按输出价。
+ */
 function costOf(models: AiProviderModel[] | null, model: string, usage: aiService.UpstreamUsage): number {
   const entry = models?.find((m) => m.model === model)
   if (!entry) return 0
   const priceIn = entry.priceInput
   const priceOut = entry.priceOutput
   if (priceIn === null && priceOut === null) return 0
+  const prompt = usage.promptTokens ?? 0
+  const cached = Math.min(usage.cachedTokens ?? 0, prompt)
+  const uncached = prompt - cached
+  const cachedPrice = entry.priceCached ?? priceIn
   const cost =
-    (usage.promptTokens ?? 0) / 1_000_000 * (priceIn ?? 0) +
+    uncached / 1_000_000 * (priceIn ?? 0) +
+    cached / 1_000_000 * (cachedPrice ?? 0) +
     (usage.completionTokens ?? 0) / 1_000_000 * (priceOut ?? 0)
   return cost
 }

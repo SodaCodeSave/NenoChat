@@ -114,7 +114,7 @@ describe('供应商 AI 列表与价格', () => {
     })
     expect(replaced.status).toBe(200)
     expect(replaced.json.provider.models).toEqual([
-      { model: 'glm-4-plus', enabled: false, priceInput: null, priceOutput: 1 },
+      { model: 'glm-4-plus', enabled: false, priceInput: null, priceOutput: 1, priceCached: null },
     ])
 
     const untouched = await api<{ provider: { models: any[] } }>('PATCH', `/ai/providers/${id}`, {
@@ -123,7 +123,7 @@ describe('供应商 AI 列表与价格', () => {
     })
     expect(untouched.status).toBe(200)
     expect(untouched.json.provider.models).toEqual([
-      { model: 'glm-4-plus', enabled: false, priceInput: null, priceOutput: 1 },
+      { model: 'glm-4-plus', enabled: false, priceInput: null, priceOutput: 1, priceCached: null },
     ])
   })
 
