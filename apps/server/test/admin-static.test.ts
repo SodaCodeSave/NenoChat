@@ -56,6 +56,25 @@ describe('管理面板静态托管', () => {
     expect(res.body).toContain('管理面板')
   })
 
+  it('面板响应带安全头（CSP / 防点击劫持 / nosniff）', async () => {
+    const html = await app.inject({ method: 'GET', url: '/admin/' })
+    const csp = String(html.headers['content-security-policy'])
+    expect(csp).toContain("script-src 'self'")
+    expect(csp).toContain("connect-src 'self'")
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(html.headers['x-frame-options']).toBe('DENY')
+    expect(html.headers['x-content-type-options']).toBe('nosniff')
+    expect(html.headers['referrer-policy']).toBe('no-referrer')
+
+    // 静态资源同样携带，避免只护 HTML 的半吊子防护
+    const asset = await app.inject({ method: 'GET', url: '/admin/assets/app.js' })
+    expect(String(asset.headers['content-security-policy'])).toContain("script-src 'self'")
+    expect(asset.headers['x-content-type-options']).toBe('nosniff')
+
+    const redirect = await app.inject({ method: 'GET', url: '/admin' })
+    expect(redirect.headers['x-frame-options']).toBe('DENY')
+  })
+
   it('GET /admin 重定向到 /admin/', async () => {
     const res = await app.inject({ method: 'GET', url: '/admin' })
     expect(res.statusCode).toBe(302)

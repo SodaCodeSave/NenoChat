@@ -42,6 +42,14 @@ export interface AuthSession {
 
 const ACCESS_TTL_SECONDS = Math.floor(ACCESS_TOKEN_TTL_MS / 1000)
 
+/** 哑散列：用户不存在时也走一遍同参数的 argon2 校验，让两种失败路径的
+ * 响应耗时一致，否则响应时间差可以被用来枚举有效用户名。懒生成，进程内只算一次。 */
+let dummyHash: Promise<string> | null = null
+function dummyPasswordHash(): Promise<string> {
+  dummyHash ??= hashPassword('nenochat-timing-equalizer')
+  return dummyHash
+}
+
 async function issueTokens(
   db: DB,
   signer: JwtSigner,
@@ -124,8 +132,11 @@ export async function register(db: DB, signer: JwtSigner, input: RegisterInput):
 
 export async function login(db: DB, signer: JwtSigner, input: LoginInput): Promise<AuthSession> {
   const row = await usersRepo.findByUsername(db, input.username)
-  // 用户不存在与密码错误返回同一提示，避免用户名枚举
-  if (!row) throw err.unauthenticated('用户名或密码不正确')
+  // 用户不存在与密码错误返回同一提示、同等的校验耗时，避免用户名枚举
+  if (!row) {
+    await verifyPassword(await dummyPasswordHash(), input.password)
+    throw err.unauthenticated('用户名或密码不正确')
+  }
   // 影子账号（AI 角色）不能登录，密码散列也不是真实凭据
   if (row.status === 'disabled' || row.is_bot === 1) throw err.forbidden('账号已被禁用')
 

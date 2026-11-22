@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -98,11 +98,33 @@ export async function buildApp(): Promise<FastifyInstance> {
     ? path.resolve(env.ADMIN_DIST_DIR)
     : path.resolve(fileURLToPath(new URL('../public/admin', import.meta.url)))
   if (fs.existsSync(path.join(adminRoot, 'index.html'))) {
+    // 面板与 API 同源，CSP 锁到 self：即便注入成功也加载不了外部脚本，
+    // 配合 access token 只存内存，XSS 偷不到能长期续期的 refresh token
+    const ADMIN_CSP = [
+      "default-src 'none'",
+      "script-src 'self'",
+      // Vue 的行内 style 属性（过渡、动态样式）需要 unsafe-inline
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'none'",
+    ].join('; ')
+    const adminSecurityHeaders = (reply: FastifyReply): void => {
+      reply.header('Content-Security-Policy', ADMIN_CSP)
+      reply.header('X-Frame-Options', 'DENY')
+      reply.header('X-Content-Type-Options', 'nosniff')
+      reply.header('Referrer-Policy', 'no-referrer')
+    }
     await app.register(fastifyStatic, {
       root: adminRoot,
       prefix: '/admin/',
       decorateReply: false,
       setHeaders(reply, filePath) {
+        adminSecurityHeaders(reply)
         // 入口 HTML 不能缓存，否则发版后浏览器拿旧壳；带内容哈希的 assets 随便缓存
         if (filePath.endsWith('.html')) {
           reply.header('Cache-Control', 'no-cache')
@@ -112,6 +134,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       },
     })
     app.get('/admin', (_request, reply) => {
+      adminSecurityHeaders(reply)
       return reply.redirect('/admin/')
     })
   }

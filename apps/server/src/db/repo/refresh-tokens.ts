@@ -60,6 +60,15 @@ export async function revokeAllForUser(db: DB, userId: string): Promise<void> {
   ])
 }
 
+/** 改密后吊销用户全部会话但保留改密发起端：其他设备凭旧密码建立的登录态即刻失效 */
+export async function revokeAllForUserExceptDevice(db: DB, userId: string, deviceId: string): Promise<void> {
+  await run(
+    db,
+    'UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND device_id <> ? AND revoked_at IS NULL',
+    [now(), userId, deviceId],
+  )
+}
+
 export async function revokeForDevice(db: DB, userId: string, deviceId: string): Promise<void> {
   await run(db, 'UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL', [
     now(),

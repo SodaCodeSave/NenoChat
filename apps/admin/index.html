@@ -5,14 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
     <title>NenoChat 管理面板</title>
-    <script>
-      // 主题预涂装：在首帧前恢复暗色偏好，避免闪白
-      try {
-        if (localStorage.getItem('nenochat.admin.theme') === 'dark') {
-          document.documentElement.classList.add('dark')
-        }
-      } catch {}
-    </script>
+    <!-- 主题预涂装（CSP 下不允许内联脚本，抽成公共目录里的外部文件） -->
+    <script src="/admin/theme.js"></script>
   </head>
   <body>
     <div id="app"></div>

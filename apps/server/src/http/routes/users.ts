@@ -2,10 +2,11 @@ import type { FastifyInstance } from 'fastify'
 import { ChangePasswordSchema, UpdateProfileSchema } from '@nenochat/shared'
 import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
-import { requireUserId } from '../plugins/auth'
+import { requireUserId, requireUser } from '../plugins/auth'
 import { err } from '../../util/errors'
 import { hashPassword, verifyPassword } from '../../util/crypto'
 import * as usersRepo from '../../db/repo/users'
+import * as tokensRepo from '../../db/repo/refresh-tokens'
 import { writeChange } from '../../services/change-log'
 
 export async function userRoutes(app: FastifyInstance): Promise<void> {
@@ -28,7 +29,8 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.post('/users/me/password', async (request) => {
-    const userId = await requireUserId(request)
+    const auth = await requireUser(request)
+    const userId = auth.sub
     const input = parse(ChangePasswordSchema, request.body)
 
     const row = await usersRepo.findById(db, userId)
@@ -38,6 +40,9 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     if (!ok) throw err.validation('原密码不正确')
 
     await usersRepo.setPasswordHash(db, userId, await hashPassword(input.newPassword))
+    // 改密即吊销其他设备的 refresh token：凭旧密码换来的登录态不应跨过改密继续存活。
+    // 发起改密的当前设备保留会话，避免全端登出的突兀体验。
+    await tokensRepo.revokeAllForUserExceptDevice(db, userId, auth.did)
     return { ok: true }
   })
 

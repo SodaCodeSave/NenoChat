@@ -67,3 +67,8 @@ export function rateLimit(opts: RateLimitOptions) {
     counters.set(key, counter)
   }
 }
+
+/** 清空全部计数，仅供测试隔离使用（如单测里要在一分钟内连发超过限流的请求） */
+export function resetForTests(): void {
+  counters.clear()
+}

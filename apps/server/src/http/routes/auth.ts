@@ -1,5 +1,6 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
+  ApiErrorCode,
   LocalLoginSchema,
   LocalPairSchema,
   LoginSchema,
@@ -12,18 +13,51 @@ import { getDb } from '../../db'
 import { parse } from '../plugins/validate'
 import { requireUserId } from '../plugins/auth'
 import { rateLimit } from '../plugins/rate-limit'
+import * as loginThrottle from '../plugins/login-throttle'
 import { safeEqual } from '../../util/crypto'
-import { err } from '../../util/errors'
+import { AppError, err } from '../../util/errors'
 import * as pairingService from '../../services/pairing-service'
 import * as authService from '../../services/auth-service'
 import * as usersRepo from '../../db/repo/users'
 import * as devicesRepo from '../../db/repo/devices'
+import * as adminAuditRepo from '../../db/repo/admin-audit'
 import {
   ensureNotificationSettings,
   ensureUserSettings,
   mapNotificationSettings,
   mapUserSettings,
 } from '../../db/repo/settings'
+
+/**
+ * 管理员登录写审计：成功与失败各记一条（action: admin.login）。
+ * 失败时只有当目标用户名确属管理员才落审计，避免公网扫描把审计日志刷爆。
+ */
+async function auditAdminLogin(
+  db: ReturnType<typeof getDb>,
+  userId: string,
+  request: FastifyRequest,
+  ok: boolean,
+  deviceId: string,
+): Promise<void> {
+  await adminAuditRepo.insert(db, {
+    actorId: userId,
+    action: 'admin.login',
+    targetType: 'user',
+    targetId: userId,
+    detail: { ok, ip: request.ip, deviceId },
+  })
+}
+
+async function auditFailedLoginOfAdmin(
+  db: ReturnType<typeof getDb>,
+  username: string,
+  request: FastifyRequest,
+  deviceId: string,
+): Promise<void> {
+  const row = await usersRepo.findByUsername(db, username)
+  if (!row || row.is_admin !== 1) return
+  await auditAdminLogin(db, row.id, request, false, deviceId)
+}
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb()
@@ -39,7 +73,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/auth/login', { preHandler: rateLimit({ max: 10, windowMs: 60_000 }) }, async (request) => {
     const input = parse(LoginSchema, request.body)
-    return await authService.login(db, app.jwt, input)
+    // 账号维度限流先于密码校验：已在限流中的账号不再消耗 argon2 算力
+    loginThrottle.check(input.username)
+    try {
+      const session = await authService.login(db, app.jwt, input)
+      loginThrottle.clear(input.username)
+      if (session.user.isAdmin) {
+        await auditAdminLogin(db, session.user.id, request, true, input.device.id)
+      }
+      return session
+    } catch (e) {
+      if (e instanceof AppError && e.code === ApiErrorCode.UNAUTHENTICATED) {
+        loginThrottle.recordFailure(input.username)
+        await auditFailedLoginOfAdmin(db, input.username, request, input.device.id)
+      }
+      throw e
+    }
   })
 
   /**
