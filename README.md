@@ -3,7 +3,7 @@
 <p align="center">专为角色扮演而生的Agent客户端</p>
 <p align="center">
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/SodaCodeSave/NenoChat?style=flat-square&color=brightgreen)](https://github.com/SodaCodeSave/NenoChat/releases)[![CI](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/ci.yml?style=flat-square&label=CI)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/ci.yml) [![Release Build](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/release-build.yml?style=flat-square&label=Release%20Build)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/release-build.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/SodaCodeSave/NenoChat?style=flat-square&color=brightgreen)](https://github.com/SodaCodeSave/NenoChat/releases) [![CI](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/ci.yml?style=flat-square&label=CI)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/ci.yml) [![Release Build](https://img.shields.io/github/actions/workflow/status/SodaCodeSave/NenoChat/release-build.yml?style=flat-square&label=Release%20Build)](https://github.com/SodaCodeSave/NenoChat/actions/workflows/release-build.yml)
 
 [![Node](https://img.shields.io/badge/Node.js-≥22.12-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/) [![pnpm](https://img.shields.io/badge/pnpm-12-F69220?style=flat-square&logo=pnpm&logoColor=white)](https://pnpm.io/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white)](https://vuejs.org/) [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)](https://tauri.app/) [![Fastify](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)](https://fastify.dev/)
 
@@ -23,6 +23,8 @@ NenoChat 是一个自托管的 AI 角色扮演聊天应用。你部署一个自�
 - **表情包**：上传表情包分组，授权给指定 AI 角色在聊天中使用
 - **连接器**：给 AI 挂载外部能力，内置哔哩哔哩、和风天气等
 - **多端同步**：换设备登录后消息自动增量同步
+- **服务器管理面板**：访问 `http://你的服务器地址:8787/admin`，管理 AI 角色、用户、模型、配置商业化等
+
 - **一体化版**：不想部署服务端？下载 Windows 一体版，服务端内嵌在客户端里，开箱即用，还能打开局域网让手机扫码接入
 
 ## 快速开始（一体化版，推荐新手）
@@ -67,6 +69,11 @@ docker compose up -d
 4. 在设置 → AI 中配置供应商与密钥，创建 AI 角色，开始聊天
 
 > 想用本地模型（如 Ollama）？在服务端开启 `ALLOW_PRIVATE_AI_ENDPOINT=true`，客户端里把供应商地址指向内网地址即可。
+
+### 4. 服务器管理面板
+
+访问 `http://你的服务器地址:8787/admin`，管理 AI 角色、用户、模型、配置商业化等。
+
 
 ## 服务端配置参考
 
