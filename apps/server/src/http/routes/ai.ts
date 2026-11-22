@@ -29,7 +29,7 @@ import * as aiRepo from '../../db/repo/ai'
 import * as conversationsRepo from '../../db/repo/conversations'
 import * as aiService from '../../services/ai-service'
 import * as billing from '../../services/ai-billing-service'
-import { getSharedAiMode } from '../../services/server-settings-service'
+import { getAiRechargeUrl, getSharedAiMode } from '../../services/server-settings-service'
 import * as groupAiService from '../../services/group-ai-service'
 import * as scheduleService from '../../services/schedule-service'
 import { emitConversationUpdated } from '../../ws/emitter'
@@ -45,10 +45,29 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     return { providers: await aiService.listProviders(db, userId) }
   })
 
-  /** 共享模式的个人余额：桌面端设置页据此展示剩余额度 */
+  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接 */
   app.get('/ai/balance', async (request) => {
     const userId = await requireUserId(request)
-    return { sharedMode: await getSharedAiMode(db), balance: await billing.getBalance(db, userId) }
+    const enabled = await getSharedAiMode(db)
+    if (!enabled) {
+      return { enabled: false, balance: await billing.getBalance(db, userId), rechargeUrl: null, models: [] }
+    }
+    // 汇总所有服务器供应商的启用模型（同名取先配置的），供客户端展示可用 AI 与单价
+    const seen = new Set<string>()
+    const models = (await aiRepo.listProviders(db, aiRepo.SYSTEM_AI_OWNER_ID)).flatMap((provider) =>
+      aiRepo.parseProviderModels(provider.models_json).filter((m) => {
+        if (!m.enabled || seen.has(m.model)) return false
+        seen.add(m.model)
+        return true
+      }),
+    )
+    const rechargeUrl = await getAiRechargeUrl(db)
+    return {
+      enabled: true,
+      balance: await billing.getBalance(db, userId),
+      rechargeUrl: rechargeUrl || null,
+      models,
+    }
   })
 
   app.post('/ai/providers', async (request) => {

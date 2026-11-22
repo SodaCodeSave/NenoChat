@@ -89,8 +89,14 @@ export const aiApi = {
   providerBalance: (id: string) =>
     http.post<{ provider: AiProvider }>(p(`/ai/providers/${id}/balance`), {}),
 
-  /** 全服共享模式的个人余额；sharedMode 关闭时余额无意义 */
-  balance: () => http.get<{ sharedMode: boolean; balance: number }>(p('/ai/balance')),
+  /** 服务器统一供 AI 的个人视图：余额、可用模型与单价、充值链接（enabled=false 时后两项无意义） */
+  balance: () =>
+    http.get<{
+      enabled: boolean
+      balance: number
+      rechargeUrl: string | null
+      models: AiProviderModel[]
+    }>(p('/ai/balance')),
 
   personas: () => http.get<{ personas: AiPersona[] }>(p('/ai/personas')),
   createPersona: (body: PersonaInput) => http.post<{ persona: AiPersona }>(p('/ai/personas'), body),

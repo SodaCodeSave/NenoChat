@@ -587,8 +587,11 @@ export async function openConversation(
   const persona = await aiRepo.findPersona(db, input.personaId)
   if (!persona || persona.owner_id !== userId) throw err.notFound('角色不存在')
 
-  const providerId =
-    input.providerId ?? persona.provider_id ?? (await aiRepo.defaultProviderWithShared(db, userId))?.id
+  // 共享模式开启时无视显式指定与角色 pin，一律服务器供应商
+  const sharedOn = await aiRepo.isSharedModeEnabled(db)
+  const providerId = sharedOn
+    ? (await aiRepo.defaultProvider(db, aiRepo.SYSTEM_AI_OWNER_ID))?.id
+    : (input.providerId ?? persona.provider_id ?? (await aiRepo.defaultProvider(db, userId))?.id)
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
   const provider = await aiRepo.findProvider(db, providerId)
@@ -1078,11 +1081,14 @@ async function runGenerationOnServer(
   const persona = await aiRepo.findPersona(db, personaId)
   if (!persona) throw err.notFound('角色不存在')
 
-  const providerId =
-    input.providerId ??
-    session?.provider_id ??
-    persona.provider_id ??
-    (await aiRepo.defaultProviderWithShared(db, input.userId))?.id
+  // 共享模式开启 = 自定义供应商整体禁用，无视会话/角色的旧 pin，一律服务器供应商
+  const sharedOn = await aiRepo.isSharedModeEnabled(db)
+  const providerId = sharedOn
+    ? (await aiRepo.defaultProvider(db, aiRepo.SYSTEM_AI_OWNER_ID))?.id
+    : (input.providerId ??
+      session?.provider_id ??
+      persona.provider_id ??
+      (await aiRepo.defaultProvider(db, input.userId))?.id)
   if (!providerId) throw err.validation('请先配置 AI 服务商')
 
   const provider = await aiRepo.findProvider(db, providerId)
@@ -1786,9 +1792,13 @@ export async function analyzeStickerOnServer(db: DB, userId: string, stickerId: 
   const attachment = await attachmentsRepo.findById(db, sticker.attachment_id)
   if (!attachment) throw err.notFound('表情文件不存在')
 
-  const provider =
-    (await aiRepo.listProviders(db, userId)).find((row) => row.vision_model && row.api_key_enc) ??
-    (await aiRepo.listSharedProvidersIfEnabled(db)).find((row) => row.vision_model && row.api_key_enc)
+  // 共享模式开启 = 只在服务器供应商里找识图；关闭 = 只在用户自己的里找
+  const visionScanOwner = (await aiRepo.isSharedModeEnabled(db))
+    ? aiRepo.SYSTEM_AI_OWNER_ID
+    : userId
+  const provider = (await aiRepo.listProviders(db, visionScanOwner)).find(
+    (row) => row.vision_model && row.api_key_enc,
+  )
   if (!provider) {
     throw err.validation('没有可用的识图模型：请给服务商配置识图模型')
   }

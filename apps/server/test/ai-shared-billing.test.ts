@@ -166,7 +166,7 @@ describe('全服共享 AI 模式', () => {
 
     // 1000/1e6×1.5 + 500/1e6×3 = 0.003 元
     const balance = await api('GET', '/ai/balance', { token: bobToken })
-    expect(balance.json.sharedMode).toBe(true)
+    expect(balance.json.enabled).toBe(true)
     expect(balance.json.balance).toBeCloseTo(4.997, 6)
   })
 
@@ -181,7 +181,7 @@ describe('全服共享 AI 模式', () => {
     expect(res.json.error.message).toContain('额度')
   })
 
-  it('自有供应商优先且不计费', async () => {
+  it('共享开启后自定义供应商被禁用：显式指定也被忽略，一律走服务器供应商计费', async () => {
     const own = await api('POST', '/ai/providers', {
       token: bobToken,
       body: {
@@ -194,7 +194,7 @@ describe('全服共享 AI 模式', () => {
     expect(own.status).toBe(200)
     const ownId = own.json.provider.id
 
-    // 先回充到正数（上一轮扣到负值），再用自有供应商生成
+    // 先回充到正数（上一轮扣到负值），显式指定自有供应商生成——共享模式下仍走服务器供应商并计费
     const charge = await api('POST', `/admin/ai/balances/${bobId}`, { token: adminToken, body: { delta: 10 } })
     expect(charge.json.balance).toBeCloseTo(4.997, 6)
 
@@ -206,7 +206,12 @@ describe('全服共享 AI 模式', () => {
     expect(res.status).toBe(200)
 
     const after = await api('GET', '/ai/balance', { token: bobToken })
-    expect(after.json.balance).toBeCloseTo(4.997, 6)
+    expect(after.json.enabled).toBe(true)
+    expect(after.json.balance).toBeCloseTo(4.994, 6)
+    // 余额接口同时返回可用模型与单价（含缓存价），供设置页展示
+    expect(after.json.models).toEqual([
+      { model: 'shared-model', enabled: true, priceInput: 1.5, priceOutput: 3, priceCached: null },
+    ])
   })
 
   it('共享关闭后回退链还原：无自有供应商的新用户开 AI 会话被拒', async () => {
@@ -237,7 +242,7 @@ describe('全服共享 AI 模式', () => {
     expect(patch.json.provider.models[0].priceCached).toBe(0.75)
 
     const before = await api('GET', '/ai/balance', { token: bobToken })
-    expect(before.json.balance).toBeCloseTo(4.997, 6)
+    expect(before.json.balance).toBeCloseTo(4.994, 6)
 
     const persona = await api<{ persona: { id: string } }>('POST', '/ai/personas', {
       token: bobToken,
@@ -250,12 +255,12 @@ describe('全服共享 AI 模式', () => {
     expect(res?.status).toBe(200)
 
     const after = await api('GET', '/ai/balance', { token: bobToken })
-    expect(after.json.balance).toBeCloseTo(4.9943, 6)
+    expect(after.json.balance).toBeCloseTo(4.9913, 6)
   })
 
   it('管理员用户详情携带余额字段', async () => {
     const detail = await api('GET', `/admin/users/${bobId}`, { token: adminToken })
     expect(detail.status).toBe(200)
-    expect(detail.json.aiBalance).toBeCloseTo(4.9943, 6)
+    expect(detail.json.aiBalance).toBeCloseTo(4.9913, 6)
   })
 })

@@ -266,9 +266,13 @@ export const adminApi = {
 
   aiConfig: {
     providers: () =>
-      http.get<{ sharedMode: boolean; providers: AdminAiProvider[] }>('/admin/ai/providers'),
+      http.get<{ sharedMode: boolean; rechargeUrl: string; providers: AdminAiProvider[] }>(
+        '/admin/ai/providers',
+      ),
     setSharedMode: (enabled: boolean) =>
       http.patch<{ sharedMode: boolean }>('/admin/ai/shared-mode', { enabled }),
+    setRechargeUrl: (url: string) =>
+      http.patch<{ rechargeUrl: string }>('/admin/ai/recharge-url', { url }),
     createProvider: (body: Record<string, unknown>) =>
       http.post<{ provider: AdminAiProvider }>('/admin/ai/providers', body),
     updateProvider: (id: string, body: Record<string, unknown>) =>

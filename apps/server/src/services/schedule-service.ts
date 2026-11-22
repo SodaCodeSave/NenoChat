@@ -56,19 +56,20 @@ export async function saveSchedule(
 
 /**
  * 角色当前实际使用的服务商。
- * 与客户端的 providerOf 保持一致：角色指定的服务商可能已被删除，
- * 这时要回退到默认服务商，再回退到最早创建的那个；
- * 用户名下完全没有供应商时，共享模式再回退到服务器供应商。
+ * 共享模式开启时一律服务器供应商；关闭时与客户端的 providerOf 保持一致：
+ * 角色指定 → 默认服务商 → 最早创建的那个。
  */
 async function resolveProvider(db: DB, persona: aiRepo.PersonaRow) {
+  if (await aiRepo.isSharedModeEnabled(db)) {
+    return await aiRepo.defaultProvider(db, aiRepo.SYSTEM_AI_OWNER_ID)
+  }
   if (persona.provider_id) {
     const explicit = await aiRepo.findProvider(db, persona.provider_id)
     if (explicit) return explicit
   }
   return (
     (await aiRepo.defaultProvider(db, persona.owner_id)) ??
-    (await aiRepo.listProviders(db, persona.owner_id))[0] ??
-    (await aiRepo.defaultProviderWithShared(db, persona.owner_id))
+    (await aiRepo.listProviders(db, persona.owner_id))[0]
   )
 }
 

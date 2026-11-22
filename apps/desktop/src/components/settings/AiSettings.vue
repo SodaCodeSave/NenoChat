@@ -17,14 +17,20 @@ import ConfirmDialog from '@/components/ui/form/ConfirmDialog.vue'
 import { aiApi, type ProviderInput } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 import { AI_PROVIDER_PRESETS, matchProviderIcon } from '@/config/ai-providers'
+import { isTauri } from '@/platform/device'
 import TokenRouterAdBanner from '@/components/settings/TokenRouterAdBanner.vue'
 import ModelPicker from '@/components/settings/ModelPicker.vue'
 
 const ai = useAiStore()
 
 const providers = ref<AiProvider[]>([])
-/** 全服共享 AI 的个人余额；接口不可用或共享关闭时不展示 */
-const serverBalance = ref<number | null>(null)
+/** 服务器统一供 AI 的个人视图；enabled=false 时自定义供应商照常可用 */
+const serverAi = ref<{
+  enabled: boolean
+  balance: number
+  rechargeUrl: string | null
+  models: AiProviderModel[]
+} | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
@@ -168,12 +174,11 @@ async function load(): Promise<void> {
     const providerResult = await aiApi.providers()
     providers.value = providerResult.providers
     await ai.load()
-    // 共享模式开启时展示服务器共享余额；接口失败不打断主流程
+    // 服务器统一供 AI 的余额/可用模型；接口失败不打断主流程
     try {
-      const res = await aiApi.balance()
-      serverBalance.value = res.sharedMode ? res.balance : null
+      serverAi.value = await aiApi.balance()
     } catch {
-      serverBalance.value = null
+      serverAi.value = null
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '读取 AI 配置失败'
@@ -348,6 +353,24 @@ function cancelProviderForm(): void {
   showProviderForm.value = false
 }
 
+/** 价格展示：未配置显示 —，数值去掉多余的尾零 */
+function fmtPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return String(value)
+}
+
+/** 充值链接：桌面端走系统浏览器，浏览器端新开标签页 */
+async function openRecharge(): Promise<void> {
+  const url = serverAi.value?.rechargeUrl
+  if (!url) return
+  if (isTauri()) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+  } else {
+    window.open(url, '_blank', 'noopener')
+  }
+}
+
 function toggleProviderForm(): void {
   if (showProviderForm.value) stopEditProvider()
   else resetProviderForm()
@@ -495,17 +518,9 @@ onBeforeUnmount(() => {
       description="支持任意 OpenAI 兼容端点，密钥加密保存在服务端，保存后自动获取模型列表"
       icon="sparkles"
     >
-      <SettingRow
-        v-if="serverBalance !== null"
-        label="服务器共享余额"
-        description="管理员开启全服共享后，未自配供应商的调用按模型单价从这里扣费"
-      >
-        <span class="text-[13px] font-semibold tabular-nums text-text-strong">
-          ¥ {{ serverBalance.toFixed(2) }}
-        </span>
-      </SettingRow>
       <template #actions>
         <Button
+          v-if="!serverAi?.enabled"
           size="sm"
           :variant="showProviderForm ? 'secondary' : 'secondary'"
           :icon="showProviderForm ? 'close' : 'plus'"
@@ -515,7 +530,51 @@ onBeforeUnmount(() => {
         </Button>
       </template>
 
-      <TokenRouterAdBanner />
+      <!-- 服务器统一供 AI：大字余额 + 充值 + 可用模型价格，自定义供应商停用 -->
+      <div v-if="serverAi?.enabled" class="space-y-4">
+        <div class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3.5">
+          <div class="min-w-0">
+            <div class="text-[11.5px] text-muted">余额</div>
+            <div class="text-[28px] font-semibold leading-tight tabular-nums text-text-strong">
+              ¥ {{ (serverAi.balance ?? 0).toFixed(2) }}
+            </div>
+          </div>
+          <Button
+            v-if="serverAi.rechargeUrl"
+            variant="primary"
+            icon="globe"
+            @click="openRecharge"
+          >
+            充值
+          </Button>
+        </div>
+
+        <div>
+          <div class="mb-1.5 text-[12px] font-medium text-text-strong">可用模型</div>
+          <p class="mb-2 text-[11px] leading-relaxed text-muted">
+            按实际用量计费（元 / 百万 token）；缓存命中部分按缓存价计，未配缓存价按输入价计
+          </p>
+          <div class="overflow-hidden rounded-lg border border-line">
+            <div
+              v-for="m in serverAi.models"
+              :key="m.model"
+              class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line/60 px-3 py-2 text-[12px] last:border-b-0"
+            >
+              <span class="min-w-0 flex-1 truncate font-mono text-text">{{ m.model }}</span>
+              <span class="shrink-0 text-muted tabular-nums">输入 {{ fmtPrice(m.priceInput) }}</span>
+              <span class="shrink-0 text-muted tabular-nums">缓存 {{ fmtPrice(m.priceCached) }}</span>
+              <span class="shrink-0 text-muted tabular-nums">输出 {{ fmtPrice(m.priceOutput) }}</span>
+            </div>
+            <div v-if="serverAi.models.length === 0" class="px-3 py-3 text-center text-[11.5px] text-muted">
+              暂无可用的模型，请联系管理员
+            </div>
+          </div>
+        </div>
+
+        <Alert tone="info">当前由服务器统一提供 AI 服务，自定义服务商已停用。</Alert>
+      </div>
+      <template v-else>
+        <TokenRouterAdBanner />
 
       <div v-if="showProviderForm" class="mb-3 space-y-3 rounded-lg border border-line bg-surface-2 p-3">
         <p v-if="editingProvider" class="text-[12px] text-muted">
@@ -833,6 +892,7 @@ onBeforeUnmount(() => {
           />
         </div>
       </div>
+      </template>
     </SettingsCard>
 
     <SettingsCard id="reply" title="回复与调试" description="即时生效，无需保存" icon="message">

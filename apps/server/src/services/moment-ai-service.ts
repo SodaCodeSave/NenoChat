@@ -55,13 +55,16 @@ function pick<T>(items: T[], random: () => number): T | undefined {
   return items[Math.floor(random() * items.length) % items.length]
 }
 
-/** 角色的服务商：优先自己指定的，否则退回默认服务商，共享模式再退到服务器供应商 */
+/** 角色的服务商：共享模式开启时一律服务器供应商，否则角色指定 → 默认服务商 */
 async function resolveProvider(db: DB, persona: aiRepo.PersonaRow): Promise<aiRepo.ProviderRow | undefined> {
+  if (await aiRepo.isSharedModeEnabled(db)) {
+    return await aiRepo.defaultProvider(db, aiRepo.SYSTEM_AI_OWNER_ID)
+  }
   if (persona.provider_id) {
     const provider = await aiRepo.findProvider(db, persona.provider_id)
     if (provider) return provider
   }
-  return await aiRepo.defaultProviderWithShared(db, persona.owner_id)
+  return aiRepo.defaultProvider(db, persona.owner_id)
 }
 
 /** 记忆摘要放在角色的专属会话里；还没开过会话就当没有记忆 */

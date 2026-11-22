@@ -22,9 +22,11 @@ import * as billing from '../../services/ai-billing-service'
 import * as usersRepo from '../../db/repo/users'
 import {
   REGISTRATION_MODES,
+  getAiRechargeUrl,
   getRegistrationMode,
   getServerName,
   getSharedAiMode,
+  setAiRechargeUrl,
   setRegistrationMode,
   setServerName,
   setSharedAiMode,
@@ -77,6 +79,13 @@ const UpdateSettingsBody = z.object({
   registrationMode: z.enum(['open', 'invite', 'closed']).optional(),
 })
 const SharedModeBody = z.object({ enabled: z.boolean() })
+const RechargeUrlBody = z.object({
+  url: z
+    .string()
+    .trim()
+    .max(512)
+    .refine((v) => v === '' || /^https?:\/\//i.test(v), '充值链接必须是 http(s) 地址'),
+})
 const BalanceAdjustBody = z.object({
   delta: z.number().refine((v) => v !== 0, '调整金额不能为 0').refine(
     (v) => Math.abs(v) <= 1_000_000,
@@ -328,6 +337,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     await requireAdmin(request)
     return {
       sharedMode: await getSharedAiMode(db),
+      rechargeUrl: await getAiRechargeUrl(db),
       providers: await aiService.listProviders(db, billing.SYSTEM_AI_OWNER_ID),
     }
   })
@@ -338,6 +348,16 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     await setSharedAiMode(db, input.enabled)
     await recordAudit(db, admin, 'ai.shared_mode', 'server_settings', null, { enabled: input.enabled })
     return { sharedMode: input.enabled }
+  })
+
+  app.patch('/admin/ai/recharge-url', async (request) => {
+    const admin = await requireAdmin(request)
+    const input = parse(RechargeUrlBody, request.body)
+    await setAiRechargeUrl(db, input.url)
+    await recordAudit(db, admin, 'ai.recharge_url', 'server_settings', null, {
+      url: input.url || null,
+    })
+    return { rechargeUrl: input.url }
   })
 
   app.post('/admin/ai/providers', async (request) => {

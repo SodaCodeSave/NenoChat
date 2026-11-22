@@ -28,6 +28,9 @@ const BALANCE_PAGE_SIZE = 20
 /* ------------------------------ 加载态 ------------------------------ */
 
 const sharedMode = ref(false)
+const rechargeUrl = ref('')
+const rechargeDraft = ref('')
+const savingRecharge = ref('')
 const providers = ref<AdminAiProvider[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
@@ -39,6 +42,8 @@ async function load(): Promise<void> {
   try {
     const res = await adminApi.aiConfig.providers()
     sharedMode.value = res.sharedMode
+    rechargeUrl.value = res.rechargeUrl
+    rechargeDraft.value = res.rechargeUrl
     providers.value = res.providers
     await loadBalances(balancePage.value)
   } catch (e) {
@@ -58,12 +63,34 @@ async function toggleSharedMode(enabled: boolean): Promise<void> {
   try {
     const res = await adminApi.aiConfig.setSharedMode(enabled)
     sharedMode.value = res.sharedMode
-    notice.value = enabled ? '全服共享已开启，未自配供应商的成员将走服务器供应商并计费' : '全服共享已关闭'
+    notice.value = enabled
+      ? '统一 AI 服务已开启：成员的 AI 调用一律走这里的供应商并按单价计费'
+      : '统一 AI 服务已关闭：各成员使用自己配置的供应商'
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : '保存失败'
     sharedMode.value = !enabled
   } finally {
     savingMode.value = false
+  }
+}
+
+async function saveRecharge(): Promise<void> {
+  const url = rechargeDraft.value.trim()
+  if (url && !/^https?:\/\//i.test(url)) {
+    errorMessage.value = '充值链接必须是 http(s) 地址'
+    return
+  }
+  savingRecharge.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const res = await adminApi.aiConfig.setRechargeUrl(url)
+    rechargeUrl.value = res.rechargeUrl
+    rechargeDraft.value = res.rechargeUrl
+    notice.value = url ? '充值链接已保存，客户端余额区将显示充值按钮' : '充值链接已清空'
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    savingRecharge.value = ''
   }
 }
 
@@ -386,33 +413,51 @@ onMounted(load)
     <template v-else>
       <SettingsCard
         id="shared"
-        title="全服共享模式"
-        description="开启后成员没配自己的供应商时，AI 调用自动走服务器供应商，并按模型单价从个人余额扣费"
+        title="统一 AI 服务"
+        description="开启后成员的 AI 调用一律走这里的供应商，自定义供应商整体停用，并按模型单价从个人余额扣费"
         icon="cpu"
       >
         <SettingRow
-          label="启用全服共享"
+          label="启用统一 AI 服务"
           :description="
             sharedMode
-              ? '已开启：自有供应商优先，没配的走服务器供应商并计费（余额耗尽会被拒绝）'
-              : '已关闭：各成员使用自己配置的供应商，服务器供应商不参与解析'
+              ? '已开启：自定义供应商已禁用，余额耗尽的成员会被拒绝调用'
+              : '已关闭：各成员使用自己配置的供应商，不参与计费'
           "
         >
           <Switch :model-value="sharedMode" :disabled="savingMode" @update:model-value="toggleSharedMode" />
         </SettingRow>
         <SettingRow
           label="模型计费单价"
-          description="在供应商的「AI 列表」里按模型配置输入/输出单价（元/百万 token）；没配价格的模型不扣费"
+          description="在供应商的「AI 列表」里按模型配置输入/输出/缓存单价（元/百万 token）；没配价格的模型不扣费"
         >
           <span class="text-[11.5px] text-muted">元 / 百万 token</span>
+        </SettingRow>
+        <SettingRow
+          label="充值链接"
+          description="客户端余额区据此显示「充值」按钮；留空表示不提供充值入口"
+          stacked
+        >
+          <div class="flex w-full items-center gap-2">
+            <TextInput v-model="rechargeDraft" type="url" placeholder="https://pay.example.com/item/xxx" class="flex-1" />
+            <Button
+              size="sm"
+              variant="secondary"
+              :loading="savingRecharge === 'saving'"
+              :disabled="rechargeDraft.trim() === rechargeUrl"
+              @click="saveRecharge"
+            >
+              保存
+            </Button>
+          </div>
         </SettingRow>
       </SettingsCard>
 
       <SettingsCard
         id="providers"
         class="mt-3"
-        title="服务器供应商"
-        description="供应商密钥加密保存在服务端，仅全服共享模式下参与解析"
+        title="AI 供应商"
+        description="供应商密钥加密保存在服务端；启用统一 AI 服务后，成员的 AI 调用一律走这里"
         icon="sparkles"
       >
         <template #actions>
@@ -426,7 +471,7 @@ onMounted(load)
         </template>
 
         <div v-if="providers.length === 0 && !showProviderForm" class="py-6 text-center text-[12.5px] text-muted">
-          还没有服务器供应商。添加一个并开启共享模式，成员就能直接使用
+          还没有 AI 供应商。添加一个并启用统一 AI 服务，成员即可直接使用
         </div>
 
         <div v-else class="space-y-2">
@@ -572,7 +617,7 @@ onMounted(load)
         id="balances"
         class="mt-3"
         title="用户余额"
-        description="共享模式计费的扣费对象；正数充值、负数扣减"
+        description="统一 AI 服务计费的扣费对象；正数充值、负数扣减"
         icon="users"
       >
         <EmptyState v-if="balances.length === 0 && !balancesLoading" text="还没有活跃用户" />
@@ -609,8 +654,8 @@ onMounted(load)
 
     <ConfirmDialog
       :open="deleteTarget !== null"
-      title="删除服务器供应商？"
-      :description="`「${deleteTarget?.name ?? ''}」删除后，共享模式下依赖它的成员将无法调用 AI（除非自配供应商）。`"
+      title="删除 AI 供应商？"
+      :description="`「${deleteTarget?.name ?? ''}」删除后，统一 AI 服务依赖它的成员将无法调用 AI。`"
       confirm-text="删除"
       tone="danger"
       :loading="deleting"

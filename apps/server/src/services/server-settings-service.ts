@@ -13,6 +13,7 @@ import { now } from '../util/clock'
 const KEY_SERVER_NAME = 'server_name'
 const KEY_REGISTRATION_MODE = 'registration_mode'
 const KEY_SHARED_AI_MODE = 'ai_shared_mode'
+const KEY_AI_RECHARGE_URL = 'ai_recharge_url'
 
 export type RegistrationMode = 'open' | 'invite' | 'closed'
 
@@ -86,4 +87,22 @@ export async function setSharedAiMode(db: DB, enabled: boolean): Promise<void> {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
     [KEY_SHARED_AI_MODE, JSON.stringify(enabled), now()],
   )
+}
+
+/** 充值链接：客户端余额区的「充值」按钮跳转目标；空串/未配置表示没有充值入口 */
+export async function getAiRechargeUrl(db: Executor): Promise<string> {
+  const row = await one<{ value: string }>(db, 'SELECT value FROM server_settings WHERE key = ?', [
+    KEY_AI_RECHARGE_URL,
+  ])
+  if (!row) return ''
+  try {
+    const parsed: unknown = JSON.parse(row.value)
+    return typeof parsed === 'string' ? parsed : ''
+  } catch {
+    return ''
+  }
+}
+
+export async function setAiRechargeUrl(db: DB, url: string): Promise<void> {
+  await writeRaw(db, KEY_AI_RECHARGE_URL, url)
 }

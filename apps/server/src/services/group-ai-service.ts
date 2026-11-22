@@ -120,11 +120,15 @@ export async function listGroupPersonas(db: DB, conversationId: string): Promise
 }
 
 async function resolvePersonaProvider(db: DB, persona: aiRepo.PersonaRow): Promise<aiRepo.ProviderRow | null> {
+  // 共享模式开启 = 自定义供应商禁用，一律服务器供应商
+  if (await aiRepo.isSharedModeEnabled(db)) {
+    return (await aiRepo.defaultProvider(db, aiRepo.SYSTEM_AI_OWNER_ID)) ?? null
+  }
   if (persona.provider_id) {
     const provider = await aiRepo.findProvider(db, persona.provider_id)
     if (provider) return provider
   }
-  return (await aiRepo.defaultProviderWithShared(db, persona.owner_id)) ?? null
+  return (await aiRepo.defaultProvider(db, persona.owner_id)) ?? null
 }
 
 async function readState(db: DB, conversationId: string, personaId: string): Promise<GroupState> {

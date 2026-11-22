@@ -122,12 +122,19 @@ describe('管理面板结构', () => {
     }
   })
 
-  it('AI 配置视图：共享开关/供应商表单/AI 列表计费/余额充值齐全', () => {
-    expect(aiConfigSource).toContain('全服共享模式')
+  it('AI 配置视图：统一 AI 开关/充值链接/供应商表单/AI 列表计费/余额充值齐全', () => {
+    expect(aiConfigSource).toContain('统一 AI 服务')
     expect(aiConfigSource).toContain('toggleSharedMode')
     expect(aiConfigSource).toContain('setSharedMode')
+    expect(aiConfigSource).toContain('setRechargeUrl')
+    expect(aiConfigSource).toContain('充值链接')
+    // 共享开启即禁用自定义供应商，界面不得再出现「共享」式回退话术
+    expect(aiConfigSource).toContain('自定义供应商整体停用')
+    expect(aiConfigSource).not.toContain('全服共享')
+    expect(aiConfigSource).not.toContain('服务器共享')
     expect(aiConfigSource).toContain('AI 列表')
     expect(aiConfigSource).toContain('priceInput')
+    expect(aiConfigSource).toContain('priceCached')
     expect(aiConfigSource).toContain('priceOutput')
     expect(aiConfigSource).toContain('元/百万 token')
     expect(aiConfigSource).toContain('testProviderStored')
