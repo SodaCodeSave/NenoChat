@@ -28,10 +28,30 @@ function writeStorage(key: string, value: string | null): void {
   }
 }
 
+/** 生成一段本地唯一的设备标识；面板常走局域网明文 HTTP（非安全上下文），
+ * crypto.randomUUID 只在安全上下文存在，必须带 getRandomValues 兜底 */
+export function randomId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().replace(/-/g, '')
+    }
+    const bytes = new Uint8Array(16)
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      crypto.getRandomValues(bytes)
+    } else {
+      for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+    }
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  } catch {
+    // crypto 对象整个不可用的极端场景，唯一性够用就行
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  }
+}
+
 function ensureDeviceId(): string {
   const existing = readStorage(DEVICE_KEY)
   if (existing) return existing
-  const id = `admin-${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`
+  const id = `admin-${randomId().slice(0, 20)}`
   writeStorage(DEVICE_KEY, id)
   return id
 }

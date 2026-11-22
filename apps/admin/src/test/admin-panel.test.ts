@@ -65,6 +65,13 @@ describe('管理面板结构', () => {
     expect(authSource).toContain('dropSession')
   })
 
+  it('设备标识不直接依赖 crypto.randomUUID（局域网明文 HTTP 无此 API）', () => {
+    expect(authSource).toContain('getRandomValues')
+    // 只允许「存在性检查后调用」的守卫形态，不允许裸调
+    expect(authSource).toContain("typeof crypto.randomUUID === 'function'")
+    expect(authSource).toContain('typeof crypto.getRandomValues')
+  })
+
   it('HTTP 客户端 401 时静默刷新并重试一次', () => {
     expect(httpSource).toContain('refreshOnce()')
     expect(httpSource).toContain('_retried: true')
