@@ -8,6 +8,8 @@ import type { FastifyInstance } from 'fastify'
 /**
  * 管理面板·内容管理：会话列表/消息查看/管理员撤回、动态与评论下架、
  * 文件列表与删除、手动 GC。
+ * 内容脱敏：管理端接口不下发消息/动态/评论正文与 meta（附件 URL、引用摘要），
+ * 管理员只能看到元信息，正文以「[内容已隐藏]」占位。
  */
 
 const dataDir = mkdtempSync(path.join(tmpdir(), 'nenochat-admin-content-'))
@@ -139,19 +141,34 @@ describe('管理面板·内容管理', () => {
     expect(send.status).toBe(200)
     const messageId = send.json.message.id
 
+    // 回复一条制造 meta.replyTo 引用摘要，验证摘要同样不下发
+    const reply = await api('POST', '/messages', {
+      token: adminToken,
+      body: { conversationId, type: 'text', content: '回复引用内容', clientNonce: 'adm-c-2', replyToId: messageId },
+    })
+    expect(reply.status).toBe(200)
+
     const listed = await api('GET', `/admin/conversations/${conversationId}/messages`, { token: adminToken })
     expect(listed.status).toBe(200)
-    expect(listed.json.items).toHaveLength(1)
-    expect(listed.json.items[0].content).toBe('违规内容测试')
-    expect(listed.json.items[0].senderName).toBe('bob_speaker')
+    expect(listed.json.items).toHaveLength(2)
+    for (const item of listed.json.items) {
+      expect(item.content).toBe('[内容已隐藏]')
+      expect(item.meta).toBeUndefined()
+    }
+    expect(listed.json.items.some((m: any) => m.senderName === 'bob_speaker')).toBe(true)
+    // 正文与引用摘要都不允许出现在响应任何字段里
+    expect(JSON.stringify(listed.json)).not.toContain('违规内容测试')
+    expect(JSON.stringify(listed.json)).not.toContain('回复引用内容')
 
     const recall = await api('DELETE', `/admin/messages/${messageId}`, { token: adminToken })
     expect(recall.status).toBe(200)
     expect(recall.json.message.deletedAt).toBeGreaterThan(0)
+    expect(recall.json.message.content).toBe('')
 
-    // 软删后不再出现在管理员列表里；普通分页返回墓碑（deletedAt 置位、内容清空，客户端渲染「已撤回」）
+    // 软删后不再出现在管理员列表里（只剩未撤回的回复那条）；普通分页返回墓碑（deletedAt 置位、内容清空，客户端渲染「已撤回」）
     const after = await api('GET', `/admin/conversations/${conversationId}/messages`, { token: adminToken })
-    expect(after.json.items).toHaveLength(0)
+    expect(after.json.items.find((m: any) => m.id === messageId)).toBeUndefined()
+    expect(after.json.items).toHaveLength(1)
     const userView = await api('GET', `/conversations/${conversationId}/messages`, { token: bobToken })
     const tombstone = userView.json.messages.find((m: any) => m.id === messageId)
     expect(tombstone.deletedAt).toBeGreaterThan(0)
@@ -176,6 +193,16 @@ describe('管理面板·内容管理', () => {
     const listed = await api('GET', '/admin/posts?q=待下架', { token: adminToken })
     expect(listed.json.total).toBe(1)
     expect(listed.json.items[0].authorName).toBe('bob_speaker')
+    expect(listed.json.items[0].content).toBe('[内容已隐藏]')
+    expect(JSON.stringify(listed.json)).not.toContain('待下架的动态内容')
+
+    // 评论区正文同样脱敏，作者信息保留
+    const comments = await api('GET', `/admin/posts/${postId}/comments`, { token: adminToken })
+    expect(comments.status).toBe(200)
+    expect(comments.json.comments).toHaveLength(1)
+    expect(comments.json.comments[0].content).toBe('[内容已隐藏]')
+    expect(comments.json.comments[0].author?.displayName).toBe('root_admin')
+    expect(JSON.stringify(comments.json)).not.toContain('待删除的评论')
 
     const delComment = await api('DELETE', `/admin/comments/${commentId}`, { token: adminToken })
     expect(delComment.status).toBe(200)

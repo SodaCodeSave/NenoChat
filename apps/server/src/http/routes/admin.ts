@@ -16,7 +16,6 @@ import { rateLimit } from '../plugins/rate-limit'
 import { env } from '../../env'
 import { APP_VERSION, BUILD_STAMP, MIN_CLIENT_VERSION } from '../../version'
 import * as adminService from '../../services/admin-service'
-import * as postService from '../../services/post-service'
 import * as aiService from '../../services/ai-service'
 import * as billing from '../../services/ai-billing-service'
 import * as usersRepo from '../../db/repo/users'
@@ -266,10 +265,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return await adminService.listPosts(db, query)
   })
 
-  /** 管理员查看任意动态的评论区（含作者信息），供定位违规评论 */
+  /** 管理员查看任意动态的评论区（含作者信息，正文脱敏），供定位违规评论 */
   app.get<{ Params: { id: string } }>('/admin/posts/:id/comments', async (request) => {
     await requireAdmin(request)
-    return { comments: await postService.listComments(db, request.params.id) }
+    return { comments: await adminService.listPostComments(db, request.params.id) }
   })
 
   app.delete<{ Params: { id: string } }>('/admin/posts/:id', async (request) => {

@@ -1,4 +1,4 @@
-import type { Conversation, Device, Message, User } from '@nenochat/shared'
+import type { Conversation, Device, Message, PostComment, User } from '@nenochat/shared'
 import type { DB } from '../db'
 import { all, one, run } from '../db'
 import { withTx } from '../db/tx'
@@ -15,6 +15,7 @@ import * as attachmentsRepo from '../db/repo/attachments'
 import * as adminAuditRepo from '../db/repo/admin-audit'
 import * as authService from './auth-service'
 import * as billingService from './ai-billing-service'
+import * as postService from './post-service'
 import { writeChange } from './change-log'
 import { hub } from '../ws/hub'
 import { emitMessageUpdated, emitPostRemoved, emitPostUpdated } from '../ws/emitter'
@@ -517,6 +518,16 @@ export async function listConversations(
   }
 }
 
+/**
+ * 后台内容脱敏：管理员只能看到发送者/时间/类型等元信息，
+ * 正文与 meta（附件 URL、引用摘要）一律不下发，后台无法查看消息内容。
+ */
+export const REDACTED_CONTENT = '[内容已隐藏]'
+
+function redactAdminMessage<T extends Message>(item: T): T {
+  return { ...item, content: REDACTED_CONTENT, meta: undefined }
+}
+
 export interface AdminMessageListItem extends Message {
   senderName: string | null
 }
@@ -539,7 +550,9 @@ export async function listConversationMessages(
     [conversationId, query.beforeSeq ?? Number.MAX_SAFE_INTEGER, PAGE_SIZE],
   )
   return {
-    items: rows.map((row) => ({ ...messagesRepo.mapMessage(row), senderName: row.sender_name })),
+    items: rows.map((row) =>
+      redactAdminMessage({ ...messagesRepo.mapMessage(row), senderName: row.sender_name }),
+    ),
     conversation: conversationsRepo.mapConversation(conv),
   }
 }
@@ -620,7 +633,7 @@ export async function listPosts(
       authorId: row.author_id,
       authorName: row.author_name,
       personaId: row.persona_id,
-      content: row.content,
+      content: REDACTED_CONTENT,
       visibility: row.visibility,
       likeCount: row.like_count,
       commentCount: row.comment_count,
@@ -628,6 +641,12 @@ export async function listPosts(
     })),
     total: totalRow?.c ?? 0,
   }
+}
+
+/** 后台查看任意动态的评论区：作者信息保留，评论正文脱敏（正文检索仍走服务端 ILIKE，不下发原文） */
+export async function listPostComments(db: DB, postId: string): Promise<PostComment[]> {
+  const comments = await postService.listComments(db, postId)
+  return comments.map((comment) => ({ ...comment, content: REDACTED_CONTENT }))
 }
 
 /** 管理员删动态：软删 + 全服在线广播下架 */

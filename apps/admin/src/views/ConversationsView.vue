@@ -170,7 +170,7 @@ async function confirmRecall(): Promise<void> {
     <Dialog
       :open="viewing !== null"
       :title="`消息浏览 — ${viewing ? convTitle(viewing) : ''}`"
-      description="按时间倒序，只显示未删除的消息"
+      description="按时间倒序，只显示未删除的消息；为保护隐私，消息内容已隐藏，仅显示发送者与时间"
       width="lg"
       @update:open="(v: boolean) => { if (!v) viewing = null }"
     >

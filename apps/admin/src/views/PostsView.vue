@@ -178,7 +178,7 @@ async function confirmDeleteComment(): Promise<void> {
     <ConfirmDialog
       :open="deleteComment !== null"
       title="删除这条评论？"
-      :description="`「${deleteComment?.content.slice(0, 40) ?? ''}」将被删除，动态的评论数会同步扣减。`"
+      description="这条评论将被删除，动态的评论数会同步扣减。"
       confirm-text="删除"
       tone="danger"
       :loading="deleting"
