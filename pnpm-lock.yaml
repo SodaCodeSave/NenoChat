@@ -168,6 +168,9 @@ importers:
 
   apps/admin:
     dependencies:
+      '@lobehub/icons-static-svg':
+        specifier: ^1.102.0
+        version: 1.102.0
       '@nenochat/shared':
         specifier: workspace:*
         version: link:../../packages/shared

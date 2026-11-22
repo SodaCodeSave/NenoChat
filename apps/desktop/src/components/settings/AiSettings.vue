@@ -23,6 +23,8 @@ import ModelPicker from '@/components/settings/ModelPicker.vue'
 const ai = useAiStore()
 
 const providers = ref<AiProvider[]>([])
+/** 全服共享 AI 的个人余额；接口不可用或共享关闭时不展示 */
+const serverBalance = ref<number | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
@@ -166,6 +168,13 @@ async function load(): Promise<void> {
     const providerResult = await aiApi.providers()
     providers.value = providerResult.providers
     await ai.load()
+    // 共享模式开启时展示服务器共享余额；接口失败不打断主流程
+    try {
+      const res = await aiApi.balance()
+      serverBalance.value = res.sharedMode ? res.balance : null
+    } catch {
+      serverBalance.value = null
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '读取 AI 配置失败'
   } finally {
@@ -486,6 +495,15 @@ onBeforeUnmount(() => {
       description="支持任意 OpenAI 兼容端点，密钥加密保存在服务端，保存后自动获取模型列表"
       icon="sparkles"
     >
+      <SettingRow
+        v-if="serverBalance !== null"
+        label="服务器共享余额"
+        description="管理员开启全服共享后，未自配供应商的调用按模型单价从这里扣费"
+      >
+        <span class="text-[13px] font-semibold tabular-nums text-text-strong">
+          ¥ {{ serverBalance.toFixed(2) }}
+        </span>
+      </SettingRow>
       <template #actions>
         <Button
           size="sm"

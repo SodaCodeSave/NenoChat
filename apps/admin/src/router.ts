@@ -28,6 +28,7 @@ const router = createRouter({
         { path: 'posts', name: 'posts', component: () => import('@/views/PostsView.vue') },
         { path: 'files', name: 'files', component: () => import('@/views/FilesView.vue') },
         { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+        { path: 'ai-config', name: 'ai-config', component: () => import('@/views/AiConfigView.vue') },
         { path: 'ai-usage', name: 'ai-usage', component: () => import('@/views/AiUsageView.vue') },
         { path: 'audit', name: 'audit', component: () => import('@/views/AuditView.vue') },
       ],

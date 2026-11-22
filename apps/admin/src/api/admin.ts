@@ -34,6 +34,7 @@ export interface AdminUserDetail {
   messageCount: number
   postCount: number
   sessionCount: number
+  aiBalance: number
 }
 
 export interface Paged<T> {
@@ -149,6 +150,38 @@ export interface AdminAiUsage {
   }>
 }
 
+export interface AdminAiProviderModel {
+  model: string
+  enabled: boolean
+  priceInput: number | null
+  priceOutput: number | null
+}
+
+export interface AdminAiProvider {
+  id: string
+  name: string
+  baseUrl: string
+  apiKeyMasked?: string | null
+  model: string
+  visionModel?: string | null
+  contextWindow?: number | null
+  models?: AdminAiProviderModel[]
+  temperature: number
+  maxTokens: number
+  isDefault: boolean
+  balance?: string | null
+  balanceCurrency?: string | null
+  balanceCheckedAt?: number | null
+}
+
+export interface AdminBalanceItem {
+  userId: string
+  username: string
+  displayName: string
+  balance: number
+  updatedAt: number | null
+}
+
 export interface AdminAuditEntry {
   id: string
   actorId: string
@@ -229,6 +262,31 @@ export const adminApi = {
   },
 
   aiUsage: (window: '24h' | '7d' | '30d') => http.get<AdminAiUsage>('/admin/ai/usage', { query: { window } }),
+
+  aiConfig: {
+    providers: () =>
+      http.get<{ sharedMode: boolean; providers: AdminAiProvider[] }>('/admin/ai/providers'),
+    setSharedMode: (enabled: boolean) =>
+      http.patch<{ sharedMode: boolean }>('/admin/ai/shared-mode', { enabled }),
+    createProvider: (body: Record<string, unknown>) =>
+      http.post<{ provider: AdminAiProvider }>('/admin/ai/providers', body),
+    updateProvider: (id: string, body: Record<string, unknown>) =>
+      http.patch<{ provider: AdminAiProvider }>(`/admin/ai/providers/${id}`, body),
+    removeProvider: (id: string) => http.delete<{ ok: boolean }>(`/admin/ai/providers/${id}`),
+    previewModels: (input: { baseUrl: string; apiKey?: string }) =>
+      http.post<{ models: string[] }>('/admin/ai/providers/models', input),
+    providerModels: (id: string) =>
+      http.get<{ models: string[] }>(`/admin/ai/providers/${id}/models`),
+    testProvider: (input: { baseUrl: string; apiKey: string; model: string }) =>
+      http.post<{ ok: boolean; sample: string }>('/admin/ai/providers/test', input),
+    testProviderStored: (id: string, input: { baseUrl?: string; model?: string }) =>
+      http.post<{ ok: boolean; sample: string }>(`/admin/ai/providers/${id}/test`, input),
+    providerBalance: (id: string) =>
+      http.post<{ provider: AdminAiProvider }>(`/admin/ai/providers/${id}/balance`, {}),
+    balances: (page: number) => http.get<Paged<AdminBalanceItem>>('/admin/ai/balances', { query: { page } }),
+    adjustBalance: (userId: string, delta: number) =>
+      http.post<{ userId: string; balance: number }>(`/admin/ai/balances/${userId}`, { delta }),
+  },
 
   audit: (page: number) => http.get<Paged<AdminAuditEntry>>('/admin/audit', { query: { page } }),
 }

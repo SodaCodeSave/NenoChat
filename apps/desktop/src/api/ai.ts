@@ -89,6 +89,9 @@ export const aiApi = {
   providerBalance: (id: string) =>
     http.post<{ provider: AiProvider }>(p(`/ai/providers/${id}/balance`), {}),
 
+  /** 全服共享模式的个人余额；sharedMode 关闭时余额无意义 */
+  balance: () => http.get<{ sharedMode: boolean; balance: number }>(p('/ai/balance')),
+
   personas: () => http.get<{ personas: AiPersona[] }>(p('/ai/personas')),
   createPersona: (body: PersonaInput) => http.post<{ persona: AiPersona }>(p('/ai/personas'), body),
   updatePersona: (id: string, body: Partial<PersonaInput>) =>

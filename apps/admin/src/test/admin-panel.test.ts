@@ -9,6 +9,7 @@ import filesSource from '@/views/FilesView.vue?raw'
 import authSource from '@/stores/auth.ts?raw'
 import httpSource from '@/api/http.ts?raw'
 import apiSource from '@/api/admin.ts?raw'
+import aiConfigSource from '@/views/AiConfigView.vue?raw'
 
 /**
  * 管理面板的结构断言：路由/导航/危险操作/登录校验这些关键行为
@@ -45,8 +46,19 @@ describe('管理面板结构', () => {
     expect(routerSource).toContain('if (!auth.isAdmin) return { name: \'login\' }')
   })
 
-  it('侧栏导航九个入口齐全，含退出与主题切换', () => {
-    for (const nav of ['dashboard', 'users', 'invites', 'conversations', 'posts', 'files', 'settings', 'ai-usage', 'audit']) {
+  it('侧栏导航十个入口齐全（含 AI 配置），含退出与主题切换', () => {
+    for (const nav of [
+      'dashboard',
+      'users',
+      'invites',
+      'conversations',
+      'posts',
+      'files',
+      'settings',
+      'ai-config',
+      'ai-usage',
+      'audit',
+    ]) {
       expect(layoutSource, nav).toContain(`name: '${nav}'`)
     }
     expect(layoutSource).toContain('退出登录')
@@ -104,6 +116,35 @@ describe('管理面板结构', () => {
       '/admin/settings',
       '/admin/ai/usage',
       '/admin/audit',
+    ]
+    for (const endpoint of endpoints) {
+      expect(apiSource, endpoint).toContain(endpoint)
+    }
+  })
+
+  it('AI 配置视图：共享开关/供应商表单/AI 列表计费/余额充值齐全', () => {
+    expect(aiConfigSource).toContain('全服共享模式')
+    expect(aiConfigSource).toContain('toggleSharedMode')
+    expect(aiConfigSource).toContain('setSharedMode')
+    expect(aiConfigSource).toContain('AI 列表')
+    expect(aiConfigSource).toContain('priceInput')
+    expect(aiConfigSource).toContain('priceOutput')
+    expect(aiConfigSource).toContain('元/百万 token')
+    expect(aiConfigSource).toContain('testProviderStored')
+    expect(aiConfigSource).toContain('importFormModels')
+    expect(aiConfigSource).toContain('调整用户余额')
+    expect(aiConfigSource).toContain('<ConfirmDialog')
+    expect(aiConfigSource).toContain('matchProviderIcon')
+    expect(aiConfigSource).toContain('AI_PROVIDER_PRESETS')
+  })
+
+  it('AI 配置端点覆盖 /admin/ai 家族', () => {
+    const endpoints = [
+      '/admin/ai/providers',
+      '/admin/ai/shared-mode',
+      '/admin/ai/providers/models',
+      '/admin/ai/providers/test',
+      '/admin/ai/balances',
     ]
     for (const endpoint of endpoints) {
       expect(apiSource, endpoint).toContain(endpoint)

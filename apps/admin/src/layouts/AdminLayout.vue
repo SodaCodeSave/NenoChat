@@ -38,6 +38,7 @@ const nav: Array<{ group: string; items: NavItem[] }> = [
     group: '系统',
     items: [
       { name: 'settings', label: '服务器设置', icon: 'settings' },
+      { name: 'ai-config', label: 'AI 配置', icon: 'cpu' },
       { name: 'ai-usage', label: 'AI 用量', icon: 'sparkles' },
       { name: 'audit', label: '审计日志', icon: 'clock' },
     ],
