@@ -461,9 +461,55 @@ function mentionFromMobile(userId: string, name: string): void {
   messageInput.value?.insertMention(userId, name)
 }
 
+/* --------------------------- 拖拽上传附件 --------------------------- */
+
+/** enter/leave 在子元素间移动时会成对触发，用计数抵消，>0 即悬停在聊天区内 */
+const dragDepth = ref(0)
+const draggingFile = computed(() => dragDepth.value > 0)
+
+/** 只接管文件拖拽，页面内拖文本仍走 textarea 原生插入 */
+function dragHasFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+
+function onDragEnter(event: DragEvent): void {
+  if (!dragHasFiles(event)) return
+  event.preventDefault()
+  dragDepth.value += 1
+}
+
+function onDragOver(event: DragEvent): void {
+  if (!dragHasFiles(event)) return
+  // dragover 不 preventDefault 浏览器就不允许 drop
+  event.preventDefault()
+}
+
+function onDragLeave(): void {
+  if (dragDepth.value > 0) dragDepth.value -= 1
+}
+
+function onDrop(event: DragEvent): void {
+  if (!dragHasFiles(event)) return
+  event.preventDefault()
+  dragDepth.value = 0
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  // 复用 MessageInput 的上传管线，AI 会话「仅图片」校验也一并生效
+  if (files.length > 0) messageInput.value?.handleFiles(files)
+}
+
+/** 文件拖到聊天列之外（成员侧栏等）也不能让 WebView 直接把文件打开 */
+function preventFileNavigation(event: DragEvent): void {
+  if (dragHasFiles(event)) event.preventDefault()
+}
+
+window.addEventListener('dragover', preventFileNavigation)
+window.addEventListener('drop', preventFileNavigation)
+
 onBeforeUnmount(() => {
   // 预览开着直接关页时 watch 来不及摘监听，这里兜底
   window.removeEventListener('keydown', onPreviewKeydown)
+  window.removeEventListener('dragover', preventFileNavigation)
+  window.removeEventListener('drop', preventFileNavigation)
   window.clearTimeout(toastTimer)
   // 直接退出会话页时 watch 不会再触发，补清最后一个会话的 typing 状态
   if (activeConversationId) typing.clear(activeConversationId)
@@ -472,7 +518,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0">
-    <div class="flex min-w-0 flex-1 flex-col">
+    <div
+      class="relative flex min-w-0 flex-1 flex-col"
+      @dragenter="onDragEnter"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
       <template v-if="conversation">
         <MessageSelectionBar
           v-if="selectionMode"
@@ -546,6 +598,24 @@ onBeforeUnmount(() => {
         />
 
         <DebugInfoBar v-if="debugMode" :conversation-id="conversationId" />
+
+        <!-- 拖拽文件悬停：全区提示，松手即上传 -->
+        <div
+          v-if="draggingFile"
+          class="animate-fade-in pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-surface/80"
+        >
+          <div
+            class="flex flex-col items-center gap-1.5 rounded-2xl border-2 border-dashed border-accent bg-accent-soft px-10 py-8"
+          >
+            <Icon name="paperclip" :size="26" class="text-accent" />
+            <p class="text-[14px] font-medium text-accent">
+              {{ isAi ? '松开发送图片' : '松开发送文件' }}
+            </p>
+            <p class="text-[11.5px] text-muted">
+              {{ isAi ? 'AI 会话暂只支持图片' : '支持图片与文件，一次最多 9 个' }}
+            </p>
+          </div>
+        </div>
       </template>
 
       <div v-else class="grid flex-1 place-items-center">

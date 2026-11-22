@@ -184,7 +184,8 @@ function insertMention(_userId: string, displayName: string): void {
   })
 }
 
-defineExpose({ insertMention })
+/** 拖拽投递的文件也走这条上传管线，与文件选择器、Ctrl+V 粘贴共用 */
+defineExpose({ insertMention, handleFiles })
 
 /** 从正文解析 @ 提及：按显示名匹配成员，@全体成员 触发全体提醒 */
 function collectMentions(): MentionSummary | null {
