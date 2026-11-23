@@ -79,6 +79,8 @@ export function resetWorkspace(): void {
   useMessagesStore().reset()
   useMembersStore().reset()
   useContactsStore().reset()
+  // 角色、服务商与互动设置都跟着服务器走，不清理会在新服务器上显示旧服务器的角色
+  useAiStore().reset()
   useSyncStore().disconnect()
   useSyncStore().reset()
   if (!hasLocalDb()) {

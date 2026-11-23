@@ -40,6 +40,17 @@ export const useSyncStore = defineStore('sync', () => {
 
   let registered = false
   let teardown: Array<() => void> = []
+  /** 当前 WebSocket 绑定的是哪台服务器：切服后旧连接推来的增量必须丢弃 */
+  let boundServerId: string | null = null
+
+  /**
+   * 连接与当前服务器是否已经对不上。
+   * 切服时 setCurrent 先改 currentId、随后才 disconnect，这中间旧连接可能还在推事件，
+   * 这些变更既不能写进内存，也不能落进新服务器的镜像。
+   */
+  function isForeignConnection(): boolean {
+    return boundServerId !== serverId.value
+  }
 
   async function loadCursor(): Promise<number> {
     if (!hasLocalDb() || !serverId.value) return 0
@@ -60,6 +71,8 @@ export const useSyncStore = defineStore('sync', () => {
     // 注意：这里不判断 hasLocalDb —— DAO 自身在无本地库时静默跳过，
     // 但内存 store 仍需更新，否则浏览器模式会漏掉全部增量。
     if (!sid) return
+    // 旧服务器的增量直接丢弃，否则旧服的角色会被 upsert 到新服列表与镜像里
+    if (isForeignConnection()) return
 
     const conversations = useConversationsStore()
     const messages = useMessagesStore()
@@ -165,6 +178,8 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   async function handleBatch(payload: { changes: ChangeRecord[]; nextCursor: number; hasMore: boolean }): Promise<void> {
+    // 切服期间的旧批次连游标都不能推进，否则新服务器的追批会从错误位置开始
+    if (isForeignConnection()) return
     await applyChanges(payload.changes)
     if (hasLocalDb() && serverId.value) {
       await setCursor(serverId.value, payload.nextCursor)
@@ -316,6 +331,8 @@ export const useSyncStore = defineStore('sync', () => {
     const auth = useAuthStore()
     if (!servers.current) return
 
+    // 先记下这台连接归属的服务器，之后所有增量都按它校验
+    boundServerId = servers.current.id
     registerHandlers()
     await loadCursor()
 
@@ -348,6 +365,7 @@ export const useSyncStore = defineStore('sync', () => {
     for (const off of teardown) off()
     teardown = []
     registered = false
+    boundServerId = null
     wsClient.close()
     status.value = 'idle'
   }
@@ -356,6 +374,7 @@ export const useSyncStore = defineStore('sync', () => {
     cursor.value = 0
     appliedBatches.value = 0
     lastError.value = null
+    boundServerId = null
   }
 
   return {

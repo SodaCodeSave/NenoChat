@@ -183,6 +183,22 @@ export async function deletePersona(serverId: string, id: string): Promise<void>
   await dbExecute('DELETE FROM ai_personas WHERE server_id = $1 AND id = $2', [serverId, id])
 }
 
+/**
+ * 用服务端的角色列表对齐本地镜像：删掉该服务器下已经不存在的角色。
+ * 只删本服务器的行，不碰其他服务器的镜像。
+ */
+export async function prunePersonas(serverId: string, keepIds: string[]): Promise<void> {
+  if (keepIds.length === 0) {
+    await dbExecute('DELETE FROM ai_personas WHERE server_id = $1', [serverId])
+    return
+  }
+  const slots = keepIds.map((_, index) => `$${index + 2}`).join(',')
+  await dbExecute(`DELETE FROM ai_personas WHERE server_id = $1 AND id NOT IN (${slots})`, [
+    serverId,
+    ...keepIds,
+  ])
+}
+
 export async function listPersonas(serverId: string): Promise<AiPersona[]> {
   const rows = await dbSelect<PersonaRow>(
     'SELECT * FROM ai_personas WHERE server_id = $1 ORDER BY updated_at DESC',

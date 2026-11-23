@@ -80,7 +80,10 @@ watch(
     if (value) {
       const { updatedAt: _ignored, ...rest } = value
       Object.assign(form, rest)
+      return
     }
+    // 设置被清空（切服/登出）时回到默认值，不能把上一台服务器的开关留在表单里
+    Object.assign(form, DEFAULTS)
   },
   { immediate: true },
 )

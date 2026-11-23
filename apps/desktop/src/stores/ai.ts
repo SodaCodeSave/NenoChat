@@ -19,7 +19,7 @@ import {
   type SegmentRule,
 } from '@nenochat/shared'
 import { aiApi } from '@/api/ai'
-import { listPersonas, upsertPersona as upsertPersonaRow } from '@/db/dao/ai'
+import { listPersonas, prunePersonas, upsertPersona as upsertPersonaRow } from '@/db/dao/ai'
 import { hasLocalDb } from '@/platform/db'
 import { useAuthStore } from './auth'
 import { useConversationsStore } from './conversations'
@@ -61,6 +61,8 @@ export const useAiStore = defineStore('ai', () => {
   /** 角色列表的加载状态：load 守卫用，服务端拉取成功才算 loaded */
   const loading = ref(false)
   const loaded = ref(false)
+  /** loaded 标记属于哪个服务器；切服后旧标记作废，必须重新拉取 */
+  const loadedServerId = ref<string | null>(null)
   const streaming = ref<Record<string, { generationId: string; text: string }>>({})
   const generating = ref<Record<string, boolean>>({})
   /** 生成中正在执行的连接器动作（B 站 / 抓网页 / 搜索 / 天气），用于占位气泡的实时提示 */
@@ -78,6 +80,11 @@ export const useAiStore = defineStore('ai', () => {
 
   const providerById = computed(() => new Map(providers.value.map((p) => [p.id, p])))
   const personaById = computed(() => new Map(personas.value.map((p) => [p.id, p])))
+
+  /** 当前服务器 id：角色、服务商与全局设置都按服务器隔离 */
+  function currentServerId(): string {
+    return useServersStore().currentId ?? ''
+  }
 
   /** 记录/清除某会话正在执行的连接器动作；kind 传 null 表示结束 */
   function setConnectorLive(conversationId: string, kind: ConnectorActionMeta['kind'] | null): void {
@@ -113,7 +120,8 @@ export const useAiStore = defineStore('ai', () => {
   const schedulePending = new Map<string, Promise<AiSchedule | null>>()
 
   function scheduleKeyOf(personaId: string, dayKey: string): string {
-    return `${personaId}:${dayKey}`
+    // 带上服务器：不同服务器上可能存在同 id 的角色，缓存不能互相命中
+    return `${currentServerId()}:${personaId}:${dayKey}`
   }
 
   function cachedSchedule(personaId: string, dayKey = dayKeyOf()): AiSchedule | null {
@@ -189,10 +197,14 @@ export const useAiStore = defineStore('ai', () => {
     return globalSettings.value?.debugMode ?? false
   }
 
-  /** 全局自动互动设置；读取失败时保持 null，界面按默认值渲染 */
-  async function loadSettings(): Promise<void> {
+  /**
+   * 全局自动互动设置；读取失败时保持 null，界面按默认值渲染。
+   * guard 用来丢弃切服之后才回来的旧响应，避免旧服务器的开关盖住新服务器。
+   */
+  async function loadSettings(guard?: () => boolean): Promise<void> {
     try {
       const result = await aiApi.settings()
+      if (guard?.()) return
       globalSettings.value = result.settings
     } catch {
       /* 离线或老服务端：先不显示 */
@@ -212,40 +224,99 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
+  /* --------------------- 服务器切换时的内存态清理 --------------------- */
+
+  /** load 代次：切服或重置后递增，还没回来的旧请求按代次丢弃 */
+  let loadSeq = 0
+  /** 正在加载的服务器：同服重复请求合并，跨服请求各自进行 */
+  let loadingServerId: string | null = null
+
+  /**
+   * 丢掉所有跟着服务器走的内存态。
+   * 角色、服务商、全局设置、模型缓存、日程缓存与生成中的气泡都属于某一台服务器，
+   * 换服后必须全部作废，否则新服务器会看到上一台服务器的「幽灵角色」。
+   */
+  function dropServerScopedState(): void {
+    // loaded 只对拉取时的服务器成立，状态一清就必须连带作废
+    loaded.value = false
+    personas.value = []
+    providers.value = []
+    globalSettings.value = null
+    modelsByProvider.value = {}
+    loadingModels.value = {}
+    schedules.value = {}
+    schedulePending.clear()
+    recentTurns.clear()
+    lastError.value = null
+    for (const timer of serverWatchdogs.values()) clearTimeout(timer)
+    serverWatchdogs.clear()
+    for (const frame of pendingDeltaFrames.values()) cancelFrame(frame)
+    pendingDeltaFrames.clear()
+    pendingDeltas.clear()
+    streaming.value = {}
+    generating.value = {}
+    connectorLive.value = {}
+    toolLive.value = {}
+  }
+
+  /** 切换服务器 / 退出登录时清空内存态，交由下一次 load 重新按当前服务器拉取 */
+  function reset(): void {
+    loadSeq += 1
+    loading.value = false
+    loadingServerId = null
+    loaded.value = false
+    loadedServerId.value = null
+    dropServerScopedState()
+  }
+
   async function load(force = false): Promise<void> {
     // 通讯录与新建聊天每次打开都会调 load，不做守卫的话每次都白拉 3 个接口并重写角色镜像；
     // 保存角色后的手动刷新传 force。离线时不标记 loaded，联网后再拉。
-    if (loading.value) return
-    if (loaded.value && !force) return
+    const serverId = currentServerId()
+    if (loading.value && loadingServerId === serverId) return
+    // loaded 只对拉取时的服务器有效：切服后标记作废，必须重新走一遍
+    if (loaded.value && !force && loadedServerId.value === serverId) return
+
+    const seq = ++loadSeq
     loading.value = true
+    loadingServerId = serverId
+    // 换了服务器先清空：旧服务的角色留在列表里就是幽灵数据的根源
+    if (loadedServerId.value !== serverId) dropServerScopedState()
+
+    /** 本次请求是否已经过期：又发生了切服或重置 */
+    const stale = () => seq !== loadSeq || currentServerId() !== serverId
+
     try {
       // 先出本地镜像（断网也有角色列表），再拉服务端覆盖
-      if (hasLocalDb()) {
-        const sid = useServersStore().currentId ?? ''
-        if (sid) {
-          const local = await listPersonas(sid)
-          if (local.length > 0) personas.value = local
-        }
+      if (hasLocalDb() && serverId) {
+        const local = await listPersonas(serverId)
+        if (stale()) return
+        // 镜像本身就按服务器隔离，为空也要覆盖——不能保留上一台服务器的列表
+        personas.value = local
       }
 
       try {
         const [providerResult, personaResult] = await Promise.all([
           aiApi.providers(),
           aiApi.personas(),
-          loadSettings(),
+          loadSettings(stale),
         ])
+        if (stale()) return
         providers.value = providerResult.providers
         personas.value = personaResult.personas
-
-        if (hasLocalDb()) {
-          const sid = useServersStore().currentId ?? ''
-          if (sid) {
-            for (const persona of personaResult.personas) {
-              await upsertPersonaRow(sid, persona)
-            }
-          }
-        }
         loaded.value = true
+        loadedServerId.value = serverId
+
+        if (hasLocalDb() && serverId) {
+          for (const persona of personaResult.personas) {
+            await upsertPersonaRow(serverId, persona)
+          }
+          // 服务端已经没有的角色要从镜像里删掉，否则断网时会冒出来
+          await prunePersonas(
+            serverId,
+            personaResult.personas.map((persona) => persona.id),
+          )
+        }
         // 模型列表随服务商一起补齐；失败静默，设置页可手动刷新
         for (const provider of providers.value) {
           if (!modelsByProvider.value[provider.id]) {
@@ -256,7 +327,11 @@ export const useAiStore = defineStore('ai', () => {
         /* 离线：保留本地镜像，下次打开再拉 */
       }
     } finally {
-      loading.value = false
+      // 只有最新一次请求有权清掉加载状态，迟到的旧请求不能把新请求的 loading 关掉
+      if (seq === loadSeq) {
+        loading.value = false
+        loadingServerId = null
+      }
     }
   }
 
@@ -527,6 +602,7 @@ export const useAiStore = defineStore('ai', () => {
     loadingModels,
     loadModels,
     load,
+    reset,
     loadSettings,
     saveSettings,
     upsertLocal,
