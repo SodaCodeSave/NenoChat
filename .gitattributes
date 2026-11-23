@@ -1,0 +1,19 @@
+# 统一按 LF 检出：迁移 SQL 会被 include_str! 编进二进制并参与 sqlx 校验和计算，
+# Windows 上 core.autocrlf=true 会把它改成 CRLF，导致「migration was previously applied
+# but has been modified」启动崩溃。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.exe binary
+*.dmp binary
