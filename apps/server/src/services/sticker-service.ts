@@ -114,9 +114,6 @@ export async function updatePack(
 export async function deletePack(db: DB, userId: string, packId: string): Promise<void> {
   const pack = await stickersRepo.findPack(db, packId)
   if (!pack || pack.owner_id !== userId) throw err.notFound('表情包不存在')
-  if ((await stickersRepo.countInPack(db, packId)) > 0) {
-    throw err.validation('分组里还有表情，请先清空再删除')
-  }
 
   await stickersRepo.deletePack(db, packId)
   hub().sendToUser(userId, 'stickerPack.removed', { packId })

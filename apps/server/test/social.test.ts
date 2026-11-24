@@ -369,15 +369,37 @@ describe('表情包', () => {
     expect(removed.status).toBe(200)
   })
 
-  it('分组里还有表情时不允许删除', async () => {
+  it('非空分组可以删除，表情随分组一起清除', async () => {
     const packs = await api<{ packs: Array<{ pack: { id: string } }> }>('GET', '/stickers/packs', {
       token: bob,
     })
     const packId = packs.json.packs[0]!.pack.id
     const attachmentId = await uploadSticker(bob)
-    await api('POST', '/stickers', { token: bob, body: { packId, attachmentId, keywords: [] } })
+    const created = await api<{ sticker: { id: string } }>('POST', '/stickers', {
+      token: bob,
+      body: { packId, attachmentId, keywords: [] },
+    })
+    expect(created.status).toBe(200)
+
+    const removed = await api('DELETE', `/stickers/packs/${packId}`, { token: bob })
+    expect(removed.status).toBe(200)
+
+    const remaining = await api<{
+      packs: Array<{ pack: { id: string }; stickers: Array<{ id: string }> }>
+    }>('GET', '/stickers/packs', { token: bob })
+    expect(remaining.json.packs.some((entry) => entry.pack.id === packId)).toBe(false)
+    expect(remaining.json.packs.some((entry) => entry.stickers.some((s) => s.id === created.json.sticker.id))).toBe(
+      false,
+    )
+  })
+
+  it('不能删除他人的表情分组', async () => {
+    const packs = await api<{ packs: Array<{ pack: { id: string } }> }>('GET', '/stickers/packs', {
+      token: alice,
+    })
+    const packId = packs.json.packs[0]!.pack.id
 
     const denied = await api('DELETE', `/stickers/packs/${packId}`, { token: bob })
-    expect(denied.status).toBe(400)
+    expect(denied.status).toBe(404)
   })
 })
