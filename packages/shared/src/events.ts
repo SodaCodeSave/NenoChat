@@ -9,6 +9,7 @@ import type {
   MessageMeta,
   Post,
   PostComment,
+  PostLiker,
   Receipt,
   Sticker,
   StickerPack,
@@ -100,7 +101,13 @@ export interface ServerEventPayloads {
   'post.created': { post: Post }
   'post.updated': { post: Post }
   'post.removed': { postId: string }
-  'post.like.changed': { postId: string; userId: string; liked: boolean; likeCount: number }
+  'post.like.changed': {
+    postId: string
+    userId: string
+    liked: boolean
+    likeCount: number
+    likers: PostLiker[]
+  }
   'post.comment.created': { comment: PostComment }
   'post.comment.removed': { postId: string; commentId: string }
 

@@ -1,26 +1,34 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import type { Post } from '@nenochat/shared'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import type { MomentCard, Post, PostComment } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import Dialog from '@/components/ui/form/Dialog.vue'
+import ForwardDialog from '@/components/chat/ForwardDialog.vue'
 import MomentsComposer from '@/components/moments/MomentsComposer.vue'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
 import { userApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
+import { useMessagesStore } from '@/stores/messages'
 import { useMomentsStore } from '@/stores/moments'
 import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
 const moments = useMomentsStore()
+const messages = useMessagesStore()
 const ui = useUiStore()
+const route = useRoute()
 
 // 手机端发帖弹窗：与桌面常驻发布框共用同一份 MomentsComposer
 const composerOpen = ref(false)
 
-const openComments = ref<Record<string, boolean>>({})
+// 分享弹窗：复用会话选择器，把动态作为卡片发到选中的会话
+const shareOpen = ref(false)
+const sharingPost = ref<Post | null>(null)
+const highlightedPostId = ref<string | null>(null)
 const commentDrafts = ref<Record<string, string>>({})
 
 // 空间头图：点头图直接换，走 background 附件 + users.banner_url
@@ -77,20 +85,53 @@ async function onBannerChange(event: Event): Promise<void> {
   }
 }
 
-function relativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
+function feedTime(ts: number): string {
   const date = new Date(ts)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  const today = new Date()
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  if (ts >= startOfToday) return `今天 ${time}`
+  if (ts >= startOfToday - 86_400_000) return `昨天 ${time}`
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`
 }
 
-async function toggleComments(post: Post): Promise<void> {
-  const next = !openComments.value[post.id]
-  openComments.value = { ...openComments.value, [post.id]: next }
-  if (next) await moments.loadComments(post.id)
+function postAuthorName(post: Post): string {
+  return post.author?.displayName ?? '用户'
+}
+
+function replyAuthorName(postId: string, comment: PostComment): string {
+  if (!comment.replyToCommentId) return ''
+  const target = (moments.comments[postId] ?? []).find((item) => item.id === comment.replyToCommentId)
+  return target ? (target.author?.displayName ?? '用户') : '某条评论'
+}
+
+function openShare(post: Post): void {
+  sharingPost.value = post
+  shareOpen.value = true
+}
+
+async function shareTo(targets: string[]): Promise<void> {
+  const post = sharingPost.value
+  if (!post) return
+  const cover = post.attachments?.[0] ?? null
+  const excerpt = post.content.replace(/\s+/g, ' ').trim().slice(0, 80) || '[图片]'
+  const card: MomentCard = {
+    postId: post.id,
+    authorName: postAuthorName(post),
+    authorAvatarUrl: post.author?.avatarUrl ?? null,
+    excerpt,
+    coverUrl: cover?.thumbUrl || cover?.url || null,
+  }
+  await Promise.all(
+    targets.map((conversationId) =>
+      messages.send({
+        conversationId,
+        content: `[动态] ${card.authorName}：${excerpt}`,
+        meta: { momentCard: card },
+      }),
+    ),
+  )
+  sharingPost.value = null
 }
 
 async function submitComment(post: Post): Promise<void> {
@@ -99,7 +140,6 @@ async function submitComment(post: Post): Promise<void> {
   commentDrafts.value = { ...commentDrafts.value, [post.id]: '' }
   try {
     await moments.addComment(post.id, content)
-    openComments.value = { ...openComments.value, [post.id]: true }
   } catch {
     commentDrafts.value = { ...commentDrafts.value, [post.id]: content }
   }
@@ -118,8 +158,21 @@ function isMine(post: Post): boolean {
   return post.authorId === auth.user?.id
 }
 
-onMounted(() => {
-  void moments.load(true)
+async function focusPostFromRoute(): Promise<void> {
+  const postId = typeof route.query.post === 'string' ? route.query.post : null
+  if (!postId) return
+  if (!(await moments.focus(postId))) return
+  highlightedPostId.value = postId
+  await nextTick()
+  document.querySelector(`[data-post-id="${postId}"]`)?.scrollIntoView({ block: 'center' })
+  window.setTimeout(() => {
+    if (highlightedPostId.value === postId) highlightedPostId.value = null
+  }, 2500)
+}
+
+onMounted(async () => {
+  await moments.load(true)
+  await focusPostFromRoute()
 })
 </script>
 
@@ -262,35 +315,38 @@ onMounted(() => {
         <section
           v-for="post in moments.posts"
           :key="post.id"
-          class="mt-3 rounded-2xl border border-line bg-surface p-3"
+          :data-post-id="post.id"
+          class="border-b border-line/70 px-1 py-3"
+          :class="post.id === highlightedPostId ? 'rounded-xl bg-accent-soft/40' : ''"
         >
-          <div class="flex items-start gap-3">
+          <div class="flex items-start gap-2.5">
             <Avatar
-              :name="post.author?.displayName ?? '用户'"
+              :name="postAuthorName(post)"
               :src="post.author?.avatarUrl ?? null"
               :seed="post.authorId"
               :size="38"
             />
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="text-[13.5px] font-medium text-text-strong">
-                  {{ post.author?.displayName ?? '用户' }}
-                </span>
-                <span
-                  v-if="post.personaId"
-                  class="rounded bg-mention-soft px-1 py-0.5 text-[10px] font-medium text-mention"
-                >
-                  AI
-                </span>
-                <span class="text-[11px] text-muted">{{ relativeTime(post.createdAt) }}</span>
+              <div class="flex items-start gap-2">
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[14px] font-medium text-text-strong">
+                    {{ postAuthorName(post) }}
+                  </p>
+                  <span
+                    v-if="post.personaId"
+                    class="mt-0.5 inline-block rounded bg-mention-soft px-1 text-[10px] text-mention"
+                  >
+                    AI
+                  </span>
+                </div>
                 <button
                   v-if="isMine(post)"
                   type="button"
-                  class="ml-auto rounded p-1 text-muted hover:bg-danger/10 hover:text-danger"
-                  title="删除"
+                  class="rounded p-1 text-muted hover:bg-danger/10 hover:text-danger"
+                  title="删除这条动态"
                   @click="removePost(post)"
                 >
-                  <Icon name="trash" :size="14" />
+                  <Icon name="dots" :size="16" />
                 </button>
               </div>
 
@@ -303,8 +359,8 @@ onMounted(() => {
 
               <div
                 v-if="post.attachments && post.attachments.length > 0"
-                class="mt-2 grid gap-1.5"
-                :class="post.attachments.length === 1 ? 'grid-cols-1' : 'grid-cols-3'"
+                class="mt-2"
+                :class="post.attachments.length === 1 ? '' : 'grid w-[240px] grid-cols-3 gap-1'"
               >
                 <a
                   v-for="attachment in post.attachments"
@@ -312,86 +368,92 @@ onMounted(() => {
                   :href="resolveFileUrl(attachment.url) ?? '#'"
                   target="_blank"
                   rel="noreferrer"
-                  class="overflow-hidden rounded-lg border border-line"
-                  :class="post.attachments.length === 1 ? 'max-h-[360px]' : 'aspect-square'"
+                  class="block overflow-hidden rounded border border-line"
+                  :class="post.attachments.length === 1 ? 'w-fit' : 'aspect-square'"
                 >
                   <img
                     :src="resolveFileUrl(attachment.thumbUrl || attachment.url) ?? ''"
                     :alt="attachment.filename"
-                    class="h-full w-full object-cover"
+                    class="block max-h-[220px] max-w-[190px] object-contain"
+                    :class="post.attachments.length === 1 ? '' : 'h-full w-full object-cover'"
                     loading="lazy"
                   />
                 </a>
               </div>
 
-              <div class="mt-2 flex items-center gap-1">
-                <button
-                  type="button"
-                  class="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] transition-colors"
-                  :class="post.likedByMe ? 'text-danger' : 'text-muted hover:text-text'"
-                  @click="moments.toggleLike(post)"
-                >
-                  <Icon name="heart" :size="15" />
-                  {{ post.likeCount > 0 ? post.likeCount : '赞' }}
-                </button>
-                <button
-                  type="button"
-                  class="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-muted hover:text-text"
-                  @click="toggleComments(post)"
-                >
-                  <Icon name="comment" :size="15" />
-                  {{ post.commentCount > 0 ? post.commentCount : '评论' }}
-                </button>
+              <div class="mt-2.5 flex items-center justify-between gap-3">
+                <span class="text-[11.5px] text-muted">{{ feedTime(post.createdAt) }}</span>
+                <div class="flex items-center gap-4 text-muted">
+                  <button
+                    type="button"
+                    class="p-1 transition-colors hover:text-[#576b95]"
+                    :class="post.likedByMe ? 'text-[#576b95]' : ''"
+                    title="赞"
+                    @click="moments.toggleLike(post)"
+                  >
+                    <Icon name="thumbUp" :size="16" />
+                  </button>
+                  <button type="button" class="p-1 transition-colors hover:text-text" title="评论">
+                    <Icon name="comment" :size="16" />
+                  </button>
+                  <button
+                    type="button"
+                    class="p-1 transition-colors hover:text-[#576b95]"
+                    title="分享给好友"
+                    @click="openShare(post)"
+                  >
+                    <Icon name="forward" :size="16" />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                v-if="(post.likers ?? []).length > 0"
+                class="mt-1.5 flex items-start gap-1 text-[12px] leading-[1.55] text-[#576b95]"
+              >
+                <Icon name="thumbUp" :size="12" class="mt-0.5 shrink-0" />
+                <span class="min-w-0 break-words">
+                  {{ (post.likers ?? []).map((liker) => liker.name).join('、') }}
+                </span>
               </div>
 
               <!-- 评论区 -->
-              <div v-if="openComments[post.id]" class="mt-2 rounded-xl bg-surface-2 p-2">
+              <div class="mt-2 rounded-lg bg-surface-2/70 p-2">
                 <div
                   v-for="comment in moments.comments[post.id] ?? []"
                   :key="comment.id"
-                  class="group flex items-start gap-2 py-1"
+                  class="group flex items-start gap-1 py-0.5"
                 >
-                  <Avatar
-                    :name="comment.author?.displayName ?? '用户'"
-                    :src="comment.author?.avatarUrl ?? null"
-                    :seed="comment.authorId"
-                    :size="24"
-                  />
-                  <p class="min-w-0 flex-1 text-[12.5px] leading-[1.55] break-words text-text">
-                    <span class="mr-1 font-medium text-text-strong">
-                      {{ comment.author?.displayName ?? '用户' }}
-                    </span>
-                    <span
-                      v-if="comment.personaId"
-                      class="mr-1 rounded bg-mention-soft px-1 text-[10px] text-mention"
-                    >
-                      AI
-                    </span>
-                    {{ comment.content }}
-                  </p>
+                  <p class="min-w-0 flex-1 text-[12.5px] leading-[1.6] break-words text-text"><span class="font-medium text-text-strong">{{ comment.author?.displayName ?? '用户' }}</span><template v-if="replyAuthorName(post.id, comment)"> 回复 <span class="font-medium text-text-strong">{{ replyAuthorName(post.id, comment) }}</span></template><span v-if="comment.personaId" class="mx-1 text-[10px] text-muted">AI</span>：{{ comment.content }}</p>
                   <button
                     v-if="comment.authorId === auth.user?.id || isMine(post)"
                     type="button"
-                    class="p-1 text-muted hover:text-danger"
+                    class="p-0.5 text-muted hover:text-danger"
                     :class="ui.isMobile ? 'block' : 'hidden group-hover:block'"
                     title="删除评论"
                     @click="removeComment(post.id, comment.id)"
                   >
-                    <Icon name="close" :size="12" />
+                    <Icon name="close" :size="11" />
                   </button>
                 </div>
+                <p
+                  v-if="(moments.comments[post.id] ?? []).length === 0"
+                  class="py-0.5 text-[11.5px] text-muted"
+                >
+                  暂无评论，来说两句
+                </p>
 
-                <div class="mt-1 flex items-center gap-2">
+                <div class="mt-1.5 flex items-center gap-2">
                   <input
                     :value="commentDrafts[post.id] ?? ''"
-                    placeholder="写评论…"
-                    class="h-8 flex-1 rounded-lg border border-line bg-surface px-2 text-[12.5px] outline-none focus:border-accent"
+                    placeholder="评论…"
+                    class="h-7 flex-1 rounded border border-line bg-surface px-2 text-[12px] outline-none focus:border-accent"
                     @input="commentDrafts[post.id] = ($event.target as HTMLInputElement).value"
                     @keydown.enter.prevent="submitComment(post)"
                   />
                   <button
                     type="button"
-                    class="rounded-lg bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-text"
+                    class="rounded bg-[#576b95] px-2.5 py-1 text-[12px] font-medium text-white"
                     @click="submitComment(post)"
                   >
                     发送
@@ -401,6 +463,14 @@ onMounted(() => {
             </div>
           </div>
         </section>
+
+        <ForwardDialog
+          v-model:open="shareOpen"
+          title="分享动态到"
+          hint="选择要分享的会话"
+          :message-count="1"
+          :perform="shareTo"
+        />
 
         <div v-if="moments.hasMore" class="py-4 text-center">
           <button

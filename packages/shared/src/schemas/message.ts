@@ -38,6 +38,15 @@ export const MessageMetaSchema = z
       })
       .optional(),
     forwardedFrom: z.string().max(120).optional(),
+    momentCard: z
+      .object({
+        postId: z.string().min(1),
+        authorName: z.string().max(64),
+        authorAvatarUrl: z.string().max(500).nullable().optional(),
+        excerpt: z.string().max(200).default(''),
+        coverUrl: z.string().max(500).nullable().optional(),
+      })
+      .optional(),
   })
 
 /** 批量转发：把若干条消息复制到若干个目标会话 */

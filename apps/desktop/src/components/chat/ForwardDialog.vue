@@ -17,6 +17,9 @@ import { useConversationsStore } from '@/stores/conversations'
  */
 const props = defineProps<{
   messageCount?: number
+  /** 自定义标题与提示：分享动态时复用同一个选择器 */
+  title?: string
+  hint?: string
   /** 执行转发：目标会话 id 列表；抛错时对话框内提示并保持打开 */
   perform: (targets: string[]) => Promise<void>
 }>()
@@ -73,8 +76,9 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <Dialog v-model:open="open" title="转发到" width="sm">
-    <p v-if="messageCount" class="mb-2 text-[12px] text-muted">
+  <Dialog v-model:open="open" :title="title ?? '转发到'" width="sm">
+    <p v-if="hint" class="mb-2 text-[12px] text-muted">{{ hint }}</p>
+    <p v-else-if="messageCount" class="mb-2 text-[12px] text-muted">
       已选 {{ messageCount }} 条消息
     </p>
 

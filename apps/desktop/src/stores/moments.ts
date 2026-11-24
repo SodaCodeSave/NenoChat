@@ -19,6 +19,14 @@ function trimComments(list: PostComment[]): PostComment[] {
 }
 
 /**
+ * 兼容旧服务端/旧数据：likers 字段可能缺失，统一补齐成数组，
+ * 避免视图层读 length 时报错。
+ */
+function normalizePost(post: Post): Post {
+  return { ...post, likers: Array.isArray(post.likers) ? post.likers : [] }
+}
+
+/**
  * 动态空间状态。
  * 在线优先：首屏从服务端拉，之后由 WS 事件增量维护；
  * 不做本地 SQLite 镜像（动态是浏览型内容，不需要离线可写）。
@@ -26,6 +34,7 @@ function trimComments(list: PostComment[]): PostComment[] {
 export const useMomentsStore = defineStore('moments', () => {
   const posts = ref<Post[]>([])
   const comments = ref<Record<string, PostComment[]>>({})
+  const commentLoading = new Set<string>()
   const loading = ref(false)
   const publishing = ref(false)
   const hasMore = ref(false)
@@ -39,8 +48,11 @@ export const useMomentsStore = defineStore('moments', () => {
     error.value = null
     try {
       const result = await postApi.feed(reset ? undefined : posts.value[posts.value.length - 1]?.createdAt)
-      posts.value = trimPosts(reset ? result.posts : mergePosts(posts.value, result.posts))
+      const incoming = result.posts.map(normalizePost)
+      posts.value = trimPosts(reset ? incoming : mergePosts(posts.value, incoming))
       hasMore.value = result.hasMore
+      // 评论默认展开：信息流拿到帖子后就把评论区拉下来
+      await Promise.all(incoming.map((post) => loadComments(post.id)))
     } catch (e) {
       error.value = e instanceof Error ? e.message : '读取动态失败'
     } finally {
@@ -53,11 +65,30 @@ export const useMomentsStore = defineStore('moments', () => {
     await load(false)
   }
 
+  /** 从分享卡片跳回来时定位帖子：不在当前页就按 id 拉取后插进列表 */
+  async function focus(postId: string): Promise<Post | null> {
+    let post = posts.value.find((item) => item.id === postId) ?? null
+    if (!post) {
+      try {
+        const result = await postApi.get(postId)
+        const normalized = normalizePost(result.post)
+        onCreated(normalized)
+        post = normalized
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : '动态已不存在'
+        return null
+      }
+    }
+    await loadComments(post.id)
+    return post
+  }
+
   function mergePosts(current: Post[], incoming: Post[]): Post[] {
     const map = new Map(current.map((post) => [post.id, post]))
     for (const post of incoming) {
       const existing = map.get(post.id)
-      map.set(post.id, existing ? { ...existing, ...post } : post)
+      const incomingPost = normalizePost(post)
+      map.set(post.id, existing ? { ...existing, ...incomingPost } : incomingPost)
     }
     return [...map.values()].sort((a, b) => b.createdAt - a.createdAt)
   }
@@ -67,8 +98,9 @@ export const useMomentsStore = defineStore('moments', () => {
     error.value = null
     try {
       const result = await postApi.create({ content, attachmentIds, visibility: 'friends' })
-      onCreated(result.post)
-      return result.post
+      const post = normalizePost(result.post)
+      onCreated(post)
+      return post
     } catch (e) {
       error.value = e instanceof Error ? e.message : '发布失败'
       throw e
@@ -84,24 +116,31 @@ export const useMomentsStore = defineStore('moments', () => {
 
   /** 点赞先本地翻转，失败再回滚，避免每次点击都等网络 */
   async function toggleLike(post: Post): Promise<void> {
-    const next = !post.likedByMe
-    const previous = { liked: post.likedByMe, count: post.likeCount }
-    post.likedByMe = next
-    post.likeCount = Math.max(0, post.likeCount + (next ? 1 : -1))
+    // 始终改 store 里的对象：调用方可能拿着的是旧的快照，直接改它不会触发视图更新
+    const index = posts.value.findIndex((item) => item.id === post.id)
+    const target = index >= 0 ? posts.value[index]! : post
+    const next = !target.likedByMe
+    const previous = { liked: target.likedByMe, count: target.likeCount, likers: target.likers }
+    target.likedByMe = next
+    target.likeCount = Math.max(0, target.likeCount + (next ? 1 : -1))
+    target.likers = Array.isArray(target.likers) ? target.likers : []
 
     try {
       const result = await postApi.like(post.id, next)
-      post.likeCount = result.likeCount
-      post.likedByMe = result.liked
+      target.likeCount = result.likeCount
+      target.likedByMe = result.liked
+      target.likers = Array.isArray(result.likers) ? result.likers : []
     } catch (e) {
-      post.likedByMe = previous.liked
-      post.likeCount = previous.count
+      target.likedByMe = previous.liked
+      target.likeCount = previous.count
+      target.likers = Array.isArray(previous.likers) ? previous.likers : []
       error.value = e instanceof Error ? e.message : '点赞失败'
     }
   }
 
   async function loadComments(postId: string): Promise<void> {
-    if (comments.value[postId]) return
+    if (comments.value[postId] || commentLoading.has(postId)) return
+    commentLoading.add(postId)
     try {
       const result = await postApi.comments(postId)
       comments.value[postId] = trimComments(result.comments)
@@ -110,6 +149,8 @@ export const useMomentsStore = defineStore('moments', () => {
       if (post) post.commentCount = result.comments.length
     } catch (e) {
       error.value = e instanceof Error ? e.message : '读取评论失败'
+    } finally {
+      commentLoading.delete(postId)
     }
   }
 
@@ -127,6 +168,7 @@ export const useMomentsStore = defineStore('moments', () => {
 
   function onCreated(post: Post): void {
     posts.value = trimPosts(mergePosts(posts.value, [post]))
+    void loadComments(post.id)
   }
 
   function onUpdated(post: Post): void {
@@ -137,7 +179,7 @@ export const useMomentsStore = defineStore('moments', () => {
     }
     // 保留本端的 likedByMe，服务端推来的快照是按事件接收者算的，可能属于别人
     const current = posts.value[index]!
-    posts.value[index] = { ...current, ...post, likedByMe: current.likedByMe }
+    posts.value[index] = { ...current, ...normalizePost(post), likedByMe: current.likedByMe }
   }
 
   function onRemoved(postId: string): void {
@@ -150,10 +192,12 @@ export const useMomentsStore = defineStore('moments', () => {
     userId: string
     liked: boolean
     likeCount: number
+    likers: Post['likers']
   }): void {
     const post = posts.value.find((item) => item.id === payload.postId)
     if (!post) return
     post.likeCount = payload.likeCount
+    post.likers = Array.isArray(payload.likers) ? payload.likers : []
   }
 
   function onCommentCreated(comment: PostComment): void {
@@ -184,6 +228,7 @@ export const useMomentsStore = defineStore('moments', () => {
   function reset(): void {
     posts.value = []
     comments.value = {}
+    commentLoading.clear()
     hasMore.value = false
     error.value = null
   }
@@ -198,6 +243,7 @@ export const useMomentsStore = defineStore('moments', () => {
     isEmpty,
     load,
     loadMore,
+    focus,
     publish,
     remove,
     toggleLike,

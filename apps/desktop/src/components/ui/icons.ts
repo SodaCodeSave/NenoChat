@@ -49,6 +49,7 @@ export const iconPaths = {
   refresh:
     'M20 11a8 8 0 0 0-13.6-5.4L4 8M4 13a8 8 0 0 0 13.6 5.4L20 16M4 5v3h3M20 19v-3h-3',
   heart: 'M12 20s-7-4.4-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.6-7 9-7 9Z',
+  thumbUp: 'M7 10v10H3V10h4Zm0 0 4.5-7a2 2 0 0 1 3 1.7V9h4.2a2 2 0 0 1 2 2.4l-1.3 6.5A2 2 0 0 1 17.5 20H7',
   comment: 'M20 12a7 7 0 0 1-7 7H9l-4 3v-4.5A7 7 0 0 1 11 5h2a7 7 0 0 1 7 7Z',
   folder: 'M4 6h5l2 2h9v11H4z',
   copy: 'M9 9h10v11H9zM5 15H4V4h11v1',

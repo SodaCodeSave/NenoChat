@@ -57,3 +57,31 @@ describe('MomentsView 发帖入口', () => {
     expect(source).not.toContain('maxlength="5000"')
   })
 })
+
+describe('MomentsView 空间帖子样式', () => {
+  it('帖子改成 QQ 空间式平铺：蓝色昵称、时段、点赞名单、常驻评论', () => {
+    expect(source).toContain('data-post-id=')
+    expect(source).toContain('text-[#576b95]')
+    expect(source).toContain('feedTime(post.createdAt)')
+    expect(source).toContain('(post.likers ?? []).map((liker) => liker.name).join')
+    expect(source).toContain('moments.comments[post.id] ?? []')
+    // 评论区不再有展开/收起状态
+    expect(source).not.toContain('openComments')
+  })
+
+  it('分享复用会话选择器，卡片携带作者、摘要和封面', () => {
+    expect(source).toContain("import ForwardDialog from '@/components/chat/ForwardDialog.vue'")
+    expect(source).toContain('title="分享动态到"')
+    expect(source).toContain('meta: { momentCard: card }')
+    expect(source).toContain('postId: post.id')
+    expect(source).toContain('authorName: postAuthorName(post)')
+    expect(source).toContain('coverUrl: cover?.thumbUrl || cover?.url || null')
+  })
+
+  it('从卡片跳回时按 post 参数定位并高亮帖子', () => {
+    expect(source).toContain("route.query.post")
+    expect(source).toContain('moments.focus(postId)')
+    expect(source).toContain('highlightedPostId.value = postId')
+    expect(source).toContain('scrollIntoView')
+  })
+})

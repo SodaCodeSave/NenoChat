@@ -170,6 +170,8 @@ export interface MessageMeta {
   replyTo?: ReplyPreview
   /** 转发来源会话名，由服务端转发时写入，UI 据此显示「转发」标记 */
   forwardedFrom?: string
+  /** 动态分享卡片：正文改为卡片展示，点击可回到原动态 */
+  momentCard?: MomentCard
 }
 
 export interface Message {
@@ -242,6 +244,23 @@ export interface Contact {
   user?: PublicUser
 }
 
+/** 点赞人署名：普通点赞取用户资料，AI 点赞取角色资料 */
+export interface PostLiker {
+  id: string
+  name: string
+  avatarUrl?: string | null
+  personaId?: string | null
+}
+
+/** 动态分享到聊天时携带的卡片快照 */
+export interface MomentCard {
+  postId: string
+  authorName: string
+  authorAvatarUrl?: string | null
+  excerpt: string
+  coverUrl?: string | null
+}
+
 export interface Post {
   id: string
   /** 归属用户：角色发的动态也记在主人名下，删除权限以此为准 */
@@ -258,6 +277,8 @@ export interface Post {
   author?: PublicUser
   attachments?: AttachmentRef[]
   likedByMe?: boolean
+  /** 点赞人名单，按点赞时间正序 */
+  likers: PostLiker[]
 }
 
 export interface PostComment {

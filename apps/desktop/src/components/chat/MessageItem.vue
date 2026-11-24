@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { type ConnectorActionMeta, type Message, extractUrls } from '@nenochat/shared'
+import { type ConnectorActionMeta, type Message, type MomentCard, extractUrls } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import SvgIcon from '@/components/ui/SvgIcon.vue'
@@ -69,8 +69,11 @@ const isQq = computed(() => ui.messageStyle === 'qq')
 const qqOwn = computed(() => isQq.value && props.isOwn)
 
 /** QQ 风格下包进气泡的内容：仅文本类消息；贴纸/图片/文件/系统与撤回消息保持平铺 */
+const momentCard = computed<MomentCard | null>(() => props.message.meta?.momentCard ?? null)
+
+/** 动态卡片自带版式，不再套 QQ 气泡 */
 const bubbleNeeded = computed(
-  () => isQq.value && props.message.type === 'text' && !deleted.value,
+  () => isQq.value && props.message.type === 'text' && !deleted.value && !momentCard.value,
 )
 
 /** 引用块随自己的彩色气泡时需要换成白色系配色，避免白底上白字 */
@@ -115,6 +118,11 @@ const linkUrls = computed(() => extractUrls(props.message.content))
 
 /** 链接展示样式：card 正文后追加信息卡片，logo 正文里的链接直接替换为 LOGO + 标题 */
 const linkLogo = computed(() => ui.linkDisplay === 'logo')
+
+/** 动态卡片封面：附件地址是相对路径，按当前服务器解析 */
+const cardCoverUrl = computed(() =>
+  momentCard.value ? resolveFileUrl(momentCard.value.coverUrl ?? null) : null,
+)
 
 /** 命中本地缓存后用 blob URL 展示，离线也能看图；未命中时先用网络地址 */
 const cachedUrls = ref<Record<string, string>>({})
@@ -360,74 +368,101 @@ const liveConnectorLabel = computed(() => {
 
           <!-- 文本 -->
           <template v-else-if="message.type === 'text' || message.type === 'system'">
-            <!-- 连接器提示：本次回复用过的资料来源 -->
-            <div
-              v-if="connectorHints.length > 0"
-              class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]"
-              :class="qqOwn ? 'text-white/75' : 'text-muted'"
+            <!-- 动态分享卡片：点击回到原动态 -->
+            <a
+              v-if="momentCard"
+              :href="`#/moments?post=${encodeURIComponent(momentCard.postId)}`"
+              class="block w-[240px] overflow-hidden rounded-xl border border-line bg-surface text-text no-underline transition-colors hover:border-accent"
             >
-              <template v-for="(hint, index) in connectorHints" :key="hint.kind">
-                <span v-if="index > 0" :class="qqOwn ? 'text-white/40' : 'text-muted/50'">·</span>
-                <span class="flex items-center gap-1">
-                  <SvgIcon v-if="hint.icon" :source="hint.icon" class="h-3 w-3" />
-                  <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
-                  {{ hint.label }}
-                </span>
-              </template>
-            </div>
+              <div v-if="cardCoverUrl" class="h-28 overflow-hidden bg-surface-2">
+                <img :src="cardCoverUrl" alt="动态封面" class="h-full w-full object-cover" />
+              </div>
+              <div class="p-2.5">
+                <p class="flex items-center gap-1.5 text-[12px] text-muted">
+                  <Avatar
+                    :name="momentCard.authorName"
+                    :src="momentCard.authorAvatarUrl ?? null"
+                    :seed="momentCard.postId"
+                    :size="16"
+                  />
+                  <span class="min-w-0 truncate">{{ momentCard.authorName }}</span>
+                </p>
+                <p class="mt-1 line-clamp-2 text-[13px] leading-[1.5] text-text">
+                  {{ momentCard.excerpt }}
+                </p>
+                <p class="mt-1.5 text-[11px] text-[#576b95]">查看动态 →</p>
+              </div>
+            </a>
+            <template v-else>
+              <!-- 连接器提示：本次回复用过的资料来源 -->
+              <div
+                v-if="connectorHints.length > 0"
+                class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]"
+                :class="qqOwn ? 'text-white/75' : 'text-muted'"
+              >
+                <template v-for="(hint, index) in connectorHints" :key="hint.kind">
+                  <span v-if="index > 0" :class="qqOwn ? 'text-white/40' : 'text-muted/50'">·</span>
+                  <span class="flex items-center gap-1">
+                    <SvgIcon v-if="hint.icon" :source="hint.icon" class="h-3 w-3" />
+                    <Icon v-else :name="hint.kind === 'web_search' ? 'search' : 'globe'" :size="12" />
+                    {{ hint.label }}
+                  </span>
+                </template>
+              </div>
 
-            <!-- 连接器实时提示：思考阶段正在执行的动作 -->
-            <div
-              v-if="liveConnectorLabel"
-              class="mt-1 flex items-center gap-1 text-[11px]"
-              :class="qqOwn ? 'text-white/75' : 'text-muted'"
-            >
-              <Icon name="refresh" :size="12" class="animate-spin" />
-              {{ liveConnectorLabel }}
-            </div>
+              <!-- 连接器实时提示：思考阶段正在执行的动作 -->
+              <div
+                v-if="liveConnectorLabel"
+                class="mt-1 flex items-center gap-1 text-[11px]"
+                :class="qqOwn ? 'text-white/75' : 'text-muted'"
+              >
+                <Icon name="refresh" :size="12" class="animate-spin" />
+                {{ liveConnectorLabel }}
+              </div>
 
-            <p
-              class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words"
-              :class="[
-                qqOwn ? 'text-white' : 'text-text',
-                message.type === 'system' ? 'text-[12px] text-muted' : '',
-                thinking ? (qqOwn ? 'text-white/70 italic' : 'text-muted italic') : '',
-              ]"
-            >
-              <template v-for="(segment, index) in segments" :key="index">
-                <!-- LOGO 模式：正文里的链接直接替换成 LOGO + 标题（流式中的半截链接仍按普通链接显示） -->
-                <LinkInline
-                  v-if="segment.kind === 'link' && linkLogo && !streaming && !thinking"
-                  :url="segment.text"
-                  :inherit-color="qqOwn"
-                />
-                <a
-                  v-else-if="segment.kind === 'link'"
-                  :href="segment.text"
-                  target="_blank"
-                  rel="noreferrer"
-                  class="hover:underline"
-                  :class="qqOwn ? 'text-white underline decoration-white/50' : 'text-accent'"
-                  >{{ segment.text }}</a
-                >
-                <span
-                  v-else-if="segment.kind === 'mention'"
-                  class="rounded px-1 font-medium"
-                  :class="qqOwn ? 'bg-white/25 text-white' : 'bg-accent-soft text-accent'"
-                  >{{ segment.text }}</span
-                >
-                <span v-else>{{ segment.text }}</span>
-              </template>
-              <span v-if="streaming" class="typing-caret ml-0.5" />
-            </p>
+              <p
+                class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words"
+                :class="[
+                  qqOwn ? 'text-white' : 'text-text',
+                  message.type === 'system' ? 'text-[12px] text-muted' : '',
+                  thinking ? (qqOwn ? 'text-white/70 italic' : 'text-muted italic') : '',
+                ]"
+              >
+                <template v-for="(segment, index) in segments" :key="index">
+                  <!-- LOGO 模式：正文里的链接直接替换成 LOGO + 标题（流式中的半截链接仍按普通链接显示） -->
+                  <LinkInline
+                    v-if="segment.kind === 'link' && linkLogo && !streaming && !thinking"
+                    :url="segment.text"
+                    :inherit-color="qqOwn"
+                  />
+                  <a
+                    v-else-if="segment.kind === 'link'"
+                    :href="segment.text"
+                    target="_blank"
+                    rel="noreferrer"
+                    class="hover:underline"
+                    :class="qqOwn ? 'text-white underline decoration-white/50' : 'text-accent'"
+                    >{{ segment.text }}</a
+                  >
+                  <span
+                    v-else-if="segment.kind === 'mention'"
+                    class="rounded px-1 font-medium"
+                    :class="qqOwn ? 'bg-white/25 text-white' : 'bg-accent-soft text-accent'"
+                    >{{ segment.text }}</span
+                  >
+                  <span v-else>{{ segment.text }}</span>
+                </template>
+                <span v-if="streaming" class="typing-caret ml-0.5" />
+              </p>
 
-            <!-- 链接卡片：仅卡片模式追加在正文后；流式生成中的半截链接不请求元信息 -->
-            <div
-              v-if="linkUrls.length > 0 && !streaming && !thinking && !linkLogo"
-              class="mt-1.5 space-y-1.5"
-            >
-              <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
-            </div>
+              <!-- 链接卡片：仅卡片模式追加在正文后；流式生成中的半截链接不请求元信息 -->
+              <div
+                v-if="linkUrls.length > 0 && !streaming && !thinking && !linkLogo"
+                class="mt-1.5 space-y-1.5"
+              >
+                <LinkCard v-for="url in linkUrls" :key="url" :url="url" />
+              </div>
+            </template>
           </template>
 
           <!-- 语音：点击播放/停止，转写文本（或合成原文）显示在下方 -->

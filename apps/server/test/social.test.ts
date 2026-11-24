@@ -125,8 +125,13 @@ describe('动态空间', () => {
     expect(res.json.post.author.displayName).toBe('爱丽丝')
     postId = res.json.post.id
 
-    const feed = await api<{ posts: Array<{ id: string }> }>('GET', '/posts', { token: bob })
+    const feed = await api<{ posts: Array<{ id: string; likers: Array<{ name: string }> }> }>(
+      'GET',
+      '/posts',
+      { token: bob },
+    )
     expect(feed.json.posts.some((p) => p.id === postId)).toBe(true)
+    expect(feed.json.posts.find((p) => p.id === postId)?.likers).toEqual([])
   })
 
   it('空内容且无配图被拒绝', async () => {
@@ -134,24 +139,57 @@ describe('动态空间', () => {
     expect(res.status).toBe(400)
   })
 
-  it('点赞是幂等的目标状态而不是取反', async () => {
-    const first = await api<{ liked: boolean; likeCount: number }>('POST', `/posts/${postId}/like`, {
+  it('动态分享卡片作为消息元信息原样落库', async () => {
+    const res = await api<{ message: { meta?: { momentCard?: { postId: string; excerpt: string } } } }>(
+      'POST',
+      '/messages',
+      {
+        token: alice,
+        body: {
+          conversationId,
+          clientNonce: 'moment-share-card-1',
+          type: 'text',
+          content: '[动态] 爱丽丝：今天去了海边',
+          meta: {
+            momentCard: {
+              postId,
+              authorName: '爱丽丝',
+              excerpt: '今天去了海边',
+              coverUrl: null,
+            },
+          },
+        },
+      },
+    )
+    expect(res.status).toBe(200)
+    expect(res.json.message.meta?.momentCard?.postId).toBe(postId)
+    expect(res.json.message.meta?.momentCard?.excerpt).toBe('今天去了海边')
+  })
+
+  it('点赞是幂等的目标状态而不是取反，并返回点赞名单', async () => {
+    type LikeResult = { liked: boolean; likeCount: number; likers: Array<{ name: string }> }
+    const first = await api<LikeResult>('POST', `/posts/${postId}/like`, {
       token: bob,
       body: { liked: true },
     })
-    expect(first.json).toEqual({ liked: true, likeCount: 1 })
+    expect(first.json.liked).toBe(true)
+    expect(first.json.likeCount).toBe(1)
+    expect(first.json.likers.map((liker) => liker.name)).toEqual(['鲍勃'])
 
-    const again = await api<{ liked: boolean; likeCount: number }>('POST', `/posts/${postId}/like`, {
+    const again = await api<LikeResult>('POST', `/posts/${postId}/like`, {
       token: bob,
       body: { liked: true },
     })
-    expect(again.json).toEqual({ liked: true, likeCount: 1 })
+    expect(again.json.likeCount).toBe(1)
+    expect(again.json.likers).toHaveLength(1)
 
-    const off = await api<{ liked: boolean; likeCount: number }>('POST', `/posts/${postId}/like`, {
+    const off = await api<LikeResult>('POST', `/posts/${postId}/like`, {
       token: bob,
       body: { liked: false },
     })
-    expect(off.json).toEqual({ liked: false, likeCount: 0 })
+    expect(off.json.liked).toBe(false)
+    expect(off.json.likeCount).toBe(0)
+    expect(off.json.likers).toEqual([])
   })
 
   it('评论写入后动态的评论数同步更新', async () => {

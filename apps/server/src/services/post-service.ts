@@ -1,4 +1,4 @@
-import type { CreateCommentInput, CreatePostInput, Post, PostComment } from '@nenochat/shared'
+import type { CreateCommentInput, CreatePostInput, Post, PostComment, PostLiker } from '@nenochat/shared'
 import type { DB } from '../db'
 import { withTx } from '../db/tx'
 import * as postsRepo from '../db/repo/posts'
@@ -113,19 +113,22 @@ export async function setLike(
   userId: string,
   postId: string,
   liked: boolean,
-): Promise<{ liked: boolean; likeCount: number }> {
+): Promise<{ liked: boolean; likeCount: number; likers: PostLiker[] }> {
   if (!(await postsRepo.loadOne(db, postId, userId))) throw err.notFound('动态不存在')
 
   const likeCount = await withTx(db, async (tx) => postsRepo.setLike(tx, postId, userId, liked))
+  const post = await postsRepo.loadOne(db, postId, userId)
+  const likers = post?.likers ?? []
 
   hub().sendToUsers(onlineUsers(), 'post.like.changed', {
     postId,
     userId,
     liked,
     likeCount,
+    likers,
   })
 
-  return { liked, likeCount }
+  return { liked, likeCount, likers }
 }
 
 export async function listComments(db: DB, postId: string): Promise<PostComment[]> {

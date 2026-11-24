@@ -85,12 +85,14 @@ function cleanReply(text: string, maxChars: number): string {
     .trim()
 }
 
-function broadcastLike(postId: string, personaId: string, likeCount: number): void {
+async function broadcastLike(db: DB, postId: string, personaId: string, likeCount: number): Promise<void> {
+  const likers = (await postsRepo.likersOf(db, [postId])).get(postId) ?? []
   hub().sendToUsers(hub().onlineUserIds(), 'post.like.changed', {
     postId,
     userId: personaId,
     liked: true,
     likeCount,
+    likers,
   })
 }
 
@@ -120,7 +122,7 @@ async function likeSomething(db: DB, ctx: PersonaContext, candidates: postsRepo.
   if (!reserved) return
 
   const likeCount = await postsRepo.addPersonaLike(db, target.id, userId, persona.id)
-  broadcastLike(target.id, persona.id, likeCount)
+  await broadcastLike(db, target.id, persona.id, likeCount)
 }
 
 async function commentOnPost(

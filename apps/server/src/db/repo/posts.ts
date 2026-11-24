@@ -1,4 +1,11 @@
-import { ulid, type AttachmentRef, type Post, type PostComment, type PublicUser } from '@nenochat/shared'
+import {
+  ulid,
+  type AttachmentRef,
+  type Post,
+  type PostComment,
+  type PostLiker,
+  type PublicUser,
+} from '@nenochat/shared'
 import { all, one, run, type DB } from '../index'
 import { now } from '../../util/clock'
 
@@ -146,9 +153,50 @@ async function attachmentsOf(db: DB, postIds: string[]): Promise<Map<string, Att
   return map
 }
 
+interface LikerJoinRow {
+  post_id: string
+  user_id: string
+  persona_id: string
+  name: string
+  avatar_url: string | null
+}
+
+/** 批量取点赞人，AI 点赞用角色名署名；按点赞时间正序展示 */
+export async function likersOf(db: DB, postIds: string[]): Promise<Map<string, PostLiker[]>> {
+  const map = new Map<string, PostLiker[]>()
+  if (postIds.length === 0) return map
+
+  const placeholders = postIds.map(() => '?').join(',')
+  const rows = await all<LikerJoinRow>(
+    db,
+    `SELECT l.post_id, l.user_id, l.persona_id,
+            COALESCE(CASE WHEN l.persona_id <> '' THEN ap.name END, u.display_name) AS name,
+            CASE WHEN l.persona_id <> '' THEN ap.avatar_url ELSE u.avatar_url END AS avatar_url
+     FROM post_likes l
+     JOIN users u ON u.id = l.user_id
+     LEFT JOIN ai_personas ap ON ap.id = l.persona_id AND ap.owner_id = l.user_id
+     WHERE l.post_id IN (${placeholders})
+     ORDER BY l.created_at ASC, l.user_id ASC, l.persona_id ASC`,
+    postIds,
+  )
+
+  for (const row of rows) {
+    const list = map.get(row.post_id) ?? []
+    list.push({
+      id: row.persona_id || row.user_id,
+      name: row.name,
+      avatarUrl: row.avatar_url,
+      personaId: row.persona_id || null,
+    })
+    map.set(row.post_id, list)
+  }
+  return map
+}
+
 export function mapPost(
   row: PostListRow,
   attachments: AttachmentRef[] = [],
+  likers: PostLiker[] = [],
   persona?: PersonaBrief,
 ): Post {
   return {
@@ -165,6 +213,7 @@ export function mapPost(
     author: authorOf(row, persona),
     attachments,
     likedByMe: Boolean(row.liked),
+    likers,
   }
 }
 
@@ -194,10 +243,19 @@ export async function listFeed(db: DB, userId: string, before: number | null, li
         [userId, before, limit],
       )
 
-  const attachments = await attachmentsOf(db, rows.map((r) => r.id))
-  const personas = await personasOf(db, rows.map((r) => r.persona_id))
+  const postIds = rows.map((r) => r.id)
+  const [attachments, likers, personas] = await Promise.all([
+    attachmentsOf(db, postIds),
+    likersOf(db, postIds),
+    personasOf(db, rows.map((r) => r.persona_id)),
+  ])
   return rows.map((row) =>
-    mapPost(row, attachments.get(row.id) ?? [], row.persona_id ? personas.get(row.persona_id) : undefined),
+    mapPost(
+      row,
+      attachments.get(row.id) ?? [],
+      likers.get(row.id) ?? [],
+      row.persona_id ? personas.get(row.persona_id) : undefined,
+    ),
   )
 }
 
@@ -216,9 +274,13 @@ export function findById(db: DB, id: string, userId: string): Promise<PostListRo
 export async function loadOne(db: DB, id: string, userId: string): Promise<Post | null> {
   const row = await findById(db, id, userId)
   if (!row) return null
-  const attachments = await attachmentsOf(db, [id])
-  const persona = row.persona_id ? (await personasOf(db, [row.persona_id])).get(row.persona_id) : undefined
-  return mapPost(row, attachments.get(id) ?? [], persona)
+  const [attachments, likers, personas] = await Promise.all([
+    attachmentsOf(db, [id]),
+    likersOf(db, [id]),
+    personasOf(db, row.persona_id ? [row.persona_id] : []),
+  ])
+  const persona = row.persona_id ? personas.get(row.persona_id) : undefined
+  return mapPost(row, attachments.get(id) ?? [], likers.get(id) ?? [], persona)
 }
 
 export interface CreatePostRowInput {

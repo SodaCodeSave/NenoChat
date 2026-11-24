@@ -1,4 +1,4 @@
-import { API_PREFIX, type Post, type PostComment } from '@nenochat/shared'
+import { API_PREFIX, type Post, type PostComment, type PostLiker } from '@nenochat/shared'
 import { http } from './http'
 
 const p = (path: string): string => `${API_PREFIX}${path}`
@@ -11,7 +11,9 @@ export const postApi = {
     http.post<{ post: Post }>(p('/posts'), body),
   remove: (id: string) => http.delete<{ ok: boolean }>(p(`/posts/${id}`)),
   like: (id: string, liked: boolean) =>
-    http.post<{ liked: boolean; likeCount: number }>(p(`/posts/${id}/like`), { liked }),
+    http.post<{ liked: boolean; likeCount: number; likers: PostLiker[] }>(p(`/posts/${id}/like`), {
+      liked,
+    }),
   comments: (id: string) => http.get<{ comments: PostComment[] }>(p(`/posts/${id}/comments`)),
   comment: (id: string, body: { content: string; replyToCommentId?: string | null; personaId?: string }) =>
     http.post<{ comment: PostComment }>(p(`/posts/${id}/comments`), body),
