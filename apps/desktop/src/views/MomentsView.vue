@@ -30,6 +30,7 @@ const shareOpen = ref(false)
 const sharingPost = ref<Post | null>(null)
 const highlightedPostId = ref<string | null>(null)
 const commentDrafts = ref<Record<string, string>>({})
+const openCommentInputs = ref<Record<string, boolean>>({})
 
 // 空间头图：点头图直接换，走 background 附件 + users.banner_url
 const bannerInput = ref<HTMLInputElement | null>(null)
@@ -132,6 +133,10 @@ async function shareTo(targets: string[]): Promise<void> {
     ),
   )
   sharingPost.value = null
+}
+
+function toggleCommentInput(postId: string): void {
+  openCommentInputs.value[postId] = !openCommentInputs.value[postId]
 }
 
 async function submitComment(post: Post): Promise<void> {
@@ -393,7 +398,13 @@ onMounted(async () => {
                   >
                     <Icon name="thumbUp" :size="16" />
                   </button>
-                  <button type="button" class="p-1 transition-colors hover:text-text" title="评论">
+                  <button
+                    type="button"
+                    class="p-1 transition-colors hover:text-text"
+                    :class="openCommentInputs[post.id] ? 'text-[#576b95]' : ''"
+                    title="评论"
+                    @click="toggleCommentInput(post.id)"
+                  >
                     <Icon name="comment" :size="16" />
                   </button>
                   <button
@@ -443,17 +454,18 @@ onMounted(async () => {
                   暂无评论，来说两句
                 </p>
 
-                <div class="mt-1.5 flex items-center gap-2">
+                <div v-if="openCommentInputs[post.id]" class="mt-1.5 flex items-center gap-2">
                   <input
                     :value="commentDrafts[post.id] ?? ''"
-                    placeholder="评论…"
-                    class="h-7 flex-1 rounded border border-line bg-surface px-2 text-[12px] outline-none focus:border-accent"
+                    placeholder="说点什么…"
+                    class="h-9 flex-1 rounded-xl border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
                     @input="commentDrafts[post.id] = ($event.target as HTMLInputElement).value"
                     @keydown.enter.prevent="submitComment(post)"
                   />
                   <button
                     type="button"
-                    class="rounded bg-[#576b95] px-2.5 py-1 text-[12px] font-medium text-white"
+                    class="rounded-lg bg-accent px-3 py-1 text-[12.5px] font-medium text-accent-text disabled:opacity-50"
+                    :disabled="!(commentDrafts[post.id] ?? '').trim()"
                     @click="submitComment(post)"
                   >
                     发送

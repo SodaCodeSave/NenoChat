@@ -69,6 +69,19 @@ describe('MomentsView 空间帖子样式', () => {
     expect(source).not.toContain('openComments')
   })
 
+  it('评论输入框和发送按钮只在点击评论按钮后出现，样式与发帖一致', () => {
+    expect(source).toContain('openCommentInputs[post.id]')
+    expect(source).toContain('@click="toggleCommentInput(post.id)"')
+    expect(source).toContain('v-if="openCommentInputs[post.id]"')
+    expect(source).toContain(
+      'rounded-xl border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent',
+    )
+    const publishButton =
+      'rounded-lg bg-accent px-3 py-1 text-[12.5px] font-medium text-accent-text disabled:opacity-50'
+    expect(source).toContain(publishButton)
+    expect(composerSource).toContain(publishButton)
+  })
+
   it('分享复用会话选择器，卡片携带作者、摘要和封面', () => {
     expect(source).toContain("import ForwardDialog from '@/components/chat/ForwardDialog.vue'")
     expect(source).toContain('title="分享动态到"')
