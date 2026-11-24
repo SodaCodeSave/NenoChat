@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { type ConnectorActionMeta, type Message, type MomentCard, extractUrls } from '@nenochat/shared'
+import {
+  type ConnectorActionMeta,
+  type Message,
+  type MomentCard,
+  extractUrls,
+  parseMomentShare,
+} from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import SvgIcon from '@/components/ui/SvgIcon.vue'
+import MomentShareCard from '@/components/cards/MomentShareCard.vue'
 import LinkCard from './LinkCard.vue'
 import LinkInline from './LinkInline.vue'
 import { connectorPresetOf } from '@/config/connectors'
@@ -69,7 +76,21 @@ const isQq = computed(() => ui.messageStyle === 'qq')
 const qqOwn = computed(() => isQq.value && props.isOwn)
 
 /** QQ 风格下包进气泡的内容：仅文本类消息；贴纸/图片/文件/系统与撤回消息保持平铺 */
-const momentCard = computed<MomentCard | null>(() => props.message.meta?.momentCard ?? null)
+const momentShare = computed(() => parseMomentShare(props.message.content))
+const momentCard = computed<MomentCard | null>(() => {
+  const metaCard = props.message.meta?.momentCard ?? null
+  const shared = momentShare.value
+  if (!metaCard && !shared) return null
+  const postId = metaCard?.postId ?? shared?.postId ?? ''
+  if (!postId) return null
+  return {
+    postId,
+    authorName: metaCard?.authorName || shared?.authorName || '用户',
+    authorAvatarUrl: metaCard?.authorAvatarUrl ?? null,
+    excerpt: metaCard?.excerpt || shared?.excerpt || '',
+    coverUrl: metaCard?.coverUrl || shared?.coverUrl || null,
+  }
+})
 
 /** 动态卡片自带版式，不再套 QQ 气泡 */
 const bubbleNeeded = computed(
@@ -118,11 +139,6 @@ const linkUrls = computed(() => extractUrls(props.message.content))
 
 /** 链接展示样式：card 正文后追加信息卡片，logo 正文里的链接直接替换为 LOGO + 标题 */
 const linkLogo = computed(() => ui.linkDisplay === 'logo')
-
-/** 动态卡片封面：附件地址是相对路径，按当前服务器解析 */
-const cardCoverUrl = computed(() =>
-  momentCard.value ? resolveFileUrl(momentCard.value.coverUrl ?? null) : null,
-)
 
 /** 命中本地缓存后用 blob URL 展示，离线也能看图；未命中时先用网络地址 */
 const cachedUrls = ref<Record<string, string>>({})
@@ -368,31 +384,8 @@ const liveConnectorLabel = computed(() => {
 
           <!-- 文本 -->
           <template v-else-if="message.type === 'text' || message.type === 'system'">
-            <!-- 动态分享卡片：点击回到原动态 -->
-            <a
-              v-if="momentCard"
-              :href="`#/moments?post=${encodeURIComponent(momentCard.postId)}`"
-              class="block w-[240px] overflow-hidden rounded-xl border border-line bg-surface text-text no-underline transition-colors hover:border-accent"
-            >
-              <div v-if="cardCoverUrl" class="h-28 overflow-hidden bg-surface-2">
-                <img :src="cardCoverUrl" alt="动态封面" class="h-full w-full object-cover" />
-              </div>
-              <div class="p-2.5">
-                <p class="flex items-center gap-1.5 text-[12px] text-muted">
-                  <Avatar
-                    :name="momentCard.authorName"
-                    :src="momentCard.authorAvatarUrl ?? null"
-                    :seed="momentCard.postId"
-                    :size="16"
-                  />
-                  <span class="min-w-0 truncate">{{ momentCard.authorName }}</span>
-                </p>
-                <p class="mt-1 line-clamp-2 text-[13px] leading-[1.5] text-text">
-                  {{ momentCard.excerpt }}
-                </p>
-                <p class="mt-1.5 text-[11px] text-[#576b95]">查看动态 →</p>
-              </div>
-            </a>
+            <!-- 动态分享卡片：统一卡片组件，点击回到原动态 -->
+            <MomentShareCard v-if="momentCard" :card="momentCard" />
             <template v-else>
               <!-- 连接器提示：本次回复用过的资料来源 -->
               <div

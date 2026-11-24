@@ -1,5 +1,5 @@
 import type { Message, MessageMeta, MessageType, SenderType } from '@nenochat/shared'
-import { ulid } from '@nenochat/shared'
+import { momentSharePreview, ulid } from '@nenochat/shared'
 import { all, one, run, type Executor } from '../index'
 
 export interface MessageRow {
@@ -80,7 +80,7 @@ export function previewOf(row: MessageRow, max = 80): string {
     case 'voice':
       return '[语音]'
     default:
-      return row.content.trim().slice(0, max)
+      return momentSharePreview(row.content, max) ?? row.content.trim().slice(0, max)
   }
 }
 

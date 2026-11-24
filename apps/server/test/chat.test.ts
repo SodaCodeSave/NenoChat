@@ -170,6 +170,70 @@ describe('会话与消息', () => {
     expect(page.json.messages.map((m) => m.content)).toEqual(['你好', '你也好'])
   })
 
+  it('动态卡片 meta 原样落库并随消息页返回', async () => {
+    const conv = await api<{ conversation: { id: string } }>('POST', '/conversations', {
+      token: alice.accessToken,
+      body: { type: 'direct', targetUserId: carol.user.id },
+    })
+    const conversationId = conv.json.conversation.id
+
+    const sent = await api<{
+      message: { id: string; meta: { momentCard?: { postId: string; authorName: string } } | null }
+    }>('POST', '/messages', {
+      token: alice.accessToken,
+      body: {
+        conversationId,
+        clientNonce: 'n-moment-1',
+        type: 'text',
+        content: '[动态] 爱丽丝：正文 nenochat://moment/p1',
+        meta: { momentCard: { postId: 'p1', authorName: '爱丽丝', excerpt: '正文' } },
+      },
+    })
+
+    expect(sent.status).toBe(200)
+    expect(sent.json.message.meta?.momentCard?.postId).toBe('p1')
+
+    const page = await api<{
+      messages: Array<{ id: string; meta: { momentCard?: { authorName: string } } | null }>
+    }>('GET', `/conversations/${conversationId}/messages?limit=50`, { token: carol.accessToken })
+    const loaded = page.json.messages.find((item) => item.id === sent.json.message.id)
+    expect(loaded?.meta?.momentCard?.authorName).toBe('爱丽丝')
+  })
+
+  it('引用动态分享时快照丢定位标记', async () => {
+    const conv = await api<{ conversation: { id: string } }>('POST', '/conversations', {
+      token: alice.accessToken,
+      body: { type: 'direct', targetUserId: carol.user.id },
+    })
+    const conversationId = conv.json.conversation.id
+
+    const origin = await api<{ message: { id: string } }>('POST', '/messages', {
+      token: alice.accessToken,
+      body: {
+        conversationId,
+        clientNonce: 'n-moment-2',
+        type: 'text',
+        content: '[动态] 爱丽丝：今天去了海边 nenochat://moment/p2',
+        meta: { momentCard: { postId: 'p2', authorName: '爱丽丝', excerpt: '今天去了海边' } },
+      },
+    })
+
+    const reply = await api<{
+      message: { meta: { replyTo?: { preview: string } } }
+    }>('POST', '/messages', {
+      token: carol.accessToken,
+      body: {
+        conversationId,
+        clientNonce: 'n-moment-3',
+        type: 'text',
+        content: '好看',
+        replyToId: origin.json.message.id,
+      },
+    })
+
+    expect(reply.json.message.meta.replyTo?.preview).toBe('[动态] 爱丽丝：今天去了海边')
+  })
+
   it('引用回复会带上被引消息的快照，引用不存在的消息被拒绝', async () => {
     const conv = await api<{ conversation: { id: string } }>('POST', '/conversations', {
       token: alice.accessToken,

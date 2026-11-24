@@ -88,7 +88,10 @@ describe('MomentsView 空间帖子样式', () => {
     expect(source).toContain('meta: { momentCard: card }')
     expect(source).toContain('postId: post.id')
     expect(source).toContain('authorName: postAuthorName(post)')
-    expect(source).toContain('coverUrl: cover?.thumbUrl || cover?.url || null')
+    expect(source).toContain('coverUrl')
+    expect(source).toContain('buildMomentShareContent({')
+    expect(source).toContain("conversations.byId.get(conversationId)?.type === 'ai'")
+    expect(source).toContain('ai.sendTurn(conversationId, content, null, [], { momentCard: card })')
   })
 
   it('从卡片跳回时按 post 参数定位并高亮帖子', () => {

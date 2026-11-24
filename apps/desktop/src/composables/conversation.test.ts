@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationSummary } from '@/api/endpoints'
-import type { LastMessageSummary } from '@nenochat/shared'
-import { conversationTitle, messagePreviewFromSummary } from '@/composables/conversation'
+import { buildMomentShareContent, type LastMessageSummary, type Message } from '@nenochat/shared'
+import {
+  conversationTitle,
+  messagePreview,
+  messagePreviewFromSummary,
+} from '@/composables/conversation'
 
 const direct = {
   id: 'c1',
@@ -39,6 +43,18 @@ describe('列表摘要预览', () => {
     expect(messagePreviewFromSummary(summary({ type: 'file', attachmentName: '报告.pdf' }))).toBe('[文件] 报告.pdf')
     expect(messagePreviewFromSummary(summary({ type: 'sticker' }))).toBe('[表情]')
     expect(messagePreviewFromSummary(summary({ type: 'voice' }))).toBe('[语音]')
+  })
+
+  it('转发动态的预览去掉定位标记', () => {
+    const content = buildMomentShareContent({
+      postId: 'p1',
+      authorName: '爱丽丝',
+      content: '今天去爬山了',
+      coverUrl: '/files/a.png',
+    })
+
+    expect(messagePreviewFromSummary(summary({ content }))).toBe('[动态] 爱丽丝：今天去爬山了')
+    expect(messagePreview({ content } as unknown as Message)).toBe('[动态] 爱丽丝：今天去爬山了')
   })
 
   it('撤回消息优先显示已撤回占位', () => {

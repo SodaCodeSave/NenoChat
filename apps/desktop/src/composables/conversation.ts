@@ -1,6 +1,6 @@
 import { computed } from 'vue'
 import type { ConversationSummary } from '@/api/endpoints'
-import type { LastMessageSummary, Message } from '@nenochat/shared'
+import { type LastMessageSummary, type Message, momentSharePreview } from '@nenochat/shared'
 import { useContactsStore } from '@/stores/contacts'
 
 /**
@@ -56,7 +56,8 @@ export function messagePreview(message: Message | null | undefined): string {
     case 'system':
       return message.content
     default:
-      return message.content.replace(/\s+/g, ' ').slice(0, 60)
+      // 动态分享正文里带定位标记，列表只显示 [动态] 作者：摘要
+      return momentSharePreview(message.content) ?? message.content.replace(/\s+/g, ' ').slice(0, 60)
   }
 }
 
@@ -76,7 +77,7 @@ export function messagePreviewFromSummary(summary: LastMessageSummary | null | u
     case 'system':
       return summary.content
     default:
-      return summary.content.replace(/\s+/g, ' ').slice(0, 60)
+      return momentSharePreview(summary.content) ?? summary.content.replace(/\s+/g, ' ').slice(0, 60)
   }
 }
 

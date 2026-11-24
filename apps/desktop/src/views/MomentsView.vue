@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import type { MomentCard, Post, PostComment } from '@nenochat/shared'
+import { buildMomentShareContent, type MomentCard, type Post, type PostComment } from '@nenochat/shared'
 import Avatar from '@/components/ui/Avatar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
@@ -11,12 +11,16 @@ import MomentsComposer from '@/components/moments/MomentsComposer.vue'
 import { uploadFile } from '@/api/files'
 import { resolveFileUrl } from '@/api/http'
 import { userApi } from '@/api/endpoints'
+import { useAiStore } from '@/stores/ai'
 import { useAuthStore } from '@/stores/auth'
+import { useConversationsStore } from '@/stores/conversations'
 import { useMessagesStore } from '@/stores/messages'
 import { useMomentsStore } from '@/stores/moments'
 import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ai = useAiStore()
+const conversations = useConversationsStore()
 const moments = useMomentsStore()
 const messages = useMessagesStore()
 const ui = useUiStore()
@@ -115,22 +119,29 @@ async function shareTo(targets: string[]): Promise<void> {
   const post = sharingPost.value
   if (!post) return
   const cover = post.attachments?.[0] ?? null
+  const coverUrl = cover?.thumbUrl || cover?.url || null
   const excerpt = post.content.replace(/\s+/g, ' ').trim().slice(0, 80) || '[图片]'
   const card: MomentCard = {
     postId: post.id,
     authorName: postAuthorName(post),
     authorAvatarUrl: post.author?.avatarUrl ?? null,
     excerpt,
-    coverUrl: cover?.thumbUrl || cover?.url || null,
+    coverUrl,
   }
+  const content = buildMomentShareContent({
+    postId: post.id,
+    authorName: card.authorName,
+    content: post.content || '[图片]',
+    coverUrl,
+  })
   await Promise.all(
-    targets.map((conversationId) =>
-      messages.send({
-        conversationId,
-        content: `[动态] ${card.authorName}：${excerpt}`,
-        meta: { momentCard: card },
-      }),
-    ),
+    targets.map((conversationId) => {
+      // AI 会话走完整回合：用户消息带上卡片 meta，服务端同时拿到正文触发回复
+      if (conversations.byId.get(conversationId)?.type === 'ai') {
+        return ai.sendTurn(conversationId, content, null, [], { momentCard: card })
+      }
+      return messages.send({ conversationId, content, meta: { momentCard: card } })
+    }),
   )
   sharingPost.value = null
 }

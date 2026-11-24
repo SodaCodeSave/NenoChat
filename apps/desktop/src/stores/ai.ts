@@ -16,6 +16,7 @@ import {
   type AttachmentRef,
   type ConnectorActionMeta,
   type Message,
+  type MessageMeta,
   type SegmentRule,
 } from '@nenochat/shared'
 import { aiApi } from '@/api/ai'
@@ -522,6 +523,7 @@ export const useAiStore = defineStore('ai', () => {
     content: string,
     replyTo?: Message | null,
     attachments: AttachmentRef[] = [],
+    extraMeta?: MessageMeta,
   ): Promise<void> {
     const now = Date.now()
     const last = recentTurns.get(conversationId)
@@ -547,7 +549,7 @@ export const useAiStore = defineStore('ai', () => {
       clientNonce: nonce,
       // 图片消息类型让气泡正常渲染图片；纯文字部分会显示在图下方
       type: images.length > 0 ? 'image' : 'text',
-      meta: { clientNonce: nonce, ...(attachments.length > 0 ? { attachments } : {}) },
+      meta: { ...(extraMeta ?? {}), ...(attachments.length > 0 ? { attachments } : {}), clientNonce: nonce },
       replyToId: replyTo?.id ?? null,
     })
 
