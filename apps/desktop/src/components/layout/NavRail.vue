@@ -98,7 +98,7 @@ const connectionTone = computed(() => {
       class="group relative flex h-11 w-11 flex-col items-center justify-center rounded-xl transition-colors"
       :class="
         activeKey === item.key
-          ? 'bg-rail-selected text-accent'
+          ? 'bg-selected text-accent'
           : 'text-muted hover:bg-rail-active hover:text-text'
       "
       :title="item.label"
@@ -163,7 +163,7 @@ const connectionTone = computed(() => {
         class="grid h-9 w-9 place-items-center rounded-xl transition-colors"
         :class="
           activeKey === 'settings'
-            ? 'bg-rail-selected text-accent'
+            ? 'bg-selected text-accent'
             : 'text-muted hover:bg-rail-active hover:text-text'
         "
         title="设置"

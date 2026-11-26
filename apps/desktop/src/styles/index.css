@@ -14,8 +14,8 @@
   --surface-3: #eceae5;
   --rail: #efedea;
   --rail-active: #e5e3dd;
-  /* 导航栏选中项：比悬停再深一档的灰底，不靠投影区分选中态 */
-  --rail-selected: #ddd9d1;
+  /* 选中态遮罩：比悬停再深一档的灰底，导航栏与会话列表共用，不靠投影区分选中 */
+  --selected: #ddd9d1;
   --border: #f0eeea;
   --text: #2c2b26;
   --text-strong: #16160f;
@@ -53,7 +53,7 @@
   --surface-3: #20201e;
   --rail: #0b0b0a;
   --rail-active: #20201e;
-  --rail-selected: #2c2c28;
+  --selected: #2c2c28;
   --border: #232320;
   --text: #d8d6d0;
   --text-strong: #f2f0ea;
@@ -90,7 +90,7 @@
   --color-surface-3: var(--surface-3);
   --color-rail: var(--rail);
   --color-rail-active: var(--rail-active);
-  --color-rail-selected: var(--rail-selected);
+  --color-selected: var(--selected);
   --color-line: var(--border);
   --color-text: var(--text);
   --color-text-strong: var(--text-strong);
@@ -187,6 +187,35 @@
   --accent: #e75c9c;
   --accent-soft: #3a2130;
   --bubble-own: #3a2130;
+}
+/*
+ * Claude 预设：陶土橙主色。字体不再跟配色绑定，见下面的字体档。
+ */
+:root[data-accent='claude'] {
+  --accent: #d97757;
+  --accent-soft: #f8ece7;
+  --bubble-own: #f8ece7;
+}
+.dark[data-accent='claude'] {
+  --accent: #e08a6b;
+  --accent-soft: #3a2a22;
+  --bubble-own: #3a2a22;
+}
+/*
+ * 字体档：body 读 --font-sans，覆盖它即全站生效。
+ * 不打包字体文件，全部走系统字体栈；font-mono 的代码与版本号不受影响。
+ * --font-user 由 applyTheme 从设置里的自定义字族写入。
+ */
+:root[data-font='serif'] {
+  --font-sans:
+    Georgia, 'Times New Roman', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong',
+    'SimSun', serif;
+}
+:root[data-font='kai'] {
+  --font-sans: Georgia, 'Kaiti SC', STKaiti, KaiTi, '楷体', 'Noto Serif SC', serif;
+}
+:root[data-font='custom'] {
+  --font-sans: var(--font-user, system-ui, sans-serif);
 }
 /* 背景图提取的主题色：useTheme 在跟随背景时把 data-accent 写成 custom，
  * 四个变量由 ui store 从提取主色派生后写进 <html> 内联 style（platform/bg-accent.ts） */

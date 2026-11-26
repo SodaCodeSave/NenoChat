@@ -12,6 +12,8 @@ const SEND_KEY_KEY = 'nenochat.sendKey'
 const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 const NAV_LABELS_KEY = 'nenochat.showNavLabels'
+const FONT_PRESET_KEY = 'nenochat.fontPreset'
+const FONT_CUSTOM_KEY = 'nenochat.fontCustom'
 const CONNECTOR_HINTS_KEY = 'nenochat.showConnectorHints'
 const AI_BADGE_KEY = 'nenochat.showAiBadge'
 const CHAT_BG_URL_KEY = 'nenochat.chatBgUrl'
@@ -33,6 +35,19 @@ export type RightPanel = 'none' | 'members' | 'memory' | 'detail'
 export type MessageStyle = 'discord' | 'qq'
 /** 链接展示样式：card 正文后追加信息卡片，logo 正文链接替换为 LOGO + 标题 */
 export type LinkDisplay = 'card' | 'logo'
+/** 字体预设：sans 系统无衬线，serif 衬线（宋体系），kai 楷体，custom 用户自填 font-family */
+export type FontPreset = 'sans' | 'serif' | 'kai' | 'custom'
+
+const FONT_PRESETS: readonly FontPreset[] = ['sans', 'serif', 'kai', 'custom']
+
+function readFontPreset(raw: string | null): FontPreset {
+  return FONT_PRESETS.includes(raw as FontPreset) ? (raw as FontPreset) : 'sans'
+}
+
+/** 自定义字族只剥掉会打断声明的字符，引号是合法写法（带空格的字体名必须加引号） */
+function sanitizeFontFamily(raw: string): string {
+  return raw.replace(/[\u0000-\u001f;{}<>]/g, '').trim()
+}
 
 /**
  * 纯界面状态：主题、密度、导航位置、抽屉开关。
@@ -57,6 +72,10 @@ export const useUiStore = defineStore('ui', () => {
   const linkDisplay = ref<LinkDisplay>(
     localStorage.getItem(LINK_DISPLAY_KEY) === 'logo' ? 'logo' : 'card',
   )
+  /** 界面字体预设，纯本地偏好 */
+  const fontPreset = ref<FontPreset>(readFontPreset(localStorage.getItem(FONT_PRESET_KEY)))
+  /** 自定义 font-family 列表，仅在预设选 custom 时生效 */
+  const fontCustom = ref(localStorage.getItem(FONT_CUSTOM_KEY) ?? '')
   /** 桌面端会话列表的手动收起状态，跨会话记住 */
   const conversationListCollapsed = ref(
     localStorage.getItem(CONVERSATION_LIST_KEY) === 'true',
@@ -110,6 +129,8 @@ export const useUiStore = defineStore('ui', () => {
       for (const name of CUSTOM_ACCENT_VARS) root.style.removeProperty(name)
     }
     root.dataset.reduceMotion = reduceMotion.value ? 'true' : 'false'
+    root.dataset.font = fontPreset.value
+    root.style.setProperty('--font-user', fontCustom.value)
     root.style.setProperty('--font-scale', String(fontScale.value))
   }
 
@@ -158,6 +179,18 @@ export const useUiStore = defineStore('ui', () => {
   function setShowNavLabels(next: boolean): void {
     showNavLabels.value = next
     localStorage.setItem(NAV_LABELS_KEY, String(next))
+  }
+
+  function setFontPreset(next: FontPreset): void {
+    fontPreset.value = next
+    localStorage.setItem(FONT_PRESET_KEY, next)
+    applyTheme()
+  }
+
+  function setFontCustom(next: string): void {
+    fontCustom.value = sanitizeFontFamily(next)
+    localStorage.setItem(FONT_CUSTOM_KEY, fontCustom.value)
+    applyTheme()
   }
 
   function setShowConnectorHints(next: boolean): void {
@@ -229,6 +262,8 @@ export const useUiStore = defineStore('ui', () => {
     sendKey,
     messageStyle,
     linkDisplay,
+    fontPreset,
+    fontCustom,
     conversationListCollapsed,
     showNavLabels,
     showConnectorHints,
@@ -251,6 +286,8 @@ export const useUiStore = defineStore('ui', () => {
     setAccent,
     setMessageStyle,
     setLinkDisplay,
+    setFontPreset,
+    setFontCustom,
     setSendKey,
     setReduceMotion,
     setConversationListCollapsed,

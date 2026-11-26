@@ -5,7 +5,13 @@ import SettingsCard from '@/components/ui/form/SettingsCard.vue'
 import SettingRow from '@/components/ui/form/SettingRow.vue'
 import Segmented from '@/components/ui/form/Segmented.vue'
 import Switch from '@/components/ui/form/Switch.vue'
-import { useUiStore, type LinkDisplay, type MessageStyle } from '@/stores/ui'
+import TextInput from '@/components/ui/form/TextInput.vue'
+import {
+  useUiStore,
+  type FontPreset,
+  type LinkDisplay,
+  type MessageStyle,
+} from '@/stores/ui'
 import { uploadFile } from '@/api/files'
 import { settingsApi } from '@/api/endpoints'
 import { resolveFileUrl } from '@/api/http'
@@ -19,6 +25,7 @@ const accents = [
   { key: 'green', label: '松石绿', color: '#16a34a' },
   { key: 'orange', label: '落日橙', color: '#ea7317' },
   { key: 'pink', label: '莓果粉', color: '#db2f85' },
+  { key: 'claude', label: 'Claude', color: '#d97757' },
 ]
 
 const themeOptions = [
@@ -144,6 +151,42 @@ async function removeBackground(): Promise<void> {
           <span class="ml-1 text-[11.5px] text-muted">
             {{ accents.find((item) => item.key === ui.accent)?.label ?? '自定义' }}
           </span>
+        </div>
+      </SettingRow>
+    </SettingsCard>
+
+    <SettingsCard
+      id="font"
+      title="字体"
+      description="预设全部走系统字体，代码、版本号与快捷键始终等宽"
+      icon="edit"
+    >
+      <SettingRow
+        label="界面字体"
+        description="自定义填 font-family 列表，靠前的字体缺失会自动往后落"
+        stacked
+      >
+        <Segmented
+          :model-value="ui.fontPreset"
+          full
+          :options="[
+            { value: 'sans', label: '无衬线' },
+            { value: 'serif', label: '衬线' },
+            { value: 'kai', label: '楷体' },
+            { value: 'custom', label: '自定义' },
+          ]"
+          aria-label="界面字体"
+          @update:model-value="ui.setFontPreset($event as FontPreset)"
+        />
+        <div v-if="ui.fontPreset === 'custom'" class="mt-2">
+          <TextInput
+            size="sm"
+            mono
+            placeholder="Georgia, 'Noto Serif SC', serif"
+            aria-label="自定义字体"
+            :model-value="ui.fontCustom"
+            @update:model-value="ui.setFontCustom"
+          />
         </div>
       </SettingRow>
     </SettingsCard>

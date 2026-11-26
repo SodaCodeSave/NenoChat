@@ -40,7 +40,7 @@ describe('导航栏菜单文字开关', () => {
 describe('导航栏选中态', () => {
   it('不再用投影抬升选中项，改成灰色填充底', () => {
     expect(navRail).not.toContain('shadow-sm')
-    expect(navRail).toContain("'bg-rail-selected text-accent'")
+    expect(navRail).toContain("'bg-selected text-accent'")
   })
 
   it('选中时切实心图标，未选中保持线性', () => {
