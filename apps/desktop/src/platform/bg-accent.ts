@@ -141,6 +141,40 @@ export function accentVariants(baseHex: string): AccentVariants | null {
   }
 }
 
+/** 浅色底的中性明度阶梯，与 index.css 里 :root 的中性暖灰逐档对应 */
+const SURFACE_STEPS = [
+  { key: 'surface', l: 0.99, c: 0.005 },
+  { key: 'surface2', l: 0.973, c: 0.007 },
+  { key: 'surface3', l: 0.942, c: 0.011 },
+  { key: 'rail', l: 0.951, c: 0.008 },
+  { key: 'railActive', l: 0.925, c: 0.012 },
+  { key: 'selected', l: 0.889, c: 0.015 },
+  { key: 'border', l: 0.953, c: 0.008 },
+  { key: 'fieldRing', l: 0.893, c: 0.012 },
+] as const
+
+/** 浅色模式下背景各层的染色值，键名对应 index.css 里的 --surface-custom 一族 */
+export type SurfaceTints = Record<(typeof SURFACE_STEPS)[number]['key'], string>
+
+/**
+ * 按主色色相派生浅色背景的染色阶梯。
+ * 只换色相不换明度：各层亮度与中性底一一对应，层级差保持在 1%–3%。
+ * 源色几乎无彩（灰阶图）时返回 null —— 色相不稳定，染出来只是随机偏色，不如保持中性。
+ */
+export function surfaceTints(baseHex: string): SurfaceTints | null {
+  const normalized = normalizeHex(baseHex)
+  if (!normalized) return null
+
+  const base = rgbToOklch(hexToRgb(normalized))
+  if (base.c < 0.02) return null
+
+  const entries = SURFACE_STEPS.map(({ key, l, c }) => [
+    key,
+    rgbToHex(oklchToRgb({ l, c, h: base.h })),
+  ])
+  return Object.fromEntries(entries) as SurfaceTints
+}
+
 /**
  * 从图片文件提取主色：缩到最长边 64px 后按 RGB 高 4 位分桶，
  * 以「像素数 × 饱和度权重」选桶（压住大面积白底/黑边），桶内取平均。

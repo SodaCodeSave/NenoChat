@@ -34,6 +34,61 @@ describe('Claude 预设', () => {
   })
 })
 
+describe('背景随主题色染色', () => {
+  /** sRGB 亮度：只用来比较各层明暗顺序 */
+  function luminance(hex: string): number {
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+
+  function value(source: string, name: string): string {
+    return new RegExp(`--${name}: (#[0-9a-f]{6})`).exec(source)?.[1] ?? ''
+  }
+
+  it('彩色预设各有一套浅色底，Claude 保持中性暖灰', () => {
+    for (const key of ['blue', 'violet', 'green', 'orange', 'pink']) {
+      const tint = block(styles, `:root:not(.dark)[data-accent='${key}']`)
+      expect(tint, key).toContain('--surface:')
+      expect(tint, key).toContain('--rail:')
+      expect(tint, key).toContain('--selected:')
+    }
+    // Claude 沿用 :root 那套暖灰，自己不再覆盖底色
+    expect(block(styles, ":root[data-accent='claude']")).not.toContain('--surface')
+  })
+
+  it('染色只在浅色生效，深色底维持中性', () => {
+    const tinted = styles.match(/:root:not\(\.dark\)\[data-accent='(?:blue|violet|green|orange|pink)'\]/g)
+    expect(tinted).toHaveLength(5)
+    // 深色块里不许出现底色覆盖，否则会把染色漏进暗色
+    for (const key of ['blue', 'violet', 'green', 'orange', 'pink', 'claude', 'custom']) {
+      expect(block(styles, `.dark[data-accent='${key}']`)).not.toContain('--surface')
+    }
+  })
+
+  it('染色不换明度阶梯：surface 最亮、selected 最暗', () => {
+    for (const key of ['blue', 'violet', 'green', 'orange', 'pink']) {
+      const tint = block(styles, `:root:not(.dark)[data-accent='${key}']`)
+      const surface = value(tint, 'surface')
+      const surface2 = value(tint, 'surface-2')
+      const surface3 = value(tint, 'surface-3')
+      const selected = value(tint, 'selected')
+      expect(luminance(surface)).toBeGreaterThan(luminance(surface2))
+      expect(luminance(surface2)).toBeGreaterThan(luminance(surface3))
+      expect(luminance(surface3)).toBeGreaterThan(luminance(selected))
+    }
+  })
+
+  it('背景图主题色的底色走内联变量，缺变量时回落到中性', () => {
+    const custom = block(styles, ":root:not(.dark)[data-accent='custom']")
+    expect(custom).toContain('--surface: var(--surface-custom, #fcfcfb)')
+    expect(custom).toContain('--selected: var(--selected-custom, #ddd9d1)')
+    expect(uiStore).toContain("['--surface-custom', 'surface']")
+    expect(uiStore).toContain('surfaceTints(bgAccent)')
+  })
+})
+
 describe('字体档', () => {
   it('每个预设有自己的字体栈，全部走系统字体', () => {
     const serif = block(styles, ":root[data-font='serif']")

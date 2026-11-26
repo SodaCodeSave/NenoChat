@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { ThemeMode, type UserSettings } from '@nenochat/shared'
 import { useMediaQuery } from '@vueuse/core'
-import { accentVariants, normalizeHex } from '@/platform/bg-accent'
+import { accentVariants, normalizeHex, surfaceTints } from '@/platform/bg-accent'
 
 const THEME_KEY = 'nenochat.theme'
 const ACCENT_KEY = 'nenochat.accent'
@@ -26,6 +26,26 @@ const CUSTOM_ACCENT_VARS = [
   '--accent-soft-custom',
   '--accent-custom-dark',
   '--accent-soft-custom-dark',
+  '--surface-custom',
+  '--surface-2-custom',
+  '--surface-3-custom',
+  '--rail-custom',
+  '--rail-active-custom',
+  '--selected-custom',
+  '--border-custom',
+  '--field-ring-custom',
+] as const
+
+/** 背景染色变量对应的派生字段，顺序与 index.css 里的映射一致 */
+const TINT_VARS = [
+  ['--surface-custom', 'surface'],
+  ['--surface-2-custom', 'surface2'],
+  ['--surface-3-custom', 'surface3'],
+  ['--rail-custom', 'rail'],
+  ['--rail-active-custom', 'railActive'],
+  ['--selected-custom', 'selected'],
+  ['--border-custom', 'border'],
+  ['--field-ring-custom', 'fieldRing'],
 ] as const
 
 export type NavSection = 'messages' | 'contacts' | 'moments' | 'settings'
@@ -116,14 +136,20 @@ export const useUiStore = defineStore('ui', () => {
     root.classList.toggle('dark', resolvedTheme.value === 'dark')
     // 主题色跟随背景：切到 custom 档，把提取主色的四档派生色写进内联变量
     //（浅色读 --accent-custom*，深色读 --accent-custom-dark*，见 index.css）
-    const variants =
-      accentFollowBg.value && chatBgAccent.value ? accentVariants(chatBgAccent.value) : null
-    if (variants) {
+    const bgAccent = accentFollowBg.value ? chatBgAccent.value : null
+    const variants = bgAccent ? accentVariants(bgAccent) : null
+    if (variants && bgAccent) {
       root.dataset.accent = 'custom'
       root.style.setProperty('--accent-custom', variants.light)
       root.style.setProperty('--accent-soft-custom', variants.softLight)
       root.style.setProperty('--accent-custom-dark', variants.dark)
       root.style.setProperty('--accent-soft-custom-dark', variants.softDark)
+      // 背景染色：灰阶源图拿不到稳定色相，返回 null 时清掉变量回落到中性底
+      const tints = surfaceTints(bgAccent)
+      for (const [name, key] of TINT_VARS) {
+        if (tints) root.style.setProperty(name, tints[key])
+        else root.style.removeProperty(name)
+      }
     } else {
       root.dataset.accent = accent.value
       for (const name of CUSTOM_ACCENT_VARS) root.style.removeProperty(name)

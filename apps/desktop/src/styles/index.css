@@ -201,6 +201,77 @@
   --accent-soft: #3a2a22;
   --bubble-own: #3a2a22;
 }
+
+/*
+ * 背景随主题色染色（只染浅色）。
+ * 明度阶梯与上面 :root 的中性暖灰逐档对应（surface 0.99 → selected 0.89），
+ * 只换色相、彩度压到 1% 上下，所以层级差仍是 1%–3%，正文对比度不变。
+ * 深色底维持中性不动：深色下叠色相容易发浑，也和「黑灰打底」的规范冲突。
+ * Claude 与未知主题不在这里出现，直接落在上面的中性暖灰上。
+ */
+:root:not(.dark)[data-accent='blue'] {
+  --surface: #fafcff;
+  --surface-2: #f4f6fb;
+  --surface-3: #e8ecf3;
+  --rail: #eceff4;
+  --rail-active: #e2e6ee;
+  --selected: #d5dbe5;
+  --border: #edeff5;
+  --field-ring: #d8dce4;
+}
+:root:not(.dark)[data-accent='violet'] {
+  --surface: #fbfbff;
+  --surface-2: #f6f5fb;
+  --surface-3: #ebebf3;
+  --rail: #eeeef4;
+  --rail-active: #e5e5ee;
+  --selected: #d9d9e4;
+  --border: #efeff5;
+  --field-ring: #dbdbe3;
+}
+:root:not(.dark)[data-accent='green'] {
+  --surface: #f9fdfa;
+  --surface-2: #f3f7f4;
+  --surface-3: #e7eee8;
+  --rail: #ebf0ec;
+  --rail-active: #e1e9e2;
+  --selected: #d4ddd6;
+  --border: #ecf1ed;
+  --field-ring: #d6ded8;
+}
+:root:not(.dark)[data-accent='orange'] {
+  --surface: #fffbf9;
+  --surface-2: #faf5f2;
+  --surface-3: #f2eae5;
+  --rail: #f3edea;
+  --rail-active: #ede4df;
+  --selected: #e3d8d2;
+  --border: #f4eeeb;
+  --field-ring: #e3dad5;
+}
+:root:not(.dark)[data-accent='pink'] {
+  --surface: #fffafc;
+  --surface-2: #faf4f6;
+  --surface-3: #f2e9ec;
+  --rail: #f3edef;
+  --rail-active: #ede3e7;
+  --selected: #e3d7db;
+  --border: #f4edf0;
+  --field-ring: #e3d9dc;
+}
+/* 背景图主题色的染色档：色相由 bg-accent.ts 从提取色算出，写进内联变量。
+ * 源图接近灰阶时那几个变量不会写，回落到中性暖灰。 */
+:root:not(.dark)[data-accent='custom'] {
+  --surface: var(--surface-custom, #fcfcfb);
+  --surface-2: var(--surface-2-custom, #f5f5f3);
+  --surface-3: var(--surface-3-custom, #eceae5);
+  --rail: var(--rail-custom, #efedea);
+  --rail-active: var(--rail-active-custom, #e5e3dd);
+  --selected: var(--selected-custom, #ddd9d1);
+  --border: var(--border-custom, #f0eeea);
+  --field-ring: var(--field-ring-custom, #e2e0da);
+}
+
 /*
  * 字体档：body 读 --font-sans，覆盖它即全站生效。
  * 不打包字体文件，全部走系统字体栈；font-mono 的代码与版本号不受影响。
