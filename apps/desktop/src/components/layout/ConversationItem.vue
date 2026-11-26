@@ -71,7 +71,7 @@ async function togglePin(event: MouseEvent): Promise<void> {
   <div
     class="group relative flex cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors active:bg-surface-3"
     :class="[
-      props.active ? 'bg-accent-soft' : 'hover:bg-surface-2',
+      props.active ? 'bg-selected' : 'hover:bg-surface-2',
       isAi && !props.active ? 'bg-surface-2/60' : '',
     ]"
     @click="onTap"
