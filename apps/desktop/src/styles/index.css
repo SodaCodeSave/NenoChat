@@ -32,10 +32,12 @@
   --shadow-soft: 0 1px 2px rgb(22 22 15 / 0.04), 0 8px 24px rgb(22 22 15 / 0.05);
   --radius-panel: 12px;
   --radius-bubble: 10px;
-  /* 输入框聚焦：内环咬住控件，外环向外压出一圈，不加 outline */
-  --focus-ring:
-    0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
-    0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
+  /* 输入框是高一层的前景，用比画布更亮的白面，靠软投影浮起来而不是描边 */
+  --field-bg: #ffffff;
+  --field-shadow: 0 1px 2px rgb(22 22 15 / 0.07), 0 2px 6px rgb(22 22 15 / 0.04);
+  /* 聚焦：一圈灰环把控件圈住，投影加重一档，浮起的高度跟着抬起来 */
+  --field-ring: #e2e0da;
+  --field-shadow-focus: 0 3px 10px rgb(22 22 15 / 0.1), 0 8px 22px rgb(22 22 15 / 0.06);
   /* 移动端安全区：Android 原生已把内容让出系统栏，这里主要是 iOS/刘海屏兜底 */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -64,6 +66,11 @@
   --toast-bg: #262624;
   --toast-text: #f2f0ea;
   --shadow-soft: 0 1px 2px rgb(6 6 4 / 0.4), 0 8px 24px rgb(6 6 4 / 0.32);
+  /* 暗色下前景控件比画布亮一档，同样是靠投影分层 */
+  --field-bg: #20201e;
+  --field-shadow: 0 1px 2px rgb(6 6 4 / 0.36), 0 2px 6px rgb(6 6 4 / 0.2);
+  --field-ring: #34342f;
+  --field-shadow-focus: 0 3px 10px rgb(6 6 4 / 0.46), 0 8px 22px rgb(6 6 4 / 0.3);
 
   /*
    * 暗色补偿：浅色字在深底上会「发胖」，把整套字重下调 40。
@@ -384,23 +391,26 @@ textarea {
 
 /* ---------------------------- 输入框 ---------------------------- */
 
-/* 聚焦不加 outline，用双环阴影咬合：内环 1px 实体环贴住控件，外环向外压出一圈 */
+/* 静息只有一层软投影；聚焦时套一圈灰环，并把投影加重一档 */
 .field-shell {
-  background-color: var(--surface-3);
+  background-color: var(--field-bg);
+  box-shadow: var(--field-shadow);
   transition: box-shadow 160ms ease-out;
 }
 .field-shell:focus-within {
   outline: none;
-  box-shadow: var(--focus-ring);
+  box-shadow:
+    0 0 0 1px var(--field-ring),
+    var(--field-shadow-focus);
 }
 /* 校验失败：环换成危险色，底色渗一点红，不用描边喊话 */
 .field-shell[data-invalid='true'] {
-  background-color: color-mix(in srgb, var(--danger) 5%, var(--surface-3));
+  background-color: color-mix(in srgb, var(--danger) 5%, var(--field-bg));
 }
 .field-shell[data-invalid='true']:focus-within {
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--danger) 70%, transparent),
-    0 0 0 5px color-mix(in srgb, var(--danger) 10%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent),
+    var(--field-shadow-focus);
 }
 
 /* ---------------------------- 流式出字 ---------------------------- */

@@ -48,10 +48,19 @@ describe('层级不靠边框', () => {
 })
 
 describe('输入框聚焦', () => {
-  it('双环阴影咬合，不加 outline', () => {
-    expect(styles).toContain('--focus-ring:')
+  it('前景面是纯白，静息只有一层软投影', () => {
+    expect(block(styles, ':root')).toContain('--field-bg: #ffffff')
+    expect(block(styles, ':root')).toContain('--field-shadow:')
+    expect(styles).toMatch(/\.field-shell\s*\{[^}]*box-shadow: var\(--field-shadow\)/)
+  })
+
+  it('聚焦套一圈灰环并把投影加重，不加 outline', () => {
+    expect(styles).toContain('--field-ring:')
+    expect(styles).toContain('--field-shadow-focus:')
     expect(styles).toMatch(/\.field-shell:focus-within\s*\{[^}]*outline: none/)
-    expect(styles).toMatch(/\.field-shell:focus-within\s*\{[^}]*box-shadow: var\(--focus-ring\)/)
+    expect(styles).toMatch(
+      /\.field-shell:focus-within\s*\{[^}]*0 0 0 1px var\(--field-ring\)[^}]*var\(--field-shadow-focus\)/,
+    )
   })
 
   it('散落的手写输入框也走同一套双环', () => {
