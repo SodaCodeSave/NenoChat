@@ -11,6 +11,7 @@ const LINK_DISPLAY_KEY = 'nenochat.linkDisplay'
 const SEND_KEY_KEY = 'nenochat.sendKey'
 const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
+const NAV_LABELS_KEY = 'nenochat.showNavLabels'
 const CONNECTOR_HINTS_KEY = 'nenochat.showConnectorHints'
 const AI_BADGE_KEY = 'nenochat.showAiBadge'
 const CHAT_BG_URL_KEY = 'nenochat.chatBgUrl'
@@ -60,6 +61,8 @@ export const useUiStore = defineStore('ui', () => {
   const conversationListCollapsed = ref(
     localStorage.getItem(CONVERSATION_LIST_KEY) === 'true',
   )
+  /** 导航栏是否显示菜单文字，关闭后只留图标并把栏宽收窄 */
+  const showNavLabels = ref(localStorage.getItem(NAV_LABELS_KEY) !== 'false')
   /** 是否在消息里显示连接器动作提示（"已联网搜索"等小字），纯本地偏好 */
   const showConnectorHints = ref(localStorage.getItem(CONNECTOR_HINTS_KEY) !== 'false')
   /** 是否显示 AI 角标（会话列表、聊天标题、朋友圈、成员列表等处的 AI 标），纯本地偏好 */
@@ -152,6 +155,11 @@ export const useUiStore = defineStore('ui', () => {
     applyTheme()
   }
 
+  function setShowNavLabels(next: boolean): void {
+    showNavLabels.value = next
+    localStorage.setItem(NAV_LABELS_KEY, String(next))
+  }
+
   function setShowConnectorHints(next: boolean): void {
     showConnectorHints.value = next
     localStorage.setItem(CONNECTOR_HINTS_KEY, String(next))
@@ -222,6 +230,7 @@ export const useUiStore = defineStore('ui', () => {
     messageStyle,
     linkDisplay,
     conversationListCollapsed,
+    showNavLabels,
     showConnectorHints,
     showAiBadge,
     chatBgUrl,
@@ -246,6 +255,7 @@ export const useUiStore = defineStore('ui', () => {
     setReduceMotion,
     setConversationListCollapsed,
     toggleConversationList,
+    setShowNavLabels,
     setShowConnectorHints,
     setShowAiBadge,
     setChatBackground,

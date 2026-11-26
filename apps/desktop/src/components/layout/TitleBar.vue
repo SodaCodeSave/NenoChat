@@ -46,7 +46,8 @@ function toggleMaximize(): void {
     <!-- 品牌区：与侧边栏同色且无分隔线，融为一体 -->
     <div
       v-if="props.withRail"
-      class="flex w-16 shrink-0 items-center justify-center bg-rail"
+      class="flex shrink-0 items-center justify-center bg-rail transition-[width] duration-200 ease-out"
+      :class="ui.showNavLabels ? 'w-16' : 'w-14'"
       data-tauri-drag-region
     >
       <BrandLogo mark class="pointer-events-none h-4 text-text-strong" />

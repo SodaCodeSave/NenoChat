@@ -64,3 +64,21 @@ export const iconPaths = {
 } as const
 
 export type IconName = keyof typeof iconPaths
+
+/**
+ * 实心版本：只给需要「选中态填充」的图标准备，
+ * 其余图标沿用线性路径，Icon 组件会按可用性自动回退。
+ */
+export const iconFilledPaths: Partial<Record<IconName, string>> = {
+  message:
+    'M21 11.5a8.4 8.4 0 0 1-9 8.4 9.6 9.6 0 0 1-2.8-.4L4 21l1.4-4.1A8.3 8.3 0 0 1 4 11.5 8.4 8.4 0 0 1 13 3a8.4 8.4 0 0 1 8 8.5Z',
+  users:
+    'M9.5 11.6a3.9 3.9 0 1 0 0-7.8 3.9 3.9 0 0 0 0 7.8Z' +
+    'M9.5 13.2c-3.6 0-6.5 2.2-6.5 4.9V20h13v-1.9c0-2.7-2.9-4.9-6.5-4.9Z' +
+    'M17.3 11.2a3.1 3.1 0 1 0 0-6.2 3.1 3.1 0 0 0 0 6.2Z' +
+    'M17.2 12.5c-1.2 0-2.3.25-3.2.7 1.6 1.5 2.6 3.5 2.6 5.6V20H21v-1.9c0-3.2-1.7-5.6-3.8-5.6Z',
+  compass:
+    'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM15.5 8.5l-2 5-5 2 2-5 5-2Z',
+  /** 齿轮外轮廓本就闭合，evenodd 会把内圈挖掉，直接复用线性路径即可 */
+  settings: iconPaths.settings,
+}

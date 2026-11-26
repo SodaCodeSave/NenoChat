@@ -78,6 +78,7 @@ const allSections: SettingsSection[] = [
     description: '主题、主题色与聊天输入偏好',
     anchors: [
       { id: 'theme', label: '主题', keywords: '深色 浅色 系统 主题色 颜色' },
+      { id: 'sidebar', label: '侧边栏', keywords: '导航栏 菜单 文字 图标 收窄 隐藏' },
       { id: 'background', label: '聊天背景', keywords: '背景 壁纸 背景图 主题色 随背景' },
       { id: 'input', label: '聊天与输入', keywords: '发送 快捷键 enter' },
       { id: 'motion', label: '动效', keywords: '动画 减少动效' },

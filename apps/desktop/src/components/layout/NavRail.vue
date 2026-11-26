@@ -36,9 +36,13 @@ const items: NavItem[] = [
   { key: 'moments', icon: 'compass', label: '动态', to: '/moments' },
 ]
 
-const activeKey = computed(() => {
+/** 设置入口在底部工具区，和顶部三个菜单项共用同一套选中态 */
+type RailKey = NavItem['key'] | 'settings'
+
+const activeKey = computed<RailKey>(() => {
   if (route.path.startsWith('/contacts')) return 'contacts'
   if (route.path.startsWith('/moments')) return 'moments'
+  if (route.path.startsWith('/settings')) return 'settings'
   return 'messages'
 })
 
@@ -63,7 +67,8 @@ const connectionTone = computed(() => {
 
 <template>
   <nav
-    class="flex w-[64px] shrink-0 flex-col items-center gap-1 border-r border-line bg-rail py-3"
+    class="flex shrink-0 flex-col items-center gap-1 border-r border-line bg-rail py-3 transition-[width] duration-200 ease-out"
+    :class="ui.showNavLabels ? 'w-[64px]' : 'w-[56px]'"
   >
     <!-- 头像入口 -->
     <button
@@ -93,14 +98,16 @@ const connectionTone = computed(() => {
       class="group relative flex h-11 w-11 flex-col items-center justify-center rounded-xl transition-colors"
       :class="
         activeKey === item.key
-          ? 'bg-surface text-accent shadow-sm'
+          ? 'bg-rail-selected text-accent'
           : 'text-muted hover:bg-rail-active hover:text-text'
       "
       :title="item.label"
+      :aria-label="item.label"
+      :aria-current="activeKey === item.key ? 'page' : undefined"
       @click="router.push(item.to)"
     >
-      <Icon :name="item.icon" :size="20" />
-      <span class="mt-0.5 text-[10px] leading-none">{{ item.label }}</span>
+      <Icon :name="item.icon" :size="20" :filled="activeKey === item.key" />
+      <span v-if="ui.showNavLabels" class="mt-0.5 text-[10px] leading-none">{{ item.label }}</span>
 
       <span
         v-if="item.key === 'messages' && conversations.totalUnread > 0"
@@ -153,11 +160,18 @@ const connectionTone = computed(() => {
       </button>
       <button
         type="button"
-        class="grid h-9 w-9 place-items-center rounded-xl text-muted transition-colors hover:bg-rail-active hover:text-text"
+        class="grid h-9 w-9 place-items-center rounded-xl transition-colors"
+        :class="
+          activeKey === 'settings'
+            ? 'bg-rail-selected text-accent'
+            : 'text-muted hover:bg-rail-active hover:text-text'
+        "
         title="设置"
+        aria-label="设置"
+        :aria-current="activeKey === 'settings' ? 'page' : undefined"
         @click="router.push('/settings')"
       >
-        <Icon name="settings" :size="18" />
+        <Icon name="settings" :size="18" :filled="activeKey === 'settings'" />
       </button>
     </div>
   </nav>

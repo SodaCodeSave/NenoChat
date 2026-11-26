@@ -148,6 +148,21 @@ async function removeBackground(): Promise<void> {
       </SettingRow>
     </SettingsCard>
 
+    <SettingsCard
+      id="sidebar"
+      title="侧边栏"
+      description="左侧导航栏的显示方式，切换后立即生效"
+      icon="panelRight"
+    >
+      <SettingRow label="显示菜单文字" description="关闭后只保留图标，导航栏同时收窄">
+        <Switch
+          :model-value="ui.showNavLabels"
+          aria-label="显示菜单文字"
+          @update:model-value="ui.setShowNavLabels"
+        />
+      </SettingRow>
+    </SettingsCard>
+
     <SettingsCard id="background" title="聊天背景" description="背景只在聊天消息区显示，仅自己可见" icon="image">
       <SettingRow label="背景图片" description="支持 PNG / JPEG / WEBP / GIF，最大 10MB" stacked>
         <div class="flex items-center gap-3">

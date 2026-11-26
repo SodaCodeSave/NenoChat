@@ -14,6 +14,8 @@
   --surface-3: #eceae5;
   --rail: #efedea;
   --rail-active: #e5e3dd;
+  /* 导航栏选中项：比悬停再深一档的灰底，不靠投影区分选中态 */
+  --rail-selected: #ddd9d1;
   --border: #f0eeea;
   --text: #2c2b26;
   --text-strong: #16160f;
@@ -51,6 +53,7 @@
   --surface-3: #20201e;
   --rail: #0b0b0a;
   --rail-active: #20201e;
+  --rail-selected: #2c2c28;
   --border: #232320;
   --text: #d8d6d0;
   --text-strong: #f2f0ea;
@@ -87,6 +90,7 @@
   --color-surface-3: var(--surface-3);
   --color-rail: var(--rail);
   --color-rail-active: var(--rail-active);
+  --color-rail-selected: var(--rail-selected);
   --color-line: var(--border);
   --color-text: var(--text);
   --color-text-strong: var(--text-strong);
