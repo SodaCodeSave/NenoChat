@@ -559,7 +559,7 @@ onMounted(() => {
         <img
           :src="resolveFileUrl(attachment.thumbUrl ?? attachment.url) ?? attachment.url"
           :alt="attachment.filename"
-          class="h-12 w-12 rounded-lg border border-line object-cover"
+          class="h-12 w-12 rounded-lg object-cover"
         />
         <button
           type="button"
@@ -571,7 +571,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="relative rounded-xl border border-line bg-surface-2 focus-within:border-accent">
+    <div class="field-shell relative rounded-xl">
       <textarea
         ref="textarea"
         v-model="text"
@@ -632,7 +632,7 @@ onMounted(() => {
       <!-- @ 提及候选弹窗：↑↓ 选择，Enter/Tab 或左键确认，Esc 关闭 -->
       <div
         v-if="mentionOpen && mentionCandidates.length > 0"
-        class="animate-rise-in absolute bottom-full left-2 mb-2 w-[248px] overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-soft)]"
+        class="animate-rise-in absolute bottom-full left-2 mb-2 w-[248px] overflow-hidden rounded-xl bg-surface shadow-[var(--shadow-soft)]"
       >
         <p class="border-b border-line px-3 py-1.5 text-[10.5px] text-muted">提及成员</p>
         <div ref="mentionList" class="scroll-area max-h-[220px] py-1">
@@ -665,7 +665,7 @@ onMounted(() => {
       <!-- 表情 / 贴纸面板 -->
       <div
         v-if="emojiOpen"
-        class="animate-rise-in absolute bottom-full left-2 mb-2 max-h-[50vh] w-[min(320px,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-line bg-surface shadow-[var(--shadow-soft)]"
+        class="animate-rise-in absolute bottom-full left-2 mb-2 max-h-[50vh] w-[min(320px,calc(100vw-1.5rem))] overflow-y-auto rounded-xl bg-surface shadow-[var(--shadow-soft)]"
       >
         <div class="flex items-center gap-1 overflow-x-auto border-b border-line px-2 py-1.5">
           <button

@@ -43,10 +43,10 @@ function guardDismiss(event: Event): void {
   <DialogRoot v-model:open="open">
     <DialogPortal>
       <DialogOverlay
-        class="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity duration-150 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
+        class="fixed inset-0 z-50 bg-[var(--scrim)] backdrop-blur-[2px] transition-opacity duration-150 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
       />
       <DialogContent
-        class="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-soft)] outline-none data-[state=open]:animate-rise-in data-[state=closed]:animate-fade-out"
+        class="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-surface p-5 shadow-[var(--shadow-soft)] outline-none data-[state=open]:animate-rise-in data-[state=closed]:animate-fade-out"
         :class="widthClass"
         @escape-key-down="guardDismiss"
         @pointer-down-outside="guardDismiss"

@@ -93,7 +93,7 @@ async function onChange(event: Event): Promise<void> {
       <Avatar :name="name" :src="preview" :seed="name" :size="size" />
       <span
         v-if="uploading"
-        class="absolute inset-0 grid place-items-center rounded-full bg-black/45 text-[10px] font-medium text-white"
+        class="absolute inset-0 grid place-items-center rounded-full bg-[#0b0b0a]/45 text-[10px] font-medium text-white"
       >
         {{ progress }}%
       </span>

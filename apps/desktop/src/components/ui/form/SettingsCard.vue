@@ -8,7 +8,7 @@ withDefaults(
     description?: string
     icon?: IconName
     id?: string
-    /** 危险操作卡片：整卡改用警示色边框 */
+    /** 危险操作卡片：整卡改用警示底色 */
     tone?: 'default' | 'danger'
     bodyClass?: string
   }>(),
@@ -19,8 +19,8 @@ withDefaults(
 <template>
   <section
     :id="id"
-    class="scroll-mt-4 overflow-hidden rounded-xl border bg-surface"
-    :class="tone === 'danger' ? 'border-danger/35' : 'border-line'"
+    class="scroll-mt-4 overflow-hidden rounded-xl"
+    :class="tone === 'danger' ? 'bg-danger/[0.04]' : 'bg-surface-2'"
   >
     <header
       v-if="title || $slots.actions"

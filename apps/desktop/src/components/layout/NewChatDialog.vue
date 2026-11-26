@@ -155,7 +155,7 @@ async function submit(): Promise<void> {
 <template>
   <Teleport to="body">
     <div
-      class="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 md:grid md:place-items-center md:p-6"
+      class="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-[var(--scrim)] p-0 md:grid md:place-items-center md:p-6"
       @click.self="emit('close')"
     >
       <div
@@ -228,7 +228,7 @@ async function submit(): Promise<void> {
             v-model="groupName"
             type="text"
             placeholder="群聊名称"
-            class="h-9 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13px] outline-none focus:border-accent"
+            class="field-shell h-9 w-full rounded-lg px-3 text-[13px] outline-none"
           />
 
           <div class="relative">
@@ -239,7 +239,7 @@ async function submit(): Promise<void> {
               v-model="keyword"
               type="text"
               placeholder="搜索用户名或昵称"
-              class="h-9 w-full rounded-lg border border-line bg-surface-2 pl-8 pr-3 text-[13px] outline-none focus:border-accent"
+              class="field-shell h-9 w-full rounded-lg pl-8 pr-3 text-[13px] outline-none"
             />
           </div>
 

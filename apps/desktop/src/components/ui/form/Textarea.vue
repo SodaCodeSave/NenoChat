@@ -35,13 +35,8 @@ const attrs = useAttrs()
     :rows="rows"
     :placeholder="placeholder"
     :disabled="disabled"
-    class="w-full rounded-lg border bg-surface-2 px-2.5 py-2 text-[13px] leading-relaxed text-text outline-none transition-[border-color,box-shadow] placeholder:text-muted/60 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-55"
-    :class="[
-      invalid
-        ? 'border-danger/60 focus:border-danger focus:ring-danger/15'
-        : 'border-line focus:border-accent focus:ring-accent/15',
-      mono ? 'font-mono text-[12px]' : '',
-      resize ? 'resize-y' : 'resize-none',
-    ]"
+    :data-invalid="invalid ? 'true' : undefined"
+    class="field-shell w-full rounded-lg px-2.5 py-2 text-[13px] leading-relaxed text-text outline-none placeholder:text-muted/60 disabled:cursor-not-allowed disabled:opacity-55"
+    :class="[mono ? 'font-mono text-[12px]' : '', resize ? 'resize-y' : 'resize-none']"
   />
 </template>

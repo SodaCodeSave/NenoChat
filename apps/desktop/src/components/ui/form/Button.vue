@@ -27,13 +27,13 @@ const variants: Record<NonNullable<typeof props.variant>, string> = {
   primary:
     'bg-accent text-accent-text shadow-sm hover:brightness-105 active:brightness-95 focus-visible:ring-accent/30',
   secondary:
-    'border border-line bg-surface text-text hover:bg-surface-2 active:bg-surface-3 focus-visible:ring-accent/20',
+    'bg-surface-3 text-text hover:brightness-[1.04] active:brightness-[0.96] focus-visible:ring-accent/20',
   ghost:
     'text-muted hover:bg-surface-2 hover:text-text active:bg-surface-3 focus-visible:ring-accent/20',
   danger:
     'bg-danger text-white shadow-sm hover:brightness-105 active:brightness-95 focus-visible:ring-danger/30',
   'danger-ghost':
-    'border border-danger/35 text-danger hover:bg-danger/10 active:bg-danger/15 focus-visible:ring-danger/20',
+    'text-danger hover:bg-danger/10 active:bg-danger/15 focus-visible:ring-danger/20',
 }
 
 const classes = computed(() => [

@@ -234,14 +234,14 @@ onMounted(async () => {
             />
             <span v-else class="block h-full w-full" :style="bannerStyle" />
             <span
-              class="absolute inset-0 hidden items-center justify-center gap-1.5 bg-black/45 text-[12.5px] font-medium text-white transition-opacity group-hover:opacity-100 md:flex"
+              class="absolute inset-0 hidden items-center justify-center gap-1.5 bg-[#0b0b0a]/45 text-[12.5px] font-medium text-white transition-opacity group-hover:opacity-100 md:flex"
               :class="bannerUploading ? 'opacity-100' : 'opacity-0'"
             >
               <Icon name="camera" :size="15" />
               {{ bannerUploading ? '上传中…' : '更换头图' }}
             </span>
             <span
-              class="absolute right-2 bottom-2 flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-1 text-[11px] text-white md:hidden"
+              class="absolute right-2 bottom-2 flex items-center gap-1 rounded-full bg-[#0b0b0a]/55 px-2.5 py-1 text-[11px] text-white md:hidden"
             >
               <Icon name="camera" :size="12" />
               {{ bannerUploading ? '上传中…' : bannerUrl ? '更换头图' : '设置头图' }}
@@ -402,7 +402,7 @@ onMounted(async () => {
                 <div class="flex items-center gap-4 text-muted">
                   <button
                     type="button"
-                    class="p-1 transition-colors hover:text-[#576b95]"
+                    class="like-tap p-1 hover:text-[#576b95]"
                     :class="post.likedByMe ? 'text-[#576b95]' : ''"
                     title="赞"
                     @click="moments.toggleLike(post)"

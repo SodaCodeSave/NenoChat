@@ -92,7 +92,7 @@ async function submit(): Promise<void> {
         v-model="keyword"
         type="text"
         placeholder="搜索会话"
-        class="w-full rounded-lg border border-line bg-surface-2 py-1.5 pl-8 pr-3 text-[13px] text-text placeholder:text-muted focus:border-accent focus:outline-none"
+        class="field-shell w-full rounded-lg py-1.5 pl-8 pr-3 text-[13px] text-text placeholder:text-muted focus:outline-none"
       />
     </div>
 

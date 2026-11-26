@@ -91,7 +91,7 @@ async function publish(): Promise<void> {
         rows="3"
         maxlength="5000"
         placeholder="分享点什么…"
-        class="min-h-[72px] w-full resize-none rounded-xl border border-line bg-surface-2 px-3 py-2 text-[13.5px] leading-[1.6] outline-none focus:border-accent"
+        class="field-shell min-h-[72px] w-full resize-none rounded-xl px-3 py-2 text-[13.5px] leading-[1.6] outline-none"
       />
     </div>
 
@@ -108,7 +108,7 @@ async function publish(): Promise<void> {
         />
         <button
           type="button"
-          class="absolute top-1 right-1 rounded-full bg-black/60 p-1.5 text-white"
+          class="absolute top-1 right-1 rounded-full bg-[#0b0b0a]/60 p-1.5 text-white"
           :class="ui.isMobile ? 'block' : 'hidden group-hover:block'"
           @click="removePendingImage(image.id)"
         >

@@ -158,7 +158,7 @@ onBeforeUnmount(() => {
           v-model="keyword"
           type="search"
           placeholder="搜索会话"
-          class="h-10 w-full rounded-xl border border-transparent bg-surface pl-9 pr-2 text-[14px] outline-none transition-colors placeholder:text-muted focus:border-accent"
+          class="field-shell h-10 w-full rounded-xl pl-9 pr-2 text-[14px] outline-none placeholder:text-muted"
         />
       </div>
     </header>
@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
           v-model="keyword"
           type="search"
           placeholder="搜索会话"
-          class="h-8 w-full rounded-lg border border-transparent bg-surface pl-8 pr-2 text-[13px] outline-none transition-colors placeholder:text-muted focus:border-accent"
+          class="field-shell h-8 w-full rounded-lg pl-8 pr-2 text-[13px] outline-none placeholder:text-muted"
         />
       </div>
       <IconButton icon="search" label="全局搜索（Ctrl+K）" :size="17" @click="ui.commandOpen = true" />
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <template v-if="menu">
         <!-- 手机端：底部操作面板，比坐标浮层更好点 -->
-        <div v-if="ui.isMobile" class="animate-fade-in fixed inset-0 z-50 bg-black/40" @click="closeMenu">
+        <div v-if="ui.isMobile" class="animate-fade-in fixed inset-0 z-50 bg-[var(--scrim)]" @click="closeMenu">
           <div
             class="animate-sheet-up absolute inset-x-0 bottom-0 overflow-hidden rounded-t-2xl border-t border-line bg-surface pb-[var(--safe-bottom)]"
             @click.stop

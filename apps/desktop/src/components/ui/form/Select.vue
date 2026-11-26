@@ -44,7 +44,7 @@ const model = defineModel<string | number | null>({ default: null })
   <SelectRoot v-model="model" :disabled="disabled">
     <SelectTrigger
       :id="id"
-      class="flex w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 text-left text-text outline-none transition-[border-color,box-shadow] hover:border-line focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:opacity-55 data-[placeholder]:text-muted/60"
+      class="field-shell flex w-full items-center gap-2 rounded-lg px-2.5 text-left text-text outline-none disabled:cursor-not-allowed disabled:opacity-55 data-[placeholder]:text-muted/60"
       :class="size === 'sm' ? 'h-8 text-[12px]' : 'h-9 text-[13px]'"
     >
       <SelectValue :placeholder="placeholder" class="min-w-0 flex-1 truncate" />
@@ -58,7 +58,7 @@ const model = defineModel<string | number | null>({ default: null })
         position="popper"
         :side-offset="4"
         :align="align"
-        class="z-50 max-h-72 min-w-[var(--reka-select-trigger-width)] overflow-hidden rounded-xl border border-line bg-surface p-1 shadow-[var(--shadow-soft)] data-[state=open]:animate-fade-up"
+        class="z-50 max-h-72 min-w-[var(--reka-select-trigger-width)] overflow-hidden rounded-xl bg-surface p-1 shadow-[var(--shadow-soft)] data-[state=open]:animate-fade-up"
       >
         <SelectViewport class="max-h-70 overflow-y-auto">
           <SelectItem

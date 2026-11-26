@@ -134,6 +134,95 @@ const segments = computed(() => {
 const isImage = computed(() => props.message.type === 'image')
 const isSticker = computed(() => props.message.type === 'sticker')
 
+/* --------------------------- 流式出字 --------------------------- */
+
+/** 出字切片：空白与拉丁词整体成块，其余逐字；块与块之间才是换行点 */
+interface StreamToken {
+  text: string
+  /** 该块在原文中的起始位置，用来判断是不是这一帧新出的字 */
+  start: number
+}
+
+/** 落在行首会破坏中文排版的收尾标点，并入前一个块一起出现 */
+const CLOSING_PUNCT = /^[，。、；：？！…—～）》」』】”’,.;:?!)\]}]+$/
+
+function tokenize(text: string): StreamToken[] {
+  const tokens: StreamToken[] = []
+  const pattern = /\n|[^\S\n]+|[A-Za-z0-9][A-Za-z0-9'’._-]*|[\s\S]/gu
+  for (const match of text.matchAll(pattern)) {
+    const previous = tokens[tokens.length - 1]
+    if (previous && CLOSING_PUNCT.test(match[0])) {
+      previous.text += match[0]
+    } else {
+      tokens.push({ text: match[0], start: match.index ?? 0 })
+    }
+  }
+  return tokens
+}
+
+/** 逐字渲染只在真正出字时开；思考中的占位行还是整段灰字 */
+const charStream = computed(() => props.streaming && !props.thinking && !deleted.value)
+
+const streamTokens = computed(() => (charStream.value ? tokenize(props.message.content) : []))
+
+/**
+ * 上一帧已有的字数：只有超出它的字才播入场动画，
+ * 否则每次内容增长都会让整段重新晕开一遍。
+ */
+const settledLength = ref(0)
+watch(
+  () => props.message.content,
+  (next, prev) => {
+    // 内容被整体替换（重新生成、切会话）时不当作追加，全部重播
+    settledLength.value = prev && next.startsWith(prev) ? prev.length : 0
+  },
+  { immediate: true },
+)
+
+/**
+ * 把块拆成「已经稳定」与「这一帧新出」两段：
+ * 拉丁词是整块存在的，追加字母时要切开，不能让整个词重播一次模糊。
+ */
+interface StreamPiece {
+  text: string
+  /** 有值表示这一帧新出，值为它的错开延迟 */
+  delay: string | null
+}
+
+const streamPieces = computed<StreamPiece[]>(() => {
+  const settled = settledLength.value
+  const pieces: StreamPiece[] = []
+  let freshIndex = 0
+
+  /** 一次吐很多字时封顶，避免尾巴拖太长 */
+  const delayOf = (index: number) => `calc(var(--stagger-char-in) * ${Math.min(index, 11)})`
+
+  for (const token of streamTokens.value) {
+    const end = token.start + token.text.length
+    if (token.start >= settled) {
+      pieces.push({ text: token.text, delay: delayOf(freshIndex) })
+      freshIndex += 1
+      continue
+    }
+    if (end <= settled) {
+      pieces.push({ text: token.text, delay: null })
+      continue
+    }
+
+    // 切点不能落在一对 UTF-16 代理中间，否则会切出半个字符
+    let cut = settled - token.start
+    const lastCode = token.text.charCodeAt(cut - 1)
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) cut -= 1
+
+    pieces.push({ text: token.text.slice(0, cut), delay: null })
+    pieces.push({ text: token.text.slice(cut), delay: delayOf(freshIndex) })
+    freshIndex += 1
+  }
+
+  return pieces
+})
+
+
 /** 正文里的链接：每条都渲染卡片，失败时卡片组件自身降级为不显示 */
 const linkUrls = computed(() => extractUrls(props.message.content))
 
@@ -311,8 +400,12 @@ const liveConnectorLabel = computed(() => {
     <!-- 多选勾选框：纯指示器，点击行为由整行的 capture 统一处理 -->
     <span
       v-if="selectMode && selectable"
-      class="absolute left-2.5 top-1/2 z-10 flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full border transition-colors"
-      :class="selected ? 'border-accent bg-accent text-white' : 'border-muted/60 bg-surface text-transparent'"
+      class="check-pop absolute left-2.5 top-1/2 z-10 flex h-[18px] w-[18px] items-center justify-center rounded-full [translate:0_-50%]"
+      :class="
+        selected
+          ? 'scale-100 bg-accent text-white'
+          : 'scale-90 bg-surface-3 text-transparent'
+      "
       aria-hidden="true"
     >
       <Icon name="check" :size="10" />
@@ -414,36 +507,50 @@ const liveConnectorLabel = computed(() => {
               </div>
 
               <p
-                class="text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words"
+                class="text-pretty text-[13.5px] leading-[1.6] whitespace-pre-wrap break-words"
                 :class="[
                   qqOwn ? 'text-white' : 'text-text',
                   message.type === 'system' ? 'text-[12px] text-muted' : '',
                   thinking ? (qqOwn ? 'text-white/70 italic' : 'text-muted italic') : '',
                 ]"
               >
-                <template v-for="(segment, index) in segments" :key="index">
-                  <!-- LOGO 模式：正文里的链接直接替换成 LOGO + 标题（流式中的半截链接仍按普通链接显示） -->
-                  <LinkInline
-                    v-if="segment.kind === 'link' && linkLogo && !streaming && !thinking"
-                    :url="segment.text"
-                    :inherit-color="qqOwn"
-                  />
-                  <a
-                    v-else-if="segment.kind === 'link'"
-                    :href="segment.text"
-                    target="_blank"
-                    rel="noreferrer"
-                    class="hover:underline"
-                    :class="qqOwn ? 'text-white underline decoration-white/50' : 'text-accent'"
-                    >{{ segment.text }}</a
-                  >
-                  <span
-                    v-else-if="segment.kind === 'mention'"
-                    class="rounded px-1 font-medium"
-                    :class="qqOwn ? 'bg-white/25 text-white' : 'bg-accent-soft text-accent'"
-                    >{{ segment.text }}</span
-                  >
-                  <span v-else>{{ segment.text }}</span>
+                <!-- 出字中：逐字从虚到实，结构文本（链接、提及）等出完再解析 -->
+                <template v-if="charStream">
+                  <template v-for="(piece, index) in streamPieces" :key="index">
+                    <br v-if="piece.text === '\n'" />
+                    <span
+                      v-else
+                      :class="piece.delay ? 'stream-char' : ''"
+                      :style="piece.delay ? { animationDelay: piece.delay } : undefined"
+                      >{{ piece.text }}</span
+                    >
+                  </template>
+                </template>
+                <template v-else>
+                  <template v-for="(segment, index) in segments" :key="index">
+                    <!-- LOGO 模式：正文里的链接直接替换成 LOGO + 标题（流式中的半截链接仍按普通链接显示） -->
+                    <LinkInline
+                      v-if="segment.kind === 'link' && linkLogo && !streaming && !thinking"
+                      :url="segment.text"
+                      :inherit-color="qqOwn"
+                    />
+                    <a
+                      v-else-if="segment.kind === 'link'"
+                      :href="segment.text"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="hover:underline"
+                      :class="qqOwn ? 'text-white underline decoration-white/50' : 'text-accent'"
+                      >{{ segment.text }}</a
+                    >
+                    <span
+                      v-else-if="segment.kind === 'mention'"
+                      class="rounded px-1 font-medium"
+                      :class="qqOwn ? 'bg-white/25 text-white' : 'bg-accent-soft text-accent'"
+                      >{{ segment.text }}</span
+                    >
+                    <span v-else>{{ segment.text }}</span>
+                  </template>
                 </template>
                 <span v-if="streaming" class="typing-caret ml-0.5" />
               </p>
@@ -462,8 +569,8 @@ const liveConnectorLabel = computed(() => {
           <div v-else-if="message.type === 'voice'">
             <button
               type="button"
-              class="flex items-center gap-2 rounded-full border border-line bg-surface-2 py-2 pl-3 pr-4 transition-colors hover:border-accent"
-              :class="qqOwn ? 'border-white/40 bg-white/15 text-white hover:border-white' : 'text-text'"
+              class="flex items-center gap-2 rounded-full bg-surface-2 py-2 pl-3 pr-4 transition-colors hover:bg-surface-3"
+              :class="qqOwn ? 'bg-white/15 text-white hover:bg-white/25' : 'text-text'"
               :aria-label="isVoicePlaying ? '停止播放' : '播放语音'"
               @click="playVoice"
             >
@@ -503,7 +610,7 @@ const liveConnectorLabel = computed(() => {
               v-for="attachment in attachments"
               :key="attachment.id"
               type="button"
-              class="block overflow-hidden rounded-lg border border-line"
+              class="block overflow-hidden rounded-lg"
               @click="emit('preview', attachment.displayUrl)"
             >
               <img
@@ -540,7 +647,7 @@ const liveConnectorLabel = computed(() => {
               :key="attachment.id"
               :href="attachment.displayUrl"
               target="_blank"
-              class="flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2 hover:border-accent"
+              class="flex max-w-full items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 transition-colors hover:bg-surface-3"
             >
               <Icon name="folder" :size="18" class="text-accent" />
               <div class="min-w-0">
@@ -568,7 +675,7 @@ const liveConnectorLabel = computed(() => {
     <!-- hover 操作条 -->
     <div
       v-if="!ui.isMobile && !deleted && !ephemeral && !selectMode"
-      class="invisible absolute -top-3 flex items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 opacity-0 shadow-[var(--shadow-soft)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
+      class="invisible absolute -top-3 flex items-center gap-0.5 rounded-lg bg-surface px-1 py-0.5 opacity-0 shadow-[var(--shadow-soft)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
       :class="qqOwn ? 'left-4' : 'right-4'"
     >
       <button

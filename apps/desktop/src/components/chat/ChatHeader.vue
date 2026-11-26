@@ -48,7 +48,7 @@ const subtitle = computed(() => {
 
 <template>
   <header
-    class="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3"
+    class="flex shrink-0 items-center gap-2 bg-surface px-3"
     :class="
       ui.isMobile
         ? 'min-h-[calc(3.25rem+var(--safe-top))] pt-[var(--safe-top)]'

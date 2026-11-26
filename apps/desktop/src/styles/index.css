@@ -3,16 +3,21 @@
 /* 深色模式由 <html class="dark"> 驱动，而非媒体查询，便于用户手动切换 */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * 层级靠明度差，不靠描边：相邻两层的亮度差控制在 1%–3%，
+ * 结构边界一律不画实线，--border 只留一条几乎看不见的分界供旧的 border-line 类复用。
+ * 底色不做纯黑与纯白，取略带暖调的近中性色。
+ */
 :root {
-  --surface: #ffffff;
-  --surface-2: #f5f6f8;
-  --surface-3: #eceef2;
-  --rail: #eef0f4;
-  --rail-active: #dde2ea;
-  --border: #e3e6ec;
-  --text: #1a1a1e;
-  --text-strong: #0d0d10;
-  --muted: #6b7280;
+  --surface: #fcfcfb;
+  --surface-2: #f5f5f3;
+  --surface-3: #eceae5;
+  --rail: #efedea;
+  --rail-active: #e5e3dd;
+  --border: #f0eeea;
+  --text: #2c2b26;
+  --text-strong: #16160f;
+  --muted: #78756d;
   --accent: #2f6bff;
   --accent-soft: #e8eeff;
   --accent-text: #ffffff;
@@ -21,9 +26,16 @@
   --mention: #7c5cff;
   --mention-soft: #f0ecff;
   --bubble-own: #e8eeff;
-  --shadow-soft: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px rgb(16 24 40 / 0.06);
+  --scrim: rgb(22 22 15 / 0.42);
+  --toast-bg: #2c2b26;
+  --toast-text: #fcfcfb;
+  --shadow-soft: 0 1px 2px rgb(22 22 15 / 0.04), 0 8px 24px rgb(22 22 15 / 0.05);
   --radius-panel: 12px;
   --radius-bubble: 10px;
+  /* 输入框聚焦：内环咬住控件，外环向外压出一圈，不加 outline */
+  --focus-ring:
+    0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
   /* 移动端安全区：Android 原生已把内容让出系统栏，这里主要是 iOS/刘海屏兜底 */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -31,15 +43,15 @@
 }
 
 .dark {
-  --surface: #1e1f22;
-  --surface-2: #2b2d31;
-  --surface-3: #35373c;
-  --rail: #1a1b1e;
-  --rail-active: #35373c;
-  --border: #3a3d44;
-  --text: #e6e7ea;
-  --text-strong: #f7f8fa;
-  --muted: #949ba4;
+  --surface: #151515;
+  --surface-2: #1a1a19;
+  --surface-3: #20201e;
+  --rail: #0b0b0a;
+  --rail-active: #20201e;
+  --border: #232320;
+  --text: #d8d6d0;
+  --text-strong: #f2f0ea;
+  --muted: #8c8a83;
   --accent: #5865f2;
   --accent-soft: #2f3350;
   --accent-text: #ffffff;
@@ -48,7 +60,19 @@
   --mention: #9d8cff;
   --mention-soft: #33304d;
   --bubble-own: #2f3350;
-  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.32);
+  --scrim: rgb(8 8 6 / 0.56);
+  --toast-bg: #262624;
+  --toast-text: #f2f0ea;
+  --shadow-soft: 0 1px 2px rgb(6 6 4 / 0.4), 0 8px 24px rgb(6 6 4 / 0.32);
+
+  /*
+   * 暗色补偿：浅色字在深底上会「发胖」，把整套字重下调 40。
+   * Tailwind 的 font-normal / font-medium / font-semibold 都走这些变量，改一处全站生效。
+   */
+  --font-weight-normal: 360;
+  --font-weight-medium: 460;
+  --font-weight-semibold: 560;
+  --font-weight-bold: 660;
 }
 
 @theme inline {
@@ -89,6 +113,28 @@
   --animate-rise-in: neno-rise-in 140ms ease-out both;
   --animate-sheet-up: neno-sheet-up 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-sheet-side: neno-sheet-side 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * 弹簧曲线：用线性采样还原物理曲线，改弹簧参数时重新采样，不要凭感觉调 cubic-bezier。
+ * firm = 过阻尼（1200 / 80），单调爬升、零回弹，用于拖拽这类必须「咬死」的位移。
+ * soft = 欠阻尼（380 / 18），峰值约 1.19，收尾微弹一次，用于点赞、对勾这类轻反馈。
+ */
+:root {
+  --ease-spring-firm: linear(
+    0, 0.1012, 0.281, 0.4536, 0.5958, 0.7059, 0.7887, 0.8501, 0.8954, 0.9286, 0.9528, 0.9706,
+    0.9836, 0.9931, 1
+  );
+  --ease-spring-soft: linear(
+    0, 0.0936, 0.3127, 0.5749, 0.8195, 1.0098, 1.1318, 1.188, 1.1918, 1.1609, 1.1128, 1.062,
+    1.0183, 0.9868, 0.9688, 0.9626, 0.9652, 0.973, 0.9829, 0.9924, 1
+  );
+  --dur-spring-firm: 220ms;
+  --dur-spring-soft: 480ms;
+  /* 流式出字：单字从虚到实，相邻字错开一个节拍 */
+  --dur-char-in: 90ms;
+  --stagger-char-in: 30ms;
+  --ease-char-in: cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
 /* 主题色变体：设置里切换后由 useTheme 写到 <html data-accent> */
@@ -171,7 +217,12 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
+  font-weight: var(--font-weight-normal, 400);
   line-height: 1.55;
+  /* 数字一律等宽：流式输出、计时、未读数变化时整行不会左右抖 */
+  font-variant-numeric: tabular-nums;
+  /* 段落折行时不留孤字，最后一行不只剩一两个字 */
+  text-wrap: pretty;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -319,9 +370,101 @@ textarea {
   display: inline-block;
   width: 2px;
   height: 1em;
-  vertical-align: -0.15em;
+  vertical-align: -0.125em;
   background: var(--accent);
   animation: neno-blink 1s steps(2, start) infinite;
+}
+
+/* ---------------------------- 行内图标 ---------------------------- */
+
+/* svg 默认坐在基线上会显得偏下，往下压 1/8 em 才是视觉居中 */
+.inline-icon {
+  vertical-align: -0.125em;
+}
+
+/* ---------------------------- 输入框 ---------------------------- */
+
+/* 聚焦不加 outline，用双环阴影咬合：内环 1px 实体环贴住控件，外环向外压出一圈 */
+.field-shell {
+  background-color: var(--surface-3);
+  transition: box-shadow 160ms ease-out;
+}
+.field-shell:focus-within {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 校验失败：环换成危险色，底色渗一点红，不用描边喊话 */
+.field-shell[data-invalid='true'] {
+  background-color: color-mix(in srgb, var(--danger) 5%, var(--surface-3));
+}
+.field-shell[data-invalid='true']:focus-within {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--danger) 70%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* ---------------------------- 流式出字 ---------------------------- */
+
+@keyframes neno-char-in {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/*
+ * 单个字从虚到实。逐字成行，靠内联块的边界提供换行点，
+ * 所以拉丁单词按整词成块，不要拆到字母。
+ */
+.stream-char {
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre;
+  overflow-wrap: anywhere;
+  animation: neno-char-in var(--dur-char-in) var(--ease-char-in) both;
+}
+
+/* ---------------------------- 弹簧反馈 ---------------------------- */
+
+/* 点赞：按下快收，松手用欠阻尼曲线弹回并轻微过冲 */
+.like-tap {
+  transition:
+    scale var(--dur-spring-soft) var(--ease-spring-soft),
+    color 140ms ease-out;
+}
+.like-tap:active {
+  scale: 0.86;
+  transition-duration: 90ms;
+  transition-timing-function: ease-out;
+}
+
+/* 对勾：选中瞬间用欠阻尼弹一下，颜色走普通过渡 */
+.check-pop {
+  transition:
+    scale var(--dur-spring-soft) var(--ease-spring-soft),
+    background-color 140ms ease-out,
+    border-color 140ms ease-out;
+}
+
+/* 拖拽遮罩：过阻尼曲线，一路爬升不回头 */
+.drag-veil-enter-active {
+  transition:
+    opacity var(--dur-spring-firm) var(--ease-spring-firm),
+    transform var(--dur-spring-firm) var(--ease-spring-firm);
+}
+.drag-veil-leave-active {
+  transition:
+    opacity 110ms ease-in,
+    transform 110ms ease-in;
+}
+.drag-veil-enter-from,
+.drag-veil-leave-to {
+  opacity: 0;
+  transform: scale(0.985);
 }
 
 /* 语音气泡的声浪条：播放时上下跳动 */

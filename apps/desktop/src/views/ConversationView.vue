@@ -14,6 +14,7 @@ import DebugInfoBar from '@/components/chat/DebugInfoBar.vue'
 import MemoryPanel from '@/components/ai/MemoryPanel.vue'
 import SchedulePanel from '@/components/ai/SchedulePanel.vue'
 import Icon from '@/components/ui/Icon.vue'
+import type { IconName } from '@/components/ui/icons'
 import { useConversationTitle } from '@/composables/conversation'
 import { useAuthStore } from '@/stores/auth'
 import { useAiStore } from '@/stores/ai'
@@ -68,7 +69,7 @@ const messageList = ref<{ scrollToBottom: (smooth?: boolean) => void } | null>(n
 const messageInput = ref<InstanceType<typeof MessageInput> | null>(null)
 const contextMenu = ref<{ message: Message; x: number; y: number } | null>(null)
 const previewUrl = ref<string | null>(null)
-const toast = ref<string | null>(null)
+const toast = ref<{ text: string; icon?: IconName } | null>(null)
 let toastTimer = 0
 
 /* --------------------------- 多选 / 转发 / 截图 --------------------------- */
@@ -142,12 +143,13 @@ function onScreenshotSaved(target: 'desktop' | 'android' | 'browser'): void {
   showToast(target === 'android' ? '已保存到相册' : target === 'desktop' ? '已保存' : '已开始下载')
 }
 
-function showToast(text: string): void {
-  toast.value = text
+/** 轻提示：给了 icon 就带个状态图标，时长可按反馈类型放宽（复制类留 2.5s） */
+function showToast(text: string, options?: { icon?: IconName; duration?: number }): void {
+  toast.value = { text, icon: options?.icon }
   window.clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => {
     toast.value = null
-  }, 1800)
+  }, options?.duration ?? 1800)
 }
 
 /** 预览打开期间按 Esc 直接关闭；监听随预览开关挂卸，不常驻 */
@@ -600,22 +602,22 @@ onBeforeUnmount(() => {
         <DebugInfoBar v-if="debugMode" :conversation-id="conversationId" />
 
         <!-- 拖拽文件悬停：全区提示，松手即上传 -->
-        <div
-          v-if="draggingFile"
-          class="animate-fade-in pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-surface/80"
-        >
+        <Transition name="drag-veil">
           <div
-            class="flex flex-col items-center gap-1.5 rounded-2xl border-2 border-dashed border-accent bg-accent-soft px-10 py-8"
+            v-if="draggingFile"
+            class="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-surface/85"
           >
-            <Icon name="paperclip" :size="26" class="text-accent" />
-            <p class="text-[14px] font-medium text-accent">
-              {{ isAi ? '松开发送图片' : '松开发送文件' }}
-            </p>
-            <p class="text-[11.5px] text-muted">
-              {{ isAi ? 'AI 会话暂只支持图片' : '支持图片与文件，一次最多 9 个' }}
-            </p>
+            <div class="flex flex-col items-center gap-1.5 rounded-2xl bg-accent-soft px-10 py-8">
+              <Icon name="paperclip" :size="26" class="text-accent" />
+              <p class="text-[14px] font-medium text-accent">
+                {{ isAi ? '松开发送图片' : '松开发送文件' }}
+              </p>
+              <p class="text-[11.5px] text-muted">
+                {{ isAi ? 'AI 会话暂只支持图片' : '支持图片与文件，一次最多 9 个' }}
+              </p>
+            </div>
           </div>
-        </div>
+        </Transition>
       </template>
 
       <div v-else class="grid flex-1 place-items-center">
@@ -646,7 +648,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="ui.isMobile && mobileMembersOpen"
-        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-[var(--scrim)]"
         @click.self="mobileMembersOpen = false"
       >
         <MemberSidebar
@@ -661,7 +663,7 @@ onBeforeUnmount(() => {
 
       <div
         v-if="ui.isMobile && isAi && mobileMemoryOpen"
-        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-[var(--scrim)]"
         @click.self="mobileMemoryOpen = false"
       >
         <MemoryPanel
@@ -674,7 +676,7 @@ onBeforeUnmount(() => {
 
       <div
         v-if="ui.isMobile && isAi && mobileScheduleOpen"
-        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/40"
+        class="animate-fade-in fixed inset-0 z-40 flex justify-end bg-[var(--scrim)]"
         @click.self="mobileScheduleOpen = false"
       >
         <SchedulePanel
@@ -698,7 +700,7 @@ onBeforeUnmount(() => {
       @edit="handleEdit(contextMenu!.message.id)"
       @pin="handlePin(contextMenu!.message.id)"
       @recall="handleRecall(contextMenu!.message.id)"
-      @copied="showToast('已复制')"
+      @copied="showToast('已复制', { icon: 'check', duration: 2500 })"
       @forward="openForward([contextMenu!.message.id])"
       @select="enterSelectionMode(contextMenu!.message.id)"
       @screenshot="openScreenshot([contextMenu!.message.id])"
@@ -718,7 +720,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="previewUrl"
-        class="animate-fade-in fixed inset-0 z-40 grid place-items-center bg-black/70 p-6"
+        class="animate-fade-in fixed inset-0 z-40 grid place-items-center bg-[#0b0b0a]/70 p-6"
         @click="previewUrl = null"
       >
         <img :src="previewUrl" alt="图片预览" class="max-h-[88vh] max-w-[92vw] rounded-lg object-contain" />
@@ -736,10 +738,11 @@ onBeforeUnmount(() => {
     <Transition name="fade">
       <div
         v-if="toast"
-        class="fixed left-1/2 z-50 -translate-x-1/2 rounded-lg bg-black/75 px-3 py-1.5 text-[12px] text-white"
+        class="fixed left-1/2 z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-lg bg-[var(--toast-bg)] px-3 py-1.5 text-[12px] text-[var(--toast-text)]"
         :class="ui.isMobile ? 'bottom-[calc(5.5rem+var(--safe-bottom))]' : 'bottom-24'"
       >
-        {{ toast }}
+        <Icon v-if="toast.icon" :name="toast.icon" :size="12" class="text-[var(--toast-text)]" />
+        {{ toast.text }}
       </div>
     </Transition>
   </div>

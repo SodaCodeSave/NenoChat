@@ -18,11 +18,23 @@
 ## 色彩与组件
 
 - 以黑白灰为底，颜色留给内容、强调色和危险操作；不加渐变、毛玻璃装饰、霓虹边（移动端底栏滚动穿透的轻微 blur 属功能性，可保留）。
-- 动画只用于反馈（spinner、骨架屏），不加回弹、漂浮等装饰动画。
+- **不画边框**：层级只靠 1%–3% 的明度差分。浅色 `#fcfcfb` 画布 / `#f5f5f3` 次级面 / `#eceae5` 控件底 / `#efedea` 侧栏；暗色 `#151515` / `#1a1a19` / `#20201e`，侧栏 `#0b0b0a`。底色不用纯黑与纯白，`--border` 只留一条几乎看不见的分界给旧的 `border-line` 兜底。
+- 输入框聚焦不加 outline，`.field-shell` 用 `--focus-ring` 的深浅双环 box-shadow 咬合；手写 input/textarea 一律套这个类，不要再写 `focus:border-accent`。
+- 暗色下整套字重降 40（`.dark` 覆盖 `--font-weight-*`：360 / 460 / 560 / 660），浅色字压在深底上会发胖。
+- 动画只用于反馈（spinner、骨架屏），不加漂浮、循环等装饰动画。
   - 时长 100–180ms，位移不超过 4px（抽屉与底部面板从自身边缘滑入），只动 `opacity` / `transform`，不动宽高与布局。
+  - 例外是带物理感的点击反馈：拖拽遮罩用过阻尼弹簧（1200/80，零回弹），点赞与对勾用欠阻尼（380/18，收尾微弹一次）。曲线是 `index.css` 里的 `--ease-spring-firm` / `--ease-spring-soft`，改参数要重新采样 `linear()`，不要手调 cubic-bezier。
   - 统一用 `index.css` 里的 `animate-fade-in` / `animate-rise-in` / `animate-sheet-up` / `animate-sheet-side`；不要再写裸 keyframes 或内联 animation。
   - 新消息入场只要 120ms 淡入。消息列表是虚拟滚动，动画只能按「新到的 id」临时触发（`MessageList` 的 `freshIds`），挂整行上会随滚动反复重播。
   - 图片（头像、附件、贴纸、链接封面）统一 `.img-fade` + `data-loaded`，加载完淡入；不要留占位跳动。
   - 首屏加载用骨架屏（`Skeleton.vue` + `.skeleton`），不做扫光渐变。
   - 所有动效必须能被「减少动效」开关关掉。CSS 之外的滚动（`scrollTo` / `scrollIntoView` 的 `smooth`）CSS 拦不住，要用 `composables/motion.ts` 判断。
 - 图标统一走 `Icon` 组件一套，正文和按钮里不放 emoji。
+
+## 排版细节
+
+- 流式出字：单字 90ms 从 `blur(6px)` 落到清晰，缓动 `cubic-bezier(.215,.61,.355,1)`，相邻字错开 30ms。只给这一帧新出的字播动画，已经稳定的字不重播；拉丁单词整体成块，不要拆到字母。
+- 行内图标 `vertical-align: -0.125em`（`.inline-icon`，`Icon` 组件已内置）；数字统一 `tabular-nums`（`body` 上已设），流式输出与计时不会左右抖。
+- 正文 `text-wrap: pretty`，段落收尾不留孤字。
+- 折叠一律 `grid-template-rows: 0fr → 1fr` 过渡，不要用 JS 量高度。
+- 复制类反馈带对勾，2.5s 后自动淡出恢复；其它轻提示 1.8s。

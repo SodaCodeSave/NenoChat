@@ -188,7 +188,7 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div
       v-if="ui.commandOpen"
-      class="animate-fade-in fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-0 pt-[var(--safe-top)] md:px-4 md:pt-[10vh]"
+      class="animate-fade-in fixed inset-0 z-50 flex items-start justify-center bg-[var(--scrim)] px-0 pt-[var(--safe-top)] md:px-4 md:pt-[10vh]"
       @click.self="close"
     >
       <div

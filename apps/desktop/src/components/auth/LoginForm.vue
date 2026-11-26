@@ -175,7 +175,7 @@ const submitLabel = computed(() =>
             type="text"
             autocomplete="username"
             placeholder="3-24 位字母、数字或下划线"
-            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+            class="field-shell h-10 w-full rounded-lg px-3 text-[13.5px] outline-none"
           />
         </label>
 
@@ -186,7 +186,7 @@ const submitLabel = computed(() =>
             type="text"
             placeholder="电脑端「手机接入」里显示的 6 位配对码"
             maxlength="16"
-            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 font-mono text-[13.5px] tracking-[0.18em] uppercase outline-none focus:border-accent"
+            class="field-shell h-10 w-full rounded-lg px-3 font-mono text-[13.5px] tracking-[0.18em] uppercase outline-none"
           />
         </label>
 
@@ -196,7 +196,7 @@ const submitLabel = computed(() =>
             v-model="displayName"
             type="text"
             placeholder="显示给好友的名字"
-            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+            class="field-shell h-10 w-full rounded-lg px-3 text-[13.5px] outline-none"
           />
         </label>
 
@@ -207,7 +207,7 @@ const submitLabel = computed(() =>
             type="password"
             :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
             placeholder="至少 8 位"
-            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+            class="field-shell h-10 w-full rounded-lg px-3 text-[13.5px] outline-none"
           />
         </label>
 
@@ -217,7 +217,7 @@ const submitLabel = computed(() =>
             v-model="inviteCode"
             type="text"
             placeholder="本服务器需要邀请码"
-            class="h-10 w-full rounded-lg border border-line bg-surface-2 px-3 text-[13.5px] outline-none focus:border-accent"
+            class="field-shell h-10 w-full rounded-lg px-3 text-[13.5px] outline-none"
           />
         </label>
 

@@ -18,7 +18,7 @@ const props = withDefaults(
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
-    class="shrink-0"
+    class="inline-icon shrink-0"
   >
     <path :d="iconPaths[props.name]" />
   </svg>

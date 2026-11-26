@@ -215,14 +215,14 @@ onBeforeUnmount(() => {
           <input
             type="time"
             :value="form.dndStart"
-            class="h-9 flex-1 rounded-lg border border-line bg-surface-2 px-2.5 text-[13px] outline-none focus:border-accent"
+            class="field-shell h-9 flex-1 rounded-lg px-2.5 text-[13px] outline-none"
             @change="patch({ dndStart: ($event.target as HTMLInputElement).value })"
           />
           <span class="text-[12px] text-muted">至</span>
           <input
             type="time"
             :value="form.dndEnd"
-            class="h-9 flex-1 rounded-lg border border-line bg-surface-2 px-2.5 text-[13px] outline-none focus:border-accent"
+            class="field-shell h-9 flex-1 rounded-lg px-2.5 text-[13px] outline-none"
             @change="patch({ dndEnd: ($event.target as HTMLInputElement).value })"
           />
         </div>

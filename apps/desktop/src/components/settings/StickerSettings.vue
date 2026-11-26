@@ -360,13 +360,13 @@ onMounted(() => {
             />
             <span
               v-if="sticker.keywords.length > 0"
-              class="absolute bottom-0.5 left-0.5 right-0.5 truncate rounded bg-black/50 px-0.5 text-center text-[9px] text-white"
+              class="absolute bottom-0.5 left-0.5 right-0.5 truncate rounded bg-[#0b0b0a]/50 px-0.5 text-center text-[9px] text-white"
             >
               {{ sticker.keywords.slice(0, 3).join('、') }}
             </span>
             <button
               type="button"
-              class="absolute right-1 top-1 hidden rounded-full bg-black/60 p-1 text-white transition-colors hover:bg-danger group-hover:block"
+              class="absolute right-1 top-1 hidden rounded-full bg-[#0b0b0a]/60 p-1 text-white transition-colors hover:bg-danger group-hover:block"
               title="删除"
               aria-label="删除表情"
               @click="removeSticker(sticker.id)"

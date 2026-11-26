@@ -36,11 +36,9 @@ const resolvedType = computed(() =>
 
 <template>
   <div
-    class="group relative flex items-center rounded-lg border bg-surface-2 transition-[border-color,box-shadow,background-color] focus-within:ring-2"
+    class="field-shell group relative flex items-center rounded-lg"
+    :data-invalid="invalid ? 'true' : undefined"
     :class="[
-      invalid
-        ? 'border-danger/60 focus-within:border-danger focus-within:ring-danger/15'
-        : 'border-line hover:border-line focus-within:border-accent focus-within:ring-accent/15',
       disabled ? 'cursor-not-allowed opacity-55' : '',
       size === 'sm' ? 'h-8' : 'h-9',
     ]"

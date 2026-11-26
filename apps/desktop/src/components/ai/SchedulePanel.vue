@@ -224,13 +224,13 @@ onBeforeUnmount(() => window.clearInterval(timer))
               <input
                 v-model="item.start"
                 type="time"
-                class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface-2 px-1.5 text-[12px] text-text outline-none focus:border-accent"
+                class="field-shell h-7 min-w-0 flex-1 rounded-md px-1.5 text-[12px] text-text outline-none"
               />
               <span class="text-[11px] text-muted">至</span>
               <input
                 v-model="item.end"
                 type="time"
-                class="h-7 min-w-0 flex-1 rounded-md border border-line bg-surface-2 px-1.5 text-[12px] text-text outline-none focus:border-accent"
+                class="field-shell h-7 min-w-0 flex-1 rounded-md px-1.5 text-[12px] text-text outline-none"
               />
               <button
                 type="button"
@@ -246,7 +246,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
               type="text"
               maxlength="60"
               placeholder="这段时间在做什么"
-              class="h-8 w-full rounded-md border border-line bg-surface-2 px-2 text-[12px] text-text outline-none placeholder:text-muted focus:border-accent"
+              class="field-shell h-8 w-full rounded-md px-2 text-[12px] text-text outline-none placeholder:text-muted"
             />
           </div>
         </div>

@@ -65,7 +65,7 @@ onMounted(() => {
     :href="preview.url"
     target="_blank"
     rel="noreferrer"
-    class="block max-w-[420px] overflow-hidden rounded-lg border border-line bg-surface-2 transition-colors hover:border-accent/50"
+    class="block max-w-[420px] overflow-hidden rounded-lg bg-surface-2 transition-colors hover:bg-surface-3"
     @click.stop
   >
     <div class="flex gap-2.5 p-2.5">
@@ -115,21 +115,33 @@ onMounted(() => {
     <button
       type="button"
       class="mt-1 flex items-center gap-1 text-[11px] text-accent hover:underline"
+      :aria-expanded="expanded"
       @click.stop="toggleSummary"
     >
-      <Icon name="chevronDown" :size="11" :class="expanded ? 'rotate-180' : ''" />
+      <Icon
+        name="chevronDown"
+        :size="11"
+        class="transition-transform duration-200 ease-out"
+        :class="expanded ? 'rotate-180' : ''"
+      />
       {{ expanded ? '收起总结' : '查看总结' }}
     </button>
+    <!-- 折叠靠 grid 轨道 0fr ↔ 1fr 过渡，不测内容高度 -->
     <div
-      v-if="expanded"
-      class="mt-1 rounded-lg border border-line bg-surface px-2.5 py-2 text-[11.5px] leading-relaxed text-text"
+      class="grid transition-[grid-template-rows] duration-200 ease-out"
+      :class="expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
+      :aria-hidden="!expanded"
     >
-      <p v-if="summaryLoading" class="text-muted">读取中…</p>
-      <p v-else-if="summaryError" class="text-danger">{{ summaryError }}</p>
-      <p v-else-if="summary" class="whitespace-pre-wrap">{{ summary }}</p>
-      <p v-else class="text-muted">
-        还没有生成总结。在 AI 会话里发送这条链接后，总结会自动生成并缓存。
-      </p>
+      <div class="overflow-hidden">
+        <div class="mt-1 rounded-lg bg-surface px-2.5 py-2 text-[11.5px] leading-relaxed text-text">
+          <p v-if="summaryLoading" class="text-muted">读取中…</p>
+          <p v-else-if="summaryError" class="text-danger">{{ summaryError }}</p>
+          <p v-else-if="summary" class="whitespace-pre-wrap">{{ summary }}</p>
+          <p v-else class="text-muted">
+            还没有生成总结。在 AI 会话里发送这条链接后，总结会自动生成并缓存。
+          </p>
+        </div>
+      </div>
     </div>
   </div>
 </template>
