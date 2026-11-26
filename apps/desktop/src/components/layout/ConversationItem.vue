@@ -92,7 +92,7 @@ async function togglePin(event: MouseEvent): Promise<void> {
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-1">
         <span class="truncate text-[13.5px] font-medium text-text-strong">{{ title }}</span>
-        <Icon v-if="isAi" name="sparkles" :size="12" class="text-mention" />
+        <Icon v-if="isAi && ui.showAiBadge" name="sparkles" :size="12" class="text-mention" />
         <Icon v-if="pinned" name="pin" :size="12" class="text-muted" />
         <span class="ml-auto shrink-0 text-[11px] text-muted">
           {{ formatListTime(props.conversation.lastMessageAt ?? props.conversation.updatedAt) }}

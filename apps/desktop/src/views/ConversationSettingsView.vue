@@ -432,7 +432,7 @@ function backToChat(): void {
                     <span v-if="member.role === 'owner'" class="ml-1 text-[10.5px] text-accent">群主</span>
                     <span v-else-if="member.role === 'admin'" class="ml-1 text-[10.5px] text-muted">管理员</span>
                     <span
-                      v-if="personaByUserId.has(member.userId)"
+                      v-if="personaByUserId.has(member.userId) && ui.showAiBadge"
                       class="ml-1 rounded bg-mention-soft px-1 py-0.5 text-[9.5px] text-mention"
                     >
                       AI

@@ -70,7 +70,7 @@ const subtitle = computed(() => {
       <div class="flex items-center gap-1.5">
         <h1 class="truncate text-[14px] font-semibold text-text-strong">{{ title }}</h1>
         <span
-          v-if="isAi"
+          v-if="isAi && ui.showAiBadge"
           class="rounded bg-mention-soft px-1.5 py-0.5 text-[10px] font-medium text-mention"
         >
           AI

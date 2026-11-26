@@ -12,6 +12,7 @@ const SEND_KEY_KEY = 'nenochat.sendKey'
 const REDUCE_MOTION_KEY = 'nenochat.reduceMotion'
 const CONVERSATION_LIST_KEY = 'nenochat.conversationListCollapsed'
 const CONNECTOR_HINTS_KEY = 'nenochat.showConnectorHints'
+const AI_BADGE_KEY = 'nenochat.showAiBadge'
 const CHAT_BG_URL_KEY = 'nenochat.chatBgUrl'
 const CHAT_BG_ACCENT_KEY = 'nenochat.chatBgAccent'
 const ACCENT_FOLLOW_BG_KEY = 'nenochat.accentFollowBg'
@@ -61,6 +62,8 @@ export const useUiStore = defineStore('ui', () => {
   )
   /** 是否在消息里显示连接器动作提示（"已联网搜索"等小字），纯本地偏好 */
   const showConnectorHints = ref(localStorage.getItem(CONNECTOR_HINTS_KEY) !== 'false')
+  /** 是否显示 AI 角标（会话列表、聊天标题、朋友圈、成员列表等处的 AI 标），纯本地偏好 */
+  const showAiBadge = ref(localStorage.getItem(AI_BADGE_KEY) !== 'false')
 
   /**
    * 聊天背景图（服务端 /files/... 相对 URL）与随图提取的主色。
@@ -154,6 +157,11 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(CONNECTOR_HINTS_KEY, String(next))
   }
 
+  function setShowAiBadge(next: boolean): void {
+    showAiBadge.value = next
+    localStorage.setItem(AI_BADGE_KEY, String(next))
+  }
+
   /** 设置/清除聊天背景（null 表示清除），同步镜像到 localStorage 供下次启动免闪 */
   function setChatBackground(url: string | null, accentHex: string | null): void {
     chatBgUrl.value = url
@@ -215,6 +223,7 @@ export const useUiStore = defineStore('ui', () => {
     linkDisplay,
     conversationListCollapsed,
     showConnectorHints,
+    showAiBadge,
     chatBgUrl,
     chatBgAccent,
     accentFollowBg,
@@ -238,6 +247,7 @@ export const useUiStore = defineStore('ui', () => {
     setConversationListCollapsed,
     toggleConversationList,
     setShowConnectorHints,
+    setShowAiBadge,
     setChatBackground,
     setAccentFollowBg,
     applyServerBackground,

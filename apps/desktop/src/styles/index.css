@@ -23,8 +23,9 @@
   --accent-text: #ffffff;
   --danger: #e5484d;
   --success: #2fa84f;
-  --mention: #7c5cff;
-  --mention-soft: #f0ecff;
+  /* AI 标识色跟随主题色：var 在使用处才解析，data-accent / dark 覆盖 --accent 后自动跟着变 */
+  --mention: var(--accent);
+  --mention-soft: var(--accent-soft);
   --bubble-own: #e8eeff;
   --scrim: rgb(22 22 15 / 0.42);
   --toast-bg: #2c2b26;
@@ -59,8 +60,6 @@
   --accent-text: #ffffff;
   --danger: #f2555a;
   --success: #3ba55d;
-  --mention: #9d8cff;
-  --mention-soft: #33304d;
   --bubble-own: #2f3350;
   --scrim: rgb(8 8 6 / 0.56);
   --toast-bg: #262624;

@@ -349,7 +349,7 @@ onMounted(async () => {
                     {{ postAuthorName(post) }}
                   </p>
                   <span
-                    v-if="post.personaId"
+                    v-if="post.personaId && ui.showAiBadge"
                     class="mt-0.5 inline-block rounded bg-mention-soft px-1 text-[10px] text-mention"
                   >
                     AI

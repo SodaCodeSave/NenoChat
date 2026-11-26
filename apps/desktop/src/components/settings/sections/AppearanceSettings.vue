@@ -232,6 +232,14 @@ async function removeBackground(): Promise<void> {
         />
       </SettingRow>
 
+      <SettingRow label="AI 标识" description="在会话列表、聊天标题、朋友圈与成员列表中显示 AI 角标">
+        <Switch
+          :model-value="ui.showAiBadge"
+          aria-label="AI 标识"
+          @update:model-value="ui.setShowAiBadge"
+        />
+      </SettingRow>
+
       <SettingRow label="发送方式" description="选择按下哪个快捷键时发送消息" stacked>
         <Segmented
           :model-value="ui.sendKey"
